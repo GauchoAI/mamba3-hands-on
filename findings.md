@@ -124,6 +124,31 @@ or adding MIMO would close this gap — a nice follow-up experiment.
 
 ---
 
+## Entry 5 — Ablation: RoPE does all the parity work
+
+**Commit:** `exp: ablate RoPE and trapezoidal on parity`
+
+Added `use_rope` and `use_trap` flags to `Mamba3Block` so each innovation can
+be toggled independently. Ran the same parity setup (L=16, 400 steps) four ways.
+
+| Variant | acc_all | acc_last |
+|---|---|---|
+| full (RoPE + trap) | 99.1% | 96.1% |
+| **no trap (RoPE only)** | **100.0%** | **100.0%** |
+| no RoPE (trap only) | 60.6% | 50.0% |
+| neither | 58.6% | 47.8% |
+
+**Takeaway.** The full credit on parity belongs to the **complex-dynamics
+via RoPE** (innovation #2). The trapezoidal gate (#1) contributes zero here
+and is marginally noisy. That matches the paper's framing: innovation #1
+is a discretization accuracy improvement — the benefit shows up on smooth
+dynamics and long-range stability, not on a toggling discrete state.
+
+The two innovations are complementary, not redundant. Parity only exercises
+one of them; the other earns its keep elsewhere.
+
+---
+
 ## Open threads
 
 - **Length generalization.** Trained on L=16, holds at L=32 (90%), degrades

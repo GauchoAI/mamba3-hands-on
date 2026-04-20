@@ -66,9 +66,11 @@ def apply_rope_pairs(v: torch.Tensor, angles: torch.Tensor) -> torch.Tensor:
 
 
 class Mamba3Block(nn.Module):
-    def __init__(self, cfg: Mamba3Config):
+    def __init__(self, cfg: Mamba3Config, use_rope: bool = True, use_trap: bool = True):
         super().__init__()
         self.cfg = cfg
+        self.use_rope = use_rope
+        self.use_trap = use_trap
         d_model  = cfg.d_model
         d_state  = cfg.d_state
         d_inner  = cfg.expand * d_model
@@ -150,8 +152,11 @@ class Mamba3Block(nn.Module):
         phase_step = angles * DT_mean                       # (B, L, dS/2)
         phase = torch.cumsum(phase_step, dim=1)             # (B, L, dS/2)
 
-        Bp_rot = apply_rope_pairs(Bp, phase)                # (B, L, dS)
-        Cp_rot = apply_rope_pairs(Cp, phase)                # (B, L, dS)
+        if self.use_rope:
+            Bp_rot = apply_rope_pairs(Bp, phase)            # (B, L, dS)
+            Cp_rot = apply_rope_pairs(Cp, phase)            # (B, L, dS)
+        else:
+            Bp_rot, Cp_rot = Bp, Cp                          # ablate RoPE
 
         # Broadcast B, C across heads: (B, L, H, dS)
         Bp_rot = Bp_rot.unsqueeze(2).expand(B_, L, nH, dS)
@@ -188,12 +193,12 @@ class Mamba3Block(nn.Module):
             x_t    = x[:, t]                                # (B, H, hD)
 
             # Trapezoidal input: blend current and previous (B * x) contributions.
-            # beta_t = trap_t, gamma_t = (1 - trap_t)
-            # input_cur  = outer(x_t,  B_t)
-            # input_prev = outer(x_prev, B_prev)
             cur  = torch.einsum("bhp,bhn->bhpn", x_t,    B_t)      # (B, H, hD, dS)
-            prev = torch.einsum("bhp,bhn->bhpn", x_prev, B_prev)   # (B, H, hD, dS)
-            inp  = trap_t[..., None, None] * cur + (1 - trap_t)[..., None, None] * prev
+            if self.use_trap:
+                prev = torch.einsum("bhp,bhn->bhpn", x_prev, B_prev)
+                inp  = trap_t[..., None, None] * cur + (1 - trap_t)[..., None, None] * prev
+            else:
+                inp  = cur                                         # ablate: pure Euler
 
             # Scale input by dt (discretization)
             inp = inp * dt_t[..., None, None]
