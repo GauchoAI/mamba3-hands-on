@@ -149,6 +149,53 @@ one of them; the other earns its keep elsewhere.
 
 ---
 
+## Entry 6 — Mod 3 is mechanically solved, but brittle
+
+**Commit:** `exp: longer training + curriculum on mod 3/5`
+
+**Attempt 1 (bigger config, same budget) — WORSE.** Bumping to
+`d_model=64, d_state=32` tanked everything. Parity dropped from 99.9% → 58%,
+mod 3 from 46% → 50%. Classic "more capacity + same training budget = harder
+optimization". Lesson: don't scale the model without scaling the schedule.
+
+**Attempt 2 (small config, 8000 steps, train on L=8, eval at L=16) — works
+in-distribution, brittle out.**
+
+| M | Train acc (L=8) | Eval acc (L=16) | Chance |
+|---|---|---|---|
+| 3 | 89.0% | 67.5% | 33.3% |
+| 5 | 51.2% | 35.6% | 20.0% |
+
+**The big finding — probing the learned angles on mod 3.** Component 3 of
+the 8 phase components learned the right thing:
+
+```
+Token 1 - Token 0, comp[3]: +113.5° (ideal +120°, 2π/3)  err=0.07 rad
+Token 2 - Token 0, comp[3]: -124.0° (ideal -120°)         err=0.07 rad
+```
+
+**The model discovered 2π/3 rotation essentially from scratch**, same way it
+found -π for parity. Seven other phase components learned miscellaneous angles,
+unused.
+
+**Why performance degrades at L=16.** Angle error tolerance scales as 1/M.
+A 7° angle error per step is invisible at mod 2 (doesn't cross the ±π/2
+decision boundary). At mod 3, 7° over 16 steps = 112° drift — enough to
+misclassify into the neighbouring sector. Length extrapolation gets brutal
+fast for higher moduli.
+
+**Mod 5.** Stuck at ~35% (vs 20% random). Some learning but far from solving.
+Expected at this scale — the angle budget per head is tighter and the
+readout decision regions thinner.
+
+**Correct conclusion.** The *algorithm* generalises to any M — rotations are
+learned — but the minimal SISO config doesn't have the precision budget to
+stabilize them over long sequences at M≥3. The paper's full model uses MIMO,
+chunked scans, and careful init to close this gap. The inner mechanism is
+the same.
+
+---
+
 ## Open threads
 
 - **Length generalization.** Trained on L=16, holds at L=32 (90%), degrades
