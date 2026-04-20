@@ -230,6 +230,50 @@ between the last marker and the readout position.
 
 ---
 
+## Entry 8 — Bilingual language model: it speaks (kind of)
+
+**Commit:** `exp: bilingual char-level LM on Tatoeba EN+ES`
+
+**Setup.** First multi-layer Mamba-3 model: 2 stacked blocks with residual
+connections + LayerNorm, byte-level (vocab=256), trained on 80k interleaved
+`[EN]`/`[ES]` sentences from Tatoeba (~3.7 MB). 253K params. Trained on
+Mac mini M4 via MPS, ~24 min for 5000 steps.
+
+**Architecture:** `Embedding → LayerNorm → [Mamba3Block + residual] × 2 → LayerNorm → Linear`
+with gradient checkpointing per layer and weight tying (embed ↔ head).
+
+**Training curve** (bits-per-character):
+
+| Step | BPC | Loss |
+|---|---|---|
+| 1 | 8.05 | 5.58 |
+| 1000 | 2.09 | 1.45 |
+| 3000 | 1.82 | 1.26 |
+| 5000 | 1.76 | 1.22 |
+
+**What it learned:**
+- **Language tag conditioning.** Prompting with `[EN]` produces English-ish
+  text, `[ES]` produces Spanish-ish text. The model learned to switch.
+- **Spanish morphology.** Verb conjugations (-aron, -ando, -ido), articles
+  (el, la, los, las), question marks (¿...?), accented characters (á, é, ó).
+- **English structure.** "The church will do you would be it with the same"
+  — word order correct, meaning absent. Classic small LM behaviour.
+- **Code-switching.** The model naturally transitions between `[EN]` and
+  `[ES]` tagged sentences, mirroring the training data format.
+
+**Limitations.** 64-char context window + byte-level + 253K params means
+it can't maintain coherence beyond a few words. Many invented words
+("suspicionario", "dormidarios", "escribidente"). Gender/number agreement
+is spotty. But the *mechanism* — an SSM learning to generate two languages
+from a shared state space — works.
+
+**What this proves for Mamba-3.** The RoPE-complex dynamics that solved
+parity and selective copy also support genuine language modeling. The
+phase rotation mechanism handles the much richer "state" needed for
+character-level generation across two languages.
+
+---
+
 ## Open threads
 
 - **Length generalization.** Trained on L=16, holds at L=32 (90%), degrades

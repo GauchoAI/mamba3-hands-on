@@ -5,3 +5,4 @@ official-mamba/
 *.pt
 *.pth
 .DS_Store
+data/
