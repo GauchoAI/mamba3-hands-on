@@ -6,3 +6,4 @@ official-mamba/
 *.pth
 .DS_Store
 data/
+.env
