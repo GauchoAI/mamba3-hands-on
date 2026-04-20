@@ -196,6 +196,40 @@ the same.
 
 ---
 
+## Entry 7 — Selective copy: gating works too
+
+**Commit:** `exp: selective copy — Mamba-3 gates state writes`
+
+**Task.** Sequence of tokens from `{0..3}`, with a special marker token
+at 1–3 random positions. Target: the token immediately after the *last*
+marker. All other positions are don't-care. This tests whether the model
+can learn to **ignore** most inputs and only write to state on cue — the
+opposite of parity (which needs every token).
+
+**Results (L=16 train, 1500 steps, MPS on M4)**
+
+| Model | Acc (L=16) | L=32 | L=64 |
+|---|---|---|---|
+| **Mamba-3** | **100.0%** | **99.0%** | 72.3% |
+| Mamba-2-like | 65.4% | 48.2% | 38.7% |
+| Random | 25.0% | 25.0% | 25.0% |
+
+Mamba-3 solves it perfectly by step 200 (loss ≈ 0). Mamba-2-like plateaus
+around 65% and never truly cracks it.
+
+**What this tells us.** Mamba-3's advantage isn't limited to cumulative
+state tracking (parity). The RoPE-gated dynamics also enable **selective
+write** — the model learns to "open the gate" only when the marker appears,
+overwriting state with the following token's value. Mamba-2-like can
+partially do this (~65%) but can't reliably distinguish "write now" vs
+"ignore" across varying marker positions.
+
+**Length generalization.** Same pattern as parity: near-perfect at 2× train
+length, degrades at 4×. The state retention mechanism leaks over long gaps
+between the last marker and the readout position.
+
+---
+
 ## Open threads
 
 - **Length generalization.** Trained on L=16, holds at L=32 (90%), degrades
