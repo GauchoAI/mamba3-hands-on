@@ -1,0 +1,10 @@
+{"lesson":"variable_tracing","type":"simple","input":"x = 5\ny = x + 3\nWhat is y?","output":"<thinking>x = 5. y = x + 3 = 5 + 3 = 8.</thinking>\ny = 8"}
+{"lesson":"variable_tracing","type":"simple","input":"a = 10\nb = a * 2\nc = b - a\nWhat is c?","output":"<thinking>a = 10. b = a * 2 = 20. c = b - a = 20 - 10 = 10.</thinking>\nc = 10"}
+{"lesson":"variable_tracing","type":"conditional","input":"x = 7\nif x > 5:\n  y = 1\nelse:\n  y = 0\nWhat is y?","output":"<thinking>x = 7. Is x > 5? 7 > 5 is true. So y = 1.</thinking>\ny = 1"}
+{"lesson":"variable_tracing","type":"conditional","input":"x = 3\nif x > 5:\n  y = 1\nelse:\n  y = 0\nWhat is y?","output":"<thinking>x = 3. Is x > 5? 3 > 5 is false. So y = 0.</thinking>\ny = 0"}
+{"lesson":"variable_tracing","type":"loop","input":"x = 0\nrepeat 3 times:\n  x = x + 2\nWhat is x?","output":"<thinking>Start: x = 0. Iteration 1: x = 0 + 2 = 2. Iteration 2: x = 2 + 2 = 4. Iteration 3: x = 4 + 2 = 6.</thinking>\nx = 6"}
+{"lesson":"variable_tracing","type":"loop","input":"x = 1\nrepeat 4 times:\n  x = x * 2\nWhat is x?","output":"<thinking>Start: x = 1. Iteration 1: x = 1 * 2 = 2. Iteration 2: x = 2 * 2 = 4. Iteration 3: x = 4 * 2 = 8. Iteration 4: x = 8 * 2 = 16.</thinking>\nx = 16"}
+{"lesson":"variable_tracing","type":"swap","input":"a = 3\nb = 7\ntemp = a\na = b\nb = temp\nWhat are a and b?","output":"<thinking>a = 3, b = 7. temp = a = 3. a = b = 7. b = temp = 3. Now a = 7, b = 3.</thinking>\na = 7, b = 3"}
+{"lesson":"variable_tracing","type":"simple","input":"x = 5\ny = x + 3\nz = x * y\n¿Cuánto vale z?","output":"<thinking>x = 5. y = x + 3 = 8. z = x * y = 5 * 8 = 40.</thinking>\nz = 40"}
+{"lesson":"variable_tracing","type":"loop","input":"contador = 0\nrepetir 5 veces:\n  contador = contador + 1\n¿Cuánto vale contador?","output":"<thinking>Inicio: contador = 0. Iteración 1: 1. Iteración 2: 2. Iteración 3: 3. Iteración 4: 4. Iteración 5: 5.</thinking>\ncontador = 5"}
+{"lesson":"variable_tracing","type":"nested","input":"x = 2\ny = 3\nz = x + y\nw = z * x - y\nWhat is w?","output":"<thinking>x = 2, y = 3. z = x + y = 5. w = z * x - y = 5 * 2 - 3 = 10 - 3 = 7.</thinking>\nw = 7"}

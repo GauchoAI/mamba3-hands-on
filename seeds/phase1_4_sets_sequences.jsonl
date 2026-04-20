@@ -1,0 +1,10 @@
+{"lesson":"sets_sequences","type":"pattern","input":"What comes next: 2, 4, 6, 8, ?","output":"<thinking>The pattern is +2 each step. 8 + 2 = 10.</thinking>\n10"}
+{"lesson":"sets_sequences","type":"pattern","input":"What comes next: 1, 1, 2, 3, 5, 8, ?","output":"<thinking>Fibonacci sequence: each number is the sum of the two before it. 5 + 8 = 13.</thinking>\n13"}
+{"lesson":"sets_sequences","type":"pattern","input":"¿Qué sigue: 3, 6, 12, 24, ?","output":"<thinking>El patrón es ×2 cada paso. 24 × 2 = 48.</thinking>\n48"}
+{"lesson":"sets_sequences","type":"set_ops","input":"A = {1, 2, 3, 4}\nB = {3, 4, 5, 6}\nWhat is A ∩ B?","output":"<thinking>Intersection: elements in both A and B. 3 is in both. 4 is in both. Nothing else overlaps.</thinking>\nA ∩ B = {3, 4}"}
+{"lesson":"sets_sequences","type":"set_ops","input":"A = {1, 2, 3}\nB = {4, 5, 6}\nWhat is A ∪ B?","output":"<thinking>Union: all elements from both sets. No overlap.</thinking>\nA ∪ B = {1, 2, 3, 4, 5, 6}"}
+{"lesson":"sets_sequences","type":"set_ops","input":"A = {rojo, azul, verde}\nB = {azul, amarillo, verde}\n¿Cuál es A ∩ B?","output":"<thinking>Intersección: elementos en ambos. azul está en ambos. verde está en ambos.</thinking>\nA ∩ B = {azul, verde}"}
+{"lesson":"sets_sequences","type":"membership","input":"S = {2, 4, 6, 8, 10}\nIs 7 in S?","output":"<thinking>Check each element: 2, 4, 6, 8, 10. None equals 7.</thinking>\nNo, 7 is not in S."}
+{"lesson":"sets_sequences","type":"sort","input":"Sort this list: [5, 2, 8, 1, 9, 3]","output":"<thinking>Find minimum repeatedly. Min=1, then 2, then 3, then 5, then 8, then 9.</thinking>\n[1, 2, 3, 5, 8, 9]"}
+{"lesson":"sets_sequences","type":"sort","input":"Ordena esta lista: [gato, perro, abeja, zorro]","output":"<thinking>Orden alfabético: abeja < gato < perro < zorro.</thinking>\n[abeja, gato, perro, zorro]"}
+{"lesson":"sets_sequences","type":"pattern","input":"What comes next: 1, 4, 9, 16, 25, ?","output":"<thinking>These are perfect squares: 1², 2², 3², 4², 5². Next is 6² = 36.</thinking>\n36"}
