@@ -676,15 +676,167 @@ needs rethinking. If it wins, we have our brain of a fly.
 
 ---
 
+## Entry 13 — Curriculum v2: progressive unlock + grokking
+
+**Commits:** `curriculum: 15-task progressive unlock` → `grok: Grokfast EMA`
+
+### The memorization trap (what failed)
+
+Three successive H100 runs all showed the same pattern:
+
+```
+d_model=64,  batch=64,   old teacher:  92% train, 33% fresh, 59% gap
+d_model=128, batch=2048, old teacher:  100% train, 7% fresh, 93% gap
+d_model=256, batch=4096, old teacher:  100% train, 6% fresh, 94% gap
+```
+
+More params and more compute made it *memorize faster*, not generalize
+better. The model learned a lookup table, not an algorithm. The gap
+throttle (reducing LR when train>>fresh) just slowed down training
+without fixing the root cause.
+
+### The fix: curriculum design, not model scaling
+
+Two insights from the user:
+
+1. **"Improve the training data"** — don't penalize the model for
+   memorizing, give it data that *requires* algorithms.
+
+2. **"Start with parity, master it, then add the next problem"** —
+   sequential task unlock, not all 8 tasks at once.
+
+### 15-task curriculum with progressive unlock
+
+Tasks unlock one at a time, in cognitive order. Each task teaches a
+skill the next one needs:
+
+```
+Stage 0: Binary foundations
+  1. parity                — count 1s mod 2 (SSM state tracking)
+  2. binary_pattern_next   — detect cycles in 0/1 streams
+
+Stage 1: Comparison
+  3. same_different        — compare two values
+  4. odd_one_out           — find the outlier in N values
+
+Stage 2: Pattern detection
+  5. sequence_completion   — predict next in repeating pattern
+  6. pattern_period        — identify cycle length
+  7. run_length_next       — detect run-length encoding patterns
+
+Stage 3: Sequence memory
+  8. mirror_detection      — palindrome detection (needs memory)
+  9. repeat_count          — accumulate counts (needs registers)
+
+Stage 4: Arithmetic reasoning
+  10. arithmetic_next      — detect and apply arithmetic step
+  11. geometric_next       — detect and apply ratio
+  12. alternating_next     — two interleaved sequences
+
+Stage 5: Logic
+  13. logic_gate           — AND/OR/XOR/NOT evaluation
+  14. logic_chain          — chained gate evaluation
+  15. modus_ponens         — propositional logic (IF p THEN q)
+```
+
+Unlock rule: all current tasks mastered (90%+ fresh) at difficulty ≥ 0.3
+before the next task is introduced.
+
+Difficulty scales continuously [0.0, 1.0] per task — starts trivially
+easy (length 3, numbers 0-3), only advances on fresh accuracy. By the
+time difficulty is high, memorization is impossible.
+
+### Final boss: 18 unseen task types
+
+When all 15 tasks are mastered, boss mode activates with never-seen
+tasks: set operations (union, intersection, subset), sorting, min/max,
+range, sum, modular arithmetic, reverse, rotate, deduplicate, XOR,
+count ones, unique count, majority element, second largest.
+
+If the model truly learned algorithms and not formats, it should handle
+these with minimal examples.
+
+### Samples-to-mastery metric
+
+Each task records when it was unlocked and when it first hit 90% fresh.
+The key question: does task N+1 take fewer examples than task N?
+
+If yes → the model is **learning to learn**.
+
+### Grokking: the phase transition we need
+
+Research (Power et al. 2022, Grokfast 2024) shows that with the right
+setup, models can suddenly generalize *long after* memorizing — the
+"grokking" phenomenon. The memorization circuit is expensive (high
+weight norm); weight decay slowly erodes it until a cheaper algorithm
+circuit takes over.
+
+**Changes for grokking:**
+
+| Parameter | Before | After |
+|-----------|--------|-------|
+| Weight decay | 0.01 | 0.1 |
+| LR schedule | Gap throttle | Constant |
+| Batch size | 4096 | 128 |
+| Grokfast | OFF | alpha=0.98 |
+
+**Grokfast** (Lee et al. 2024): EMA low-pass filter on gradients.
+Amplifies slow-varying (generalizing) gradient components, suppresses
+fast (memorizing) ones. Reported 50x speedup to grokking.
+
+```python
+# After loss.backward(), before opt.step():
+ema[p] = alpha * ema[p] + (1-alpha) * p.grad
+p.grad += ema[p]  # boost the slow signal
+```
+
+### First results: it works
+
+```
+Step 2000:  parity MASTERED (100% fresh, difficulty 0.00→0.05)
+            30,000 examples to master
+
+Step 12000: parity difficulty reached 0.30
+            → binary_pattern_next UNLOCKED
+
+Step 12000: same_different already at 60% fresh — NEVER TRAINED ON IT
+            (transfer from parity!)
+```
+
+The curriculum is advancing. Parity was mastered, difficulty scaled up
+to 0.30 while maintaining mastery, and the second task unlocked.
+
+Most interesting: `same_different` (comparing two values) is already
+at 60% accuracy despite being locked. The model learned something
+about comparison *from parity training alone*. This is genuine transfer
+— the algorithm generalized beyond the task it was trained on.
+
+The 11% "fresh accuracy" we saw was misleading — it was testing all
+15 task types when only 1 was trained. Per-type accuracy on the
+trained task was 100%.
+
+### Architecture note
+
+This run uses plain Mamba-3 (no augmented). The curriculum should
+first prove that the *training signal* can produce generalization.
+Once we have a generalizing plain model, we add registers/spikes
+and test whether they accelerate learning or enable harder tasks
+the plain model can't do.
+
+---
+
 ## Open threads
 
-- **H100 results pending.** Plain vs augmented, d_model=256, 10K steps.
+- **Curriculum run in progress.** H100, 100K steps, grokking-aware.
+  Parity mastered, binary_pattern_next just unlocked.
+- **Samples-to-mastery tracking.** Task 1 took 2000 steps / 30K examples.
+  Watch if task 2 takes fewer → learning to learn.
+- **Transfer learning.** same_different at 60% without training = free
+  transfer from parity. Track which tasks benefit from prior learning.
+- **Augmented model.** Once plain model advances through curriculum,
+  re-run with registers/spikes. Hypothesis: registers help at Stage 3+
+  (sequence memory tasks that need structured storage).
+- **Final boss.** 18 unseen tasks waiting. The real test of generalization.
 - **Checkpoint portability.** Train on H100, probe/debug on M4 MPS.
-  Same weights, Triton→JIT fallback is transparent.
-- **Register specialization.** Can we design tasks that force different
-  registers to serve different purposes? (Via data, not penalties.)
-- **Level 1 (comparison).** Build generator, train from Level 0 checkpoint.
-- **Von Neumann training data.** Micro-operation execution traces for
-  Level 3 composition.
 - **The compilation problem.** How Brain 1 (language) learns to program
   Brain 2 (step function). The hardest open question.
