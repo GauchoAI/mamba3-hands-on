@@ -855,10 +855,14 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
 
     # Push to Firebase (real-time)
     try:
-        from firebase_push import push_snapshot, push_gpu_tick
+        import firebase_push as fb
         actual_workers = get_actual_worker_count()
-        push_snapshot(results, generation, gpu_pct, mem_pct, evo_state)
-        push_gpu_tick(gpu_pct, mem_pct, actual_workers, generation)
+        fb.push_snapshot(results, generation, gpu_pct, mem_pct, evo_state)
+        fb.push_gpu_tick(gpu_pct, mem_pct, actual_workers, generation)
+
+        # VRAM warning
+        if mem_pct > 80:
+            fb.evt_vram_warning(mem_pct, actual_workers)
     except Exception as e:
         print(f"  ⚠ Firebase push failed: {e}", flush=True)
 
@@ -870,10 +874,30 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
     if len(running_results) < 2:
         return
 
-    # Plateau detection
+    # Plateau detection + Firebase events
     current_best = results[0].get("best_fresh", 0) if results else 0
+    was_plateau = evo_state.plateau_mode
+    old_best = evo_state.best_ever
     is_plateau = evo_state.check_plateau(current_best)
     severity = evo_state.get_plateau_severity()
+
+    try:
+        import firebase_push as fb
+        # New best event
+        if current_best > old_best + 0.005:
+            fb.evt_new_best(results[0]["exp_id"], current_best, old_best,
+                           results[0].get("config", {}))
+        # Plateau start
+        if is_plateau and not was_plateau:
+            fb.evt_plateau_start(evo_state.best_ever,
+                                evo_state.generation - evo_state.best_ever_gen, severity)
+        # Plateau end
+        if was_plateau and not is_plateau:
+            fb.evt_plateau_end(old_best, current_best,
+                              evo_state.generation - evo_state.best_ever_gen,
+                              results[0]["exp_id"])
+    except Exception:
+        pass
 
     at_capacity = mem_pct > 75 or len(running) >= max_workers
     has_headroom = mem_pct < 65 and gpu_pct < 90
@@ -918,12 +942,15 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
                 f"child of {best['exp_id']}, replaced {worst['exp_id']}")
             metrics.log_event("pause", worst["exp_id"],
                 f"paused for evolution (fresh={worst.get('best_fresh',0):.1%})")
+            metrics.update_status(worst["exp_id"], "paused")
             try:
-                from firebase_push import push_event as fb_event
-                fb_event("evolve", child_id, f"child of {best['exp_id']} [{selection_reason}]")
+                import firebase_push as fb
+                fb.evt_evolve(child_id, best["exp_id"], worst["exp_id"],
+                             selection_reason, best.get("best_fresh", 0), child_cfg)
+                fb.evt_pause(worst["exp_id"], worst.get("best_fresh", 0),
+                            worst.get("cycle", 0))
             except Exception:
                 pass
-            metrics.update_status(worst["exp_id"], "paused")
             print(f"  🧬 Evolution: paused {worst['exp_id']} "
                   f"(fresh={worst.get('best_fresh', 0):.1%}), "
                   f"spawned {child_id} from {best['exp_id']} "
