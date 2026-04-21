@@ -343,6 +343,59 @@ class AdaptiveTeacher:
                 lines.append(f"    Ratio (last/first): {ratio:.2f} — {trend}")
         return "\n".join(lines)
 
+    def to_dict(self) -> dict:
+        """Serialize teacher state for checkpointing."""
+        configs = {}
+        for task_type, cfg in self.task_configs.items():
+            configs[task_type] = {
+                "weight": cfg.weight,
+                "difficulty": cfg.difficulty,
+                "accuracy": cfg.accuracy,
+                "history": cfg.history[-10:],  # keep last 10 only
+                "stagnant_count": cfg.stagnant_count,
+                "unlock_step": cfg.unlock_step,
+                "mastery_step": cfg.mastery_step,
+                "examples_seen": cfg.examples_seen,
+                "mastered": cfg.mastered,
+            }
+        return {
+            "task_configs": configs,
+            "unlocked_tasks": list(self.unlocked_tasks),
+            "global_step": self.global_step,
+            "mastery_log": self.mastery_log,
+            "boss_mode": self.boss_mode,
+            "sequential_unlock": self.sequential_unlock,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "AdaptiveTeacher":
+        """Restore teacher from checkpoint."""
+        teacher = cls.__new__(cls)
+        teacher.sequential_unlock = d.get("sequential_unlock", True)
+        teacher.global_step = d.get("global_step", 0)
+        teacher.mastery_log = d.get("mastery_log", [])
+        teacher.boss_mode = d.get("boss_mode", False)
+        teacher.boss_results = {}
+        teacher.unlocked_tasks = set(d.get("unlocked_tasks", []))
+        teacher.task_configs = {}
+        for task_type, cfg_d in d.get("task_configs", {}).items():
+            cfg = TaskConfig(
+                weight=cfg_d["weight"],
+                difficulty=cfg_d["difficulty"],
+                accuracy=cfg_d["accuracy"],
+                history=cfg_d.get("history", []),
+                stagnant_count=cfg_d.get("stagnant_count", 0),
+                unlock_step=cfg_d.get("unlock_step", 0),
+                mastery_step=cfg_d.get("mastery_step", 0),
+                examples_seen=cfg_d.get("examples_seen", 0),
+                mastered=cfg_d.get("mastered", False),
+            )
+            teacher.task_configs[task_type] = cfg
+        print(f"  Teacher restored: {len(teacher.unlocked_tasks)} tasks unlocked, "
+              f"step={teacher.global_step}, boss={'ON' if teacher.boss_mode else 'OFF'}",
+              flush=True)
+        return teacher
+
     def generate(self, count: int) -> list:
         """Generate examples with continuous difficulty scaling."""
         import generators.level0_patterns as gen0

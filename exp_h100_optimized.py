@@ -124,7 +124,6 @@ def train_with_teacher(model, name, dataset, device, args, ckpt_prefix,
 
     base_lr = args.lr
     opt = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
-    teacher = AdaptiveTeacher()
 
     # Mixed precision
     use_amp = args.bf16 and device == "cuda"
@@ -135,6 +134,27 @@ def train_with_teacher(model, name, dataset, device, args, ckpt_prefix,
     best_fresh = 0.0
     current_lr = base_lr
     global_step = 0
+
+    # Resume from checkpoint if available
+    resume_path = ckpt_dir / f"{ckpt_prefix}_latest.pt"
+    if args.resume or resume_path.exists():
+        rpath = args.resume if args.resume else str(resume_path)
+        print(f"  Resuming from {rpath}", flush=True)
+        ckpt = torch.load(rpath, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model"])
+        if "optimizer" in ckpt:
+            opt.load_state_dict(ckpt["optimizer"])
+        global_step = ckpt.get("step", 0)
+        best_fresh = ckpt.get("best_fresh", 0.0)
+        if "teacher" in ckpt:
+            teacher = AdaptiveTeacher.from_dict(ckpt["teacher"])
+        else:
+            teacher = AdaptiveTeacher()
+        if "grokfast_ema" in ckpt and args.grokfast_alpha > 0:
+            grokfast_ema = {k: v.to(device) for k, v in ckpt["grokfast_ema"].items()}
+        print(f"  Resumed at step {global_step}, best_fresh={best_fresh:.1%}", flush=True)
+    else:
+        teacher = AdaptiveTeacher()
 
     learn_steps = args.cycle_learn
     digest_steps = args.cycle_digest
@@ -230,14 +250,17 @@ def train_with_teacher(model, name, dataset, device, args, ckpt_prefix,
                 # No gap throttle — let grokking happen naturally.
                 # Weight decay + Grokfast handle the memorization→generalization transition.
 
-                # Checkpoint
+                # Checkpoint (includes teacher state for resume)
                 ckpt_data = {
                     "model": model.state_dict(),
+                    "optimizer": opt.state_dict(),
                     "step": global_step,
                     "train_acc": train_acc,
                     "fresh_acc": fresh_acc,
                     "best_fresh": best_fresh,
                     "name": name,
+                    "teacher": teacher.to_dict(),
+                    "grokfast_ema": {k: v.cpu() for k, v in grokfast_ema.items()} if grokfast_alpha > 0 else {},
                 }
                 torch.save(ckpt_data, ckpt_dir / f"{ckpt_prefix}_step{global_step}.pt")
                 torch.save(ckpt_data, ckpt_dir / f"{ckpt_prefix}_latest.pt")
@@ -364,6 +387,9 @@ if __name__ == "__main__":
     parser.add_argument("--cycle-learn", type=int, default=500)
     parser.add_argument("--cycle-digest", type=int, default=200)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to checkpoint to resume from. "
+                        "If not given, auto-resumes from {prefix}_latest.pt if it exists.")
     parser.add_argument("--bf16", action="store_true", default=True)
     parser.add_argument("--no-bf16", action="store_false", dest="bf16")
     parser.add_argument("--no-compile", action="store_true", default=True,
