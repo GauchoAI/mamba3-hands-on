@@ -17,6 +17,17 @@ def generate_dashboard(experiments, teacher, cycle, output_dir="."):
     """Generate HTML + MD dashboard from current tuner state."""
     output_dir = Path(output_dir)
 
+    # Discover all task types that have been seen
+    all_tasks = set()
+    for exp in experiments:
+        if not hasattr(exp, 'history'):
+            continue
+        for _, _, type_accs in exp.history:
+            for t, a in type_accs.items():
+                if a > 0:
+                    all_tasks.add(t)
+    all_tasks = sorted(all_tasks)
+
     # Collect data
     exp_data = []
     for exp in experiments:
@@ -24,12 +35,13 @@ def generate_dashboard(experiments, teacher, cycle, output_dir="."):
             continue
         series = []
         for c, fresh, type_accs in exp.history:
-            series.append({
+            point = {
                 "cycle": c,
                 "fresh": round(fresh * 100, 1),
-                "parity": round(type_accs.get("parity", 0) * 100, 1),
-                "same_different": round(type_accs.get("same_different", 0) * 100, 1),
-            })
+            }
+            for t in all_tasks:
+                point[t] = round(type_accs.get(t, 0) * 100, 1)
+            series.append(point)
         exp_data.append({
             "name": exp.cfg.name(),
             "params": exp.n_params,
@@ -39,6 +51,10 @@ def generate_dashboard(experiments, teacher, cycle, output_dir="."):
             "perp": exp.use_perp,
             "series": series,
         })
+
+    # Pass discovered tasks to HTML generator
+    _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir, all_tasks)
+    _write_md(exp_data, teacher_lines, learning_report, cycle, output_dir, all_tasks)
 
     # Sort by best accuracy
     exp_data.sort(key=lambda x: -x["best"])
@@ -51,44 +67,38 @@ def generate_dashboard(experiments, teacher, cycle, output_dir="."):
     _write_md(exp_data, teacher_lines, learning_report, cycle, output_dir)
 
 
-def _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir):
+def _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir, all_tasks):
     """Generate Chart.js + Tailwind dashboard."""
-    # Color palette (WSJ-inspired)
     colors = [
         "#0066CC", "#CC3300", "#339933", "#CC6600",
         "#6633CC", "#CC3399", "#336699", "#996633",
     ]
 
-    # Build chart datasets
-    datasets_fresh = []
-    datasets_parity = []
-    for i, exp in enumerate(exp_data):
-        color = colors[i % len(colors)]
-        opacity = "1.0" if exp["alive"] else "0.3"
-        tag = "★ " if i == 0 else ""
-        method = "grok" if exp["wd"] > 0 else "perp"
+    # Build datasets for each chart (fresh + one per discovered task)
+    chart_keys = ["fresh"] + list(all_tasks)
+    chart_titles = {"fresh": "Overall Fresh Accuracy (%)"}
+    for t in all_tasks:
+        chart_titles[t] = f"{t.replace('_', ' ').title()} (%)"
 
-        ds_fresh = {
-            "label": f'{tag}{exp["name"]} [{method}]',
-            "data": [{"x": s["cycle"], "y": s["fresh"]} for s in exp["series"]],
-            "borderColor": color,
-            "backgroundColor": "transparent",
-            "borderWidth": 2 if exp["alive"] else 1,
-            "pointRadius": 0,
-            "tension": 0.3,
-        }
-        ds_parity = {
-            "label": f'{tag}{exp["name"]} [{method}]',
-            "data": [{"x": s["cycle"], "y": s["parity"]} for s in exp["series"]],
-            "borderColor": color,
-            "backgroundColor": "transparent",
-            "borderWidth": 2 if exp["alive"] else 1,
-            "borderDash": [] if exp["alive"] else [5, 5],
-            "pointRadius": 0,
-            "tension": 0.3,
-        }
-        datasets_fresh.append(ds_fresh)
-        datasets_parity.append(ds_parity)
+    all_datasets = {}
+    for key in chart_keys:
+        datasets = []
+        for i, exp in enumerate(exp_data):
+            color = colors[i % len(colors)]
+            tag = "★ " if i == 0 else ""
+            method = "grok" if exp["wd"] > 0 else "perp"
+            ds = {
+                "label": f'{tag}{exp["name"]} [{method}]',
+                "data": [{"x": s["cycle"], "y": s.get(key, 0)} for s in exp["series"]],
+                "borderColor": color,
+                "backgroundColor": "transparent",
+                "borderWidth": 2 if exp["alive"] else 1,
+                "borderDash": [] if exp["alive"] else [5, 5],
+                "pointRadius": 0,
+                "tension": 0.3,
+            }
+            datasets.append(ds)
+        all_datasets[key] = datasets
 
     # Leaderboard rows
     leaderboard_html = ""
@@ -136,18 +146,12 @@ def _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir):
 </header>
 
 <div class="grid grid-cols-2 gap-8 mb-8">
-  <div>
-    <h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Fresh Accuracy (%)</h2>
+{''.join(f"""  <div>
+    <h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">{chart_titles[key]}</h2>
     <div class="chart-container">
-      <canvas id="freshChart"></canvas>
+      <canvas id="chart_{key}"></canvas>
     </div>
-  </div>
-  <div>
-    <h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Parity Accuracy (%)</h2>
-    <div class="chart-container">
-      <canvas id="parityChart"></canvas>
-    </div>
-  </div>
+  </div>""" for key in chart_keys)}
 </div>
 
 <h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Leaderboard</h2>
@@ -172,8 +176,7 @@ def _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir):
 {f'<div class="bg-blue-50 p-4 rounded mb-4 font-mono text-sm"><pre>{learning_report}</pre></div>' if learning_report else ''}
 
 <script>
-const freshData = {json.dumps(datasets_fresh)};
-const parityData = {json.dumps(datasets_parity)};
+const allData = {json.dumps(all_datasets)};
 
 const chartOpts = {{
   responsive: true,
@@ -185,12 +188,12 @@ const chartOpts = {{
   }}
 }};
 
-new Chart(document.getElementById('freshChart'), {{
-  type: 'line', data: {{ datasets: freshData }}, options: chartOpts
-}});
-new Chart(document.getElementById('parityChart'), {{
-  type: 'line', data: {{ datasets: parityData }}, options: chartOpts
-}});
+for (const [key, datasets] of Object.entries(allData)) {{
+  const el = document.getElementById('chart_' + key);
+  if (el) {{
+    new Chart(el, {{ type: 'line', data: {{ datasets }}, options: chartOpts }});
+  }}
+}}
 </script>
 
 <footer class="text-gray-400 text-xs mt-8 border-t pt-2">
@@ -202,7 +205,7 @@ new Chart(document.getElementById('parityChart'), {{
     (output_dir / "dashboard.html").write_text(html)
 
 
-def _write_md(exp_data, teacher_lines, learning_report, cycle, output_dir):
+def _write_md(exp_data, teacher_lines, learning_report, cycle, output_dir, all_tasks=None):
     """Generate markdown summary."""
     lines = [f"# Training Dashboard — Cycle {cycle}", ""]
 
