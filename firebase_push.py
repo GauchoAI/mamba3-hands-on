@@ -40,21 +40,35 @@ def append(path, data):
 
 
 def push_snapshot(results, generation, gpu_pct, mem_pct, evo_state=None):
-    """Push current state snapshot."""
-    top10 = []
-    for r in results[:10]:
+    """Push current state snapshot — ALL data the UI could ever need."""
+    # Full leaderboard (not just top 10)
+    leaderboard = []
+    for r in results[:30]:
         cfg = r.get("config", {})
-        top10.append({
+        parent = cfg.get("_parent_id")
+        leaderboard.append({
             "exp_id": r["exp_id"],
             "fresh": round(r.get("best_fresh", 0), 4),
-            "parity": round(r.get("type_accs", {}).get("parity", 0), 2),
+            "effective_score": round(r.get("effective_score", 0), 4),
+            "type_accs": {k: round(v, 3) for k, v in r.get("type_accs", {}).items() if v > 0},
             "cycle": r.get("cycle", 0),
             "d_model": cfg.get("d_model"),
+            "d_state": cfg.get("d_state"),
             "n_layers": cfg.get("n_kernel_layers"),
+            "batch_size": cfg.get("batch_size"),
+            "lr": cfg.get("lr"),
+            "weight_decay": cfg.get("weight_decay", 0),
+            "optimizer": cfg.get("optimizer", "adamw"),
+            "loss_fn": cfg.get("loss_fn", "stable_ce"),
+            "warm_restarts": cfg.get("warm_restarts", False),
+            "noise_scale": cfg.get("noise_scale", 0),
+            "backend": cfg.get("backend", "pytorch"),
             "method": f"wd={cfg.get('weight_decay')}" if cfg.get("weight_decay", 0) > 0 else "PerpGrad",
             "status": r["status"],
             "momentum": round(r.get("momentum", 0), 4),
             "specialist": r.get("specialist_for", [])[:3],
+            "parent_id": parent,
+            "n_params": r.get("params", 0),
         })
 
     # Best per task
@@ -83,8 +97,22 @@ def push_snapshot(results, generation, gpu_pct, mem_pct, evo_state=None):
             "best_ever": round(evo_state.best_ever, 4),
             "stuck_gens": evo_state.generation - evo_state.best_ever_gen,
         }
+        # Family tree — full lineage
+        snapshot["lineage"] = {
+            eid: info for eid, info in evo_state.lineage.items()
+        }
 
     return push("mamba3/snapshot", snapshot)
+
+
+def push_gpu_tick(gpu_pct, mem_pct, n_workers, generation):
+    """Push GPU timeseries point (for historical charts)."""
+    return push(f"mamba3/gpu_history/{generation}", {
+        "gpu": round(gpu_pct, 1),
+        "mem": round(mem_pct, 1),
+        "workers": n_workers,
+        "t": time.time(),
+    })
 
 
 def push_event(event_type, exp_id=None, details=None):

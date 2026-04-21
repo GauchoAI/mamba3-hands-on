@@ -855,10 +855,12 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
 
     # Push to Firebase (real-time)
     try:
-        from firebase_push import push_snapshot, push_event
+        from firebase_push import push_snapshot, push_gpu_tick
+        actual_workers = get_actual_worker_count()
         push_snapshot(results, generation, gpu_pct, mem_pct, evo_state)
+        push_gpu_tick(gpu_pct, mem_pct, actual_workers, generation)
     except Exception as e:
-        print(f"  ⚠ Firebase snapshot failed: {e}", flush=True)
+        print(f"  ⚠ Firebase push failed: {e}", flush=True)
 
     # ── Genetic evolution ──
     if len(results) < 2:
