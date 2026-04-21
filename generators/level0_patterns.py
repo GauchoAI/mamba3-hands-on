@@ -47,12 +47,12 @@ def gen_same_different(max_val=20):
     a = random.randint(0, max_val)
     if random.random() < 0.5:
         b = a  # same
-        answer = "SAME"
+        answer = "S"
     else:
         b = a
         while b == a:
             b = random.randint(0, max_val)
-        answer = "DIFF"
+        answer = "D"
 
     return {
         "type": "same_different",
@@ -165,13 +165,13 @@ def gen_mirror_detection(max_val=10, min_len=3, max_len=7):
         else:
             middle = []
         seq = half + middle + half[::-1]
-        answer = "MIRROR"
+        answer = "M"
     else:
         # Generate non-mirror (ensure it's not accidentally a mirror)
         seq = [random.randint(0, max_val) for _ in range(length)]
         while seq == seq[::-1]:
             seq = [random.randint(0, max_val) for _ in range(length)]
-        answer = "NO"
+        answer = "N"
 
     seq_str = " ".join(str(x) for x in seq)
     return {
@@ -186,7 +186,7 @@ def gen_parity(min_len=3, max_len=8):
     length = random.randint(min_len, max_len)
     seq = [random.randint(0, 1) for _ in range(length)]
     ones = sum(seq)
-    answer = "SAME" if ones % 2 == 0 else "DIFF"
+    answer = "S" if ones % 2 == 0 else "D"
     seq_str = " ".join(str(x) for x in seq)
     return {"type": "parity", "input": seq_str, "output": answer}
 
@@ -392,7 +392,7 @@ def validate(count=1000):
 
         if t == "same_different":
             a, b = inp.split()
-            expected = "SAME" if a == b else "DIFF"
+            expected = "S" if a == b else "D"
             if out != expected:
                 print(f"ERROR: {inp} → {out}, expected {expected}")
                 errors += 1
@@ -400,7 +400,7 @@ def validate(count=1000):
         elif t == "mirror_detection":
             nums = inp.split()
             is_mirror = nums == nums[::-1]
-            expected = "MIRROR" if is_mirror else "NO"
+            expected = "M" if is_mirror else "N"
             if out != expected:
                 print(f"ERROR: {inp} → {out}, expected {expected}")
                 errors += 1

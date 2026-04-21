@@ -42,7 +42,7 @@ def gen_set_intersection(max_val=10, max_len=5):
     result = sorted(set(a) & set(b))
     a_str = " ".join(str(x) for x in a)
     b_str = " ".join(str(x) for x in b)
-    r_str = " ".join(str(x) for x in result) if result else "NONE"
+    r_str = " ".join(str(x) for x in result) if result else "0"
     return {"type": "set_intersection", "input": f"{a_str} & {b_str}", "output": r_str}
 
 
@@ -53,10 +53,10 @@ def gen_is_subset(max_val=8, max_len=4):
     if random.random() < 0.5 and len(b) >= 2:
         # Make A a true subset
         a = sorted(random.sample(b, random.randint(1, max(1, len(b) - 1))))
-        answer = "SAME"  # reuse SAME token for "yes"
+        answer = "S"  # yes/subset
     else:
         a = sorted(set(random.randint(0, max_val) for _ in range(random.randint(1, max_len))))
-        answer = "SAME" if set(a).issubset(set(b)) else "DIFF"
+        answer = "S" if set(a).issubset(set(b)) else "D"
     a_str = " ".join(str(x) for x in a)
     b_str = " ".join(str(x) for x in b)
     return {"type": "is_subset", "input": f"{a_str} ? {b_str}", "output": answer}
