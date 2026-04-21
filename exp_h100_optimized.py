@@ -364,7 +364,7 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         device = "cuda"
         name = torch.cuda.get_device_name()
-        mem = torch.cuda.get_device_properties(0).total_mem / 1e9
+        mem = torch.cuda.get_device_properties(0).total_memory / 1e9
         print(f"Device: {name} ({mem:.0f}GB)", flush=True)
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         device = "mps"
