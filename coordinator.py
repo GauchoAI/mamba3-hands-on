@@ -233,12 +233,22 @@ def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0):
 
     # Mutate d_model
     if random.random() < min(0.2 * amp, 0.8):
-        child["d_model"] = random.choice([32, 48, 64, 96, 128])
+        # Dynamic: explore around parent's width
+        parent_d = child.get("d_model", 64)
+        nearby_d = [max(16, parent_d - 16), parent_d, parent_d + 16, parent_d + 32]
+        wild_d = [32, 48, 64, 96, 128, 192, 256]
+        choices_d = nearby_d if random.random() < 0.7 else wild_d
+        child["d_model"] = random.choice(choices_d)
         child["headdim"] = min(child["headdim"], child["d_model"])
 
     # Mutate layers
     if random.random() < min(0.2 * amp, 0.8):
-        child["n_kernel_layers"] = random.choice([1, 2, 3, 4])
+        # Dynamic: explore around the parent's depth ± 1-2, plus random
+        parent_layers = child.get("n_kernel_layers", 1)
+        nearby = [max(1, parent_layers - 1), parent_layers, parent_layers + 1, parent_layers + 2]
+        wild = [1, 2, 3, 4, 6, 8]  # occasional wild jump
+        choices = nearby if random.random() < 0.7 else wild
+        child["n_kernel_layers"] = random.choice(choices)
 
     # Mutate weight decay
     if random.random() < min(0.2 * amp, 0.8):
@@ -275,7 +285,12 @@ def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0):
     # When severely stuck: radical mutation — completely random config
     if plateau_severity >= 2.0 and random.random() < 0.3:
         child = random.choice(SEED_CONFIGS).copy()
-        child["n_kernel_layers"] = random.choice([1, 2, 3, 4])
+        # Dynamic: explore around the parent's depth ± 1-2, plus random
+        parent_layers = child.get("n_kernel_layers", 1)
+        nearby = [max(1, parent_layers - 1), parent_layers, parent_layers + 1, parent_layers + 2]
+        wild = [1, 2, 3, 4, 6, 8]  # occasional wild jump
+        choices = nearby if random.random() < 0.7 else wild
+        child["n_kernel_layers"] = random.choice(choices)
         child["loss_fn"] = random.choice(["stable_ce", "ce", "focal", "label_smooth"])
         child["optimizer"] = random.choice(["adamw", "lion"])
         child["warm_restarts"] = random.choice([True, False])
