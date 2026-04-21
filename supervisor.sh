@@ -43,6 +43,16 @@ start_renderer() {
     echo "[$(date)] Renderer started (PID $RENDER_PID)"
 }
 
+start_firebase_sync() {
+    .venv/bin/python -u firebase_sync.py \
+        --db metrics.db \
+        --watch \
+        --interval 30 \
+        >> firebase_sync.log 2>&1 &
+    FBSYNC_PID=$!
+    echo "[$(date)] Firebase sync started (PID $FBSYNC_PID)"
+}
+
 start_http() {
     .venv/bin/python serve.py >> /dev/null 2>&1 &
     HTTP_PID=$!
@@ -54,11 +64,13 @@ mkdir -p runs logs
 start_coordinator
 start_renderer
 start_http
+start_firebase_sync
 
 echo "[$(date)] All services running."
-echo "[$(date)] Coordinator: $COORD_PID"
-echo "[$(date)] Renderer:    $RENDER_PID"
-echo "[$(date)] HTTP:        $HTTP_PID"
+echo "[$(date)] Coordinator:    $COORD_PID"
+echo "[$(date)] Renderer:       $RENDER_PID"
+echo "[$(date)] HTTP:           $HTTP_PID"
+echo "[$(date)] Firebase sync:  $FBSYNC_PID"
 
 # ── Monitor loop: restart anything that dies ──
 
@@ -81,5 +93,11 @@ while true; do
     if ! kill -0 $HTTP_PID 2>/dev/null; then
         echo "[$(date)] ⚠ HTTP server died! Restarting..."
         start_http
+    fi
+
+    # Check Firebase sync
+    if ! kill -0 $FBSYNC_PID 2>/dev/null; then
+        echo "[$(date)] ⚠ Firebase sync died! Restarting..."
+        start_firebase_sync
     fi
 done
