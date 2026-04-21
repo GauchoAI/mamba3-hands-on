@@ -825,18 +825,137 @@ the plain model can't do.
 
 ---
 
+---
+
+## Entry 14 — The roadmap: from puzzle solver to formal reasoning
+
+### Where we are
+
+The curriculum trains the model on 15 specific task types, one at a time.
+Parity is mastered. Binary patterns mastered in fewer examples (transfer!).
+The model is climbing the difficulty ladder.
+
+But 15 task types is still a fixed set. The real test is what comes next.
+
+### The three leaps
+
+**Leap 1: Generalized puzzle solver (meta-learning)**
+
+The model should solve tasks it has *never been trained on*, given only
+a few examples. This is in-context learning / few-shot reasoning:
+
+```
+Example: 3 5 → 8, 2 7 → 9, 4 1 → ?
+Answer: 5  (the model inferred "addition" from two examples)
+```
+
+How to get there:
+- The curriculum builds atomic skills (compare, count, detect patterns)
+- The boss tasks test whether these skills compose into new abilities
+- True few-shot eval: present 2-3 examples of a novel task type,
+  ask the model to infer the rule and apply it
+- If it can do this, it has learned *how to learn patterns*, not just
+  specific patterns
+
+The key metric: **zero-shot accuracy on novel task types.** After
+training on 15 types + 18 boss types, generate a *34th* type the model
+has never seen. Can it figure it out?
+
+**Leap 2: Language as interface**
+
+The model goes from *doing* to *explaining*. Four levels:
+
+```
+Level A: Solve silently (current — outputs just the answer)
+Level B: Solve + state the rule ("the pattern repeats every 3")
+Level C: Express rules formally ("∀n: a(n+3) = a(n)")
+Level D: Chain rules into proofs ("periodic ∧ arithmetic → closed form")
+```
+
+This requires switching to the bilingual byte-level LM (`mamba3_lm.py`)
+and training on reasoning traces where the model shows its work.
+
+The seeds we built with Cerebras (thinking + answer + python) were
+exactly this format. The curriculum provides the *grounding* — when
+the model writes "I'll compare adjacent pairs," it has actually learned
+what comparison means from Level 0-1 training.
+
+**Leap 3: Formal mathematics**
+
+Once the model can express reasoning in language, the next step is
+formal notation:
+
+```
+Natural:  "the sequence increases by 3 each time"
+Formal:   a(n) = a(0) + 3n
+Proof:    ∀n ∈ ℕ: a(n+1) - a(n) = 3  (by induction on training examples)
+```
+
+The path: logic gates → propositional logic (modus ponens, already in
+curriculum) → predicate logic → simple proofs → induction → algebraic
+manipulation (SymPy traces from BOOTSTRAP.md Level 5).
+
+### Checkpoint strategy
+
+The curriculum checkpoint is small (~2MB for 405K params). Can be
+committed directly to git. To continue training:
+
+```python
+cfg = Mamba3Config(d_model=128, d_state=16, expand=2, headdim=16)
+model = PlainModel(cfg).to(device)
+ckpt = torch.load("curriculum_best.pt", map_location=device)
+model.load_state_dict(ckpt["model"])
+# Continue training on new data (language, formal math)
+```
+
+The SSM state representations carry forward. Skills learned in Level 0
+(parity, patterns) become the substrate for Level 1+ reasoning.
+
+### The ultimate validation
+
+Give the model a problem it has *never* seen, in *natural language*:
+
+```
+User: "Is 371 an Armstrong number?"
+
+Model thinking:
+  An Armstrong number has digits whose cubes sum to itself.
+  371 → digits: 3, 7, 1
+  3³ = 27, 7³ = 343, 1³ = 1
+  27 + 343 + 1 = 371 = original
+  → YES
+
+Model output: Yes, 371 is an Armstrong number.
+  3³ + 7³ + 1³ = 27 + 343 + 1 = 371 ✓
+```
+
+The thinking block uses real operations the model learned:
+decomposition (Level 0), exponentiation (Level 4), summation (Level 2),
+comparison (Level 1). Language (Level 6) is the interface.
+
+If this works, we have a system that reasons — not because it memorized
+Armstrong numbers, but because it bootstrapped from parity to formal
+mathematics through six levels of increasingly powerful computation.
+
+The brain of a fly, becoming the brain of a human.
+
+---
+
 ## Open threads
 
 - **Curriculum run in progress.** H100, 100K steps, grokking-aware.
-  Parity mastered, binary_pattern_next just unlocked.
-- **Samples-to-mastery tracking.** Task 1 took 2000 steps / 30K examples.
-  Watch if task 2 takes fewer → learning to learn.
+  Parity mastered, binary_pattern_next mastered, climbing difficulty.
+- **Samples-to-mastery tracking.** Task 1: 30K examples. Task 2: 13K
+  examples. Watching for acceleration.
 - **Transfer learning.** same_different at 60% without training = free
-  transfer from parity. Track which tasks benefit from prior learning.
+  transfer. Track which tasks benefit from prior learning.
 - **Augmented model.** Once plain model advances through curriculum,
   re-run with registers/spikes. Hypothesis: registers help at Stage 3+
   (sequence memory tasks that need structured storage).
-- **Final boss.** 18 unseen tasks waiting. The real test of generalization.
-- **Checkpoint portability.** Train on H100, probe/debug on M4 MPS.
+- **Few-shot eval.** After curriculum, test on completely novel task
+  types with only 2-3 in-context examples.
+- **Language transition.** Switch to byte-level LM, train on reasoning
+  traces. The curriculum checkpoint becomes the foundation.
+- **Formal math.** SymPy-generated algebraic traces (BOOTSTRAP.md L5).
 - **The compilation problem.** How Brain 1 (language) learns to program
   Brain 2 (step function). The hardest open question.
