@@ -241,7 +241,11 @@ def train(args):
         # Write to SQLite timeseries
         metrics.log_cycle(exp_id, cycle, cycle_loss, fresh, best_fresh,
                          elapsed_s=elapsed)
-        metrics.log_tasks(exp_id, cycle, type_accs)
+        # Include difficulty levels from teacher
+        difficulties = {}
+        for t, cfg_t in teacher.task_configs.items():
+            difficulties[t] = cfg_t.difficulty
+        metrics.log_tasks(exp_id, cycle, type_accs, difficulties=difficulties)
         if cycle % 10 == 0:
             metrics.log_teacher(exp_id, cycle, teacher)
 
