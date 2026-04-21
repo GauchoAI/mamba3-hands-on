@@ -462,7 +462,7 @@ class WorkerManager:
 
 # ── Dashboard writer ────────────────────────────────────────────────
 
-def write_dashboard(results, generation, gpu_pct, mem_pct):
+def write_dashboard(results, generation, gpu_pct, mem_pct, evo_state=None):
     """Write dashboard.html + dashboard.md from coordinator's view."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -631,7 +631,22 @@ for (const [key, datasets] of Object.entries(allData)) {{
     Path("dashboard.html").write_text(html)
 
     # Markdown version
-    lines = [f"# Evolution Dashboard — Gen {generation}", f"GPU {gpu_pct:.0f}% · VRAM {mem_pct:.0f}%", ""]
+    plateau_md = ""
+    if evo_state:
+        if evo_state.plateau_mode:
+            sev = evo_state.get_plateau_severity()
+            stuck = evo_state.generation - evo_state.best_ever_gen
+            plateau_md = (f"\n## 🔥 PLATEAU MODE ACTIVE\n"
+                         f"- Severity: **{sev:.1f}** (mutation amplifier: {1+sev:.1f}x)\n"
+                         f"- Stuck for **{stuck} generations** at {evo_state.best_ever:.1%}\n"
+                         f"- Aggressive exploration: re-trying Lion, focal loss, SAM, warm restarts, noise\n"
+                         f"- Radical mutation: 30% chance of completely random configs\n")
+        else:
+            plateau_md = f"\n## ✅ Improving — best ever: {evo_state.best_ever:.1%}\n"
+
+    lines = [f"# Evolution Dashboard — Gen {generation}",
+             f"GPU {gpu_pct:.0f}% · VRAM {mem_pct:.0f}%",
+             plateau_md, ""]
     lines.append("| Rank | ID | Params | Arch | Method | Fresh | Parity | Cycles | Status |")
     lines.append("|------|-----|--------|------|--------|-------|--------|--------|--------|")
     for i, r in enumerate(results):
@@ -812,7 +827,7 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
         mem_used, mem_total = 0, 80000
     metrics.log_gpu(gpu_pct, mem_pct, mem_used, mem_total,
                    len(running), len(results))
-    write_dashboard(results, generation, gpu_pct, mem_pct)
+    write_dashboard(results, generation, gpu_pct, mem_pct, evo_state)
 
     # ── Genetic evolution ──
     if len(results) < 2:
@@ -830,10 +845,10 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
     at_capacity = mem_pct > 75 or len(running) >= max_workers
     has_headroom = mem_pct < 65 and gpu_pct < 90
 
-    plateau_str = f"  🔥 PLATEAU severity={severity:.1f}" if is_plateau else ""
+    plateau_str = f"  🔥 PLATEAU severity={severity:.1f} — aggressive mutation ON" if is_plateau else "  ✅ improving"
     print(f"  GPU: {gpu_pct:.0f}%  VRAM: {mem_pct:.0f}%  "
           f"{'at capacity' if at_capacity else f'headroom ({100-mem_pct:.0f}% VRAM free)'}"
-          f"{plateau_str}", flush=True)
+          f"{plateau_str}  best_ever={evo_state.best_ever:.1%}", flush=True)
 
     # Auto-scale: spawn more workers if GPU has headroom
     if has_headroom and not at_capacity and running_results:
