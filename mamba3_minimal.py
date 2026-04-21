@@ -190,20 +190,9 @@ class Mamba3Block(nn.Module):
         # Scale by dt
         inp_all = inp_all * DT[..., None, None]  # (B, L, H, hD, dS)
 
-        # ---- Sequential scan (tight loop — only state recurrence) ----
-        h = u.new_zeros(B_, nH, hD, dS)
-        y = u.new_zeros(B_, L, nH, hD)
-
-        # Pre-slice for less Python overhead in the loop
-        decay_exp = decay[..., None, None]  # (B, L, H, 1, 1)
-        z_silu = F.silu(z)  # (B, L, H, hD) — precompute all gating
-
-        for t in range(L):
-            h = decay_exp[:, t] * h + inp_all[:, t]
-            y_t = torch.einsum("bhpn,bhn->bhp", h, Cp_rot[:, t])
-            y_t = y_t + self.D[None, :, None] * x[:, t]
-            y[:, t] = y_t * z_silu[:, t]
-
+        # ---- Scan: Triton on CUDA, JIT on MPS/CPU ────────────────
+        from ssm_triton import ssm_scan
+        y = ssm_scan(inp_all, decay, Cp_rot, x, z, self.D)  # (B, L, H, hD)
         y = y.reshape(B_, L, self.d_inner)
 
         out = self.out_proj(y)
