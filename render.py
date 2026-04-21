@@ -619,12 +619,19 @@ def render_once(db_path="metrics.db"):
 
 def watch(db_path="metrics.db", interval=30):
     print(f"Watching {db_path}, rendering every {interval}s...", flush=True)
+    fail_count = 0
     while True:
         try:
             render_once(db_path)
+            fail_count = 0
             print(f"  rendered at {datetime.now().strftime('%H:%M:%S')}", flush=True)
         except Exception as e:
-            print(f"  render error: {e}", flush=True)
+            fail_count += 1
+            import traceback
+            print(f"\n  ❌ RENDER ERROR #{fail_count}: {e}", flush=True)
+            traceback.print_exc()
+            if fail_count > 10:
+                print(f"  ⚠ {fail_count} consecutive failures — still retrying", flush=True)
         time.sleep(interval)
 
 

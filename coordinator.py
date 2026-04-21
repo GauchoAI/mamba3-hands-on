@@ -683,7 +683,6 @@ for (const [key, datasets] of Object.entries(allData)) {{
 def get_gpu_usage():
     """Get GPU utilization % and memory usage %."""
     try:
-        import subprocess
         out = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
              "--format=csv,noheader,nounits"],
@@ -694,6 +693,15 @@ def get_gpu_usage():
         return gpu_pct, mem_pct
     except Exception:
         return 0.0, 0.0
+
+
+def get_actual_worker_count():
+    """Count actual worker processes via pgrep, not coordinator state."""
+    try:
+        out = subprocess.check_output(["pgrep", "-fc", "worker.py"], text=True).strip()
+        return int(out)
+    except Exception:
+        return 0
 
 
 def run_coordinator(args):
@@ -840,8 +848,9 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
         mem_used, mem_total = [float(x) for x in out.split(",")]
     except Exception:
         mem_used, mem_total = 0, 80000
+    actual_workers = get_actual_worker_count()
     metrics.log_gpu(gpu_pct, mem_pct, mem_used, mem_total,
-                   len(running), len(results))
+                   actual_workers, len(results))
     write_dashboard(results, generation, gpu_pct, mem_pct, evo_state)
 
     # ── Genetic evolution ──
