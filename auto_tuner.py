@@ -224,7 +224,12 @@ class Experiment:
         return _fwd_loss
 
     def train_cycle(self, cache: TeacherCache, steps=500):
-        """Train for one cycle using shared cache."""
+        """Train for one cycle using gradient accumulation.
+
+        Accumulates gradients over all `steps` micro-batches, then does
+        ONE optimizer step. The GPU stays busy doing forward/backward
+        without waiting for Python to call step() between each.
+        """
         self.model.train()
         last_loss = 0.0
 
@@ -232,19 +237,24 @@ class Experiment:
         if not hasattr(self, '_train_fn'):
             self._train_fn = self._compile_train_step()
 
-        for _ in range(steps):
+        self.opt.zero_grad(set_to_none=True)
+        accum_loss = 0.0
+
+        for i in range(steps):
             tokens, sep_pos = cache.get_batch(self.cfg.batch_size)
             sep_tensor = torch.tensor(sep_pos, device=self.device, dtype=torch.long)
 
             loss = self._train_fn(self.model, tokens, sep_tensor, VOCAB_SIZE)
+            # Scale loss by accumulation steps so gradient magnitude stays the same
+            (loss / steps).backward()
+            accum_loss += loss.item()
 
-            self.opt.zero_grad(set_to_none=True)
-            loss.backward()
-            if self.perp:
-                self.perp.project()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.opt.step()
-            last_loss = loss.item()
+        # One optimizer step for the entire cycle
+        if self.perp:
+            self.perp.project()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        self.opt.step()
+        last_loss = accum_loss / steps
 
         self.cycle += 1
         lr = self.opt.param_groups[0]["lr"]

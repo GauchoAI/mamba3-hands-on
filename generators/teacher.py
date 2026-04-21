@@ -47,10 +47,10 @@ DIFFICULTY_RANGES = {
     },
     # Stage 1: comparison
     "same_different": {
-        "max_val": (3, 200),
+        "max_val": (1, 200),     # start at 1! binary first, then scale up
     },
     "odd_one_out": {
-        "max_val": (3, 30),
+        "max_val": (1, 30),      # start binary, scale up
         "min_len": (3, 6),
         "max_len": (4, 12),
     },
@@ -73,12 +73,12 @@ DIFFICULTY_RANGES = {
     },
     # Stage 3: sequence memory
     "mirror_detection": {
-        "max_val": (3, 20),
+        "max_val": (1, 20),      # start binary, scale up
         "min_len": (3, 5),
         "max_len": (3, 9),
     },
     "repeat_count": {
-        "max_alpha": (2, 10),
+        "max_alpha": (2, 10),    # 2 = binary alphabet
         "min_len":   (3, 6),
         "max_len":   (4, 14),
     },
