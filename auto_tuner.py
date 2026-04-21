@@ -202,29 +202,41 @@ class Experiment:
         self.log.write(f"{'='*60}\n")
         self.log.flush()
 
-    def train_cycle(self, cache: TeacherCache, steps=500):
-        """Train for one cycle using shared cache."""
-        self.model.train()
-        last_loss = 0.0
-        for _ in range(steps):
-            tokens, sep_pos = cache.get_batch(self.cfg.batch_size)
-            logits = self.model(tokens)
-
-            # Loss
-            B, L, V = logits.shape
-            mask = torch.zeros(B, L, device=self.device)
-            for b in range(B):
-                mask[b, sep_pos[b]:L-1] = 1.0
+    def _compile_train_step(self):
+        """Compile the forward+loss into a single fused function."""
+        @torch.compile(mode="reduce-overhead", disable=not torch.cuda.is_available())
+        def _fwd_loss(model, tokens, sep_tensor, V):
+            logits = model(tokens)
+            B, L, _ = logits.shape
+            # Vectorized mask: positions >= sep and < L-1
+            pos = torch.arange(L, device=tokens.device).unsqueeze(0)  # (1, L)
+            mask = (pos >= sep_tensor.unsqueeze(1)) & (pos < L - 1)   # (B, L)
+            mask = mask.float()
             pad_mask = (tokens != PAD).float()
             target_valid = pad_mask[:, 1:]
             pred_mask = mask[:, :L-1] * target_valid
-            if pred_mask.sum() == 0:
-                continue
             logits_flat = logits[:, :L-1].reshape(-1, V)
             targets_flat = tokens[:, 1:].reshape(-1)
             mask_flat = pred_mask.reshape(-1)
             loss_all = stable_cross_entropy(logits_flat, targets_flat, reduction='none')
-            loss = (loss_all * mask_flat).sum() / mask_flat.sum()
+            loss = (loss_all * mask_flat).sum() / (mask_flat.sum() + 1e-8)
+            return loss
+        return _fwd_loss
+
+    def train_cycle(self, cache: TeacherCache, steps=500):
+        """Train for one cycle using shared cache."""
+        self.model.train()
+        last_loss = 0.0
+
+        # Lazy compile on first call
+        if not hasattr(self, '_train_fn'):
+            self._train_fn = self._compile_train_step()
+
+        for _ in range(steps):
+            tokens, sep_pos = cache.get_batch(self.cfg.batch_size)
+            sep_tensor = torch.tensor(sep_pos, device=self.device, dtype=torch.long)
+
+            loss = self._train_fn(self.model, tokens, sep_tensor, VOCAB_SIZE)
 
             self.opt.zero_grad(set_to_none=True)
             loss.backward()
