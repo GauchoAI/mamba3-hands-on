@@ -167,16 +167,16 @@ def compute_loss(logits, tokens, sep_positions):
     return loss / max(count, 1)
 
 
-def evaluate(model, dataset, n_eval=500):
-    """Evaluate: for each example, predict output tokens and check exact match."""
+def evaluate_on_examples(model, examples, device, n_eval=500):
+    """Evaluate exact match on a list of (inp, out, type) tuples."""
     model.eval()
     correct = 0
     total = 0
 
     with torch.no_grad():
-        for i in range(min(n_eval, len(dataset.examples))):
-            inp, out, task_type = dataset.examples[i]
-            tokens = torch.tensor([inp + out], dtype=torch.long, device=dataset.device)
+        for i in range(min(n_eval, len(examples))):
+            inp, out, task_type = examples[i]
+            tokens = torch.tensor([inp + out], dtype=torch.long, device=device)
             logits = model(tokens)
 
             sep = len(inp) - 1
@@ -200,14 +200,35 @@ def evaluate(model, dataset, n_eval=500):
     return correct / max(total, 1)
 
 
+def make_fresh_eval_set(count=500, seed=None):
+    """Generate fresh examples never seen during training."""
+    import generators.level0_patterns as gen0
+    if seed is not None:
+        import random as _r
+        _r.seed(seed)
+    raw = gen0.generate_dataset(count)
+    examples = []
+    for ex in raw:
+        inp_tokens = [SPECIAL_TOKENS["<BOS>"]] + tokenize(ex["input"]) + [SPECIAL_TOKENS["<SEP>"]]
+        out_tokens = tokenize(ex["output"]) + [SPECIAL_TOKENS["<EOS>"]]
+        examples.append((inp_tokens, out_tokens, ex.get("type", "")))
+    return examples
+
+
+def evaluate(model, dataset, n_eval=500):
+    """Evaluate on FRESH data (generalization), not training data."""
+    fresh = make_fresh_eval_set(n_eval, seed=None)  # different every call
+    return evaluate_on_examples(model, fresh, dataset.device, n_eval)
+
+
 def evaluate_by_type(model, dataset, n_per_type=100):
-    """Evaluate accuracy broken down by task type."""
+    """Evaluate accuracy broken down by task type, on FRESH data."""
+    fresh = make_fresh_eval_set(n_per_type * 8, seed=None)  # enough for all types
     model.eval()
     type_stats = {}
 
     with torch.no_grad():
-        for i in range(len(dataset.examples)):
-            inp, out, task_type = dataset.examples[i]
+        for inp, out, task_type in fresh:
             if task_type not in type_stats:
                 type_stats[task_type] = {"correct": 0, "total": 0}
             if type_stats[task_type]["total"] >= n_per_type:
@@ -273,17 +294,22 @@ def train(args):
         opt.step()
 
         if step % args.eval_every == 0 or step == 1:
-            acc = evaluate(model, dataset, n_eval=500)
-            print(f"step {step:5d}  loss={loss.item():.3f}  exact_match={acc:.1%}",
-                  flush=True)
+            # Eval on BOTH training data and fresh data
+            train_acc = evaluate_on_examples(model, dataset.examples, dataset.device, 300)
+            fresh_acc = evaluate(model, dataset, n_eval=300)
+            gap = train_acc - fresh_acc
+            print(f"step {step:5d}  loss={loss.item():.3f}  "
+                  f"train={train_acc:.1%}  fresh={fresh_acc:.1%}  "
+                  f"gap={gap:+.1%}", flush=True)
 
             if step % (args.eval_every * 5) == 0:
+                print("  --- per-type (fresh data) ---", flush=True)
                 type_accs = evaluate_by_type(model, dataset)
                 for t, a in type_accs.items():
-                    print(f"  {t}: {a:.0%}", flush=True)
+                    print(f"    {t}: {a:.0%}", flush=True)
 
     # Final evaluation
-    print("\n--- Final evaluation ---", flush=True)
+    print("\n--- Final evaluation (fresh data) ---", flush=True)
     type_accs = evaluate_by_type(model, dataset, n_per_type=200)
     all_pass = True
     for t, a in type_accs.items():
@@ -292,8 +318,11 @@ def train(args):
         if a < args.threshold:
             all_pass = False
 
-    overall = evaluate(model, dataset, n_eval=1000)
-    print(f"\n  Overall exact match: {overall:.1%}", flush=True)
+    train_acc = evaluate_on_examples(model, dataset.examples, dataset.device, 1000)
+    fresh_acc = evaluate(model, dataset, n_eval=1000)
+    print(f"\n  Train exact match: {train_acc:.1%}", flush=True)
+    print(f"  Fresh exact match: {fresh_acc:.1%}  ← this is the real score", flush=True)
+    print(f"  Gap: {train_acc - fresh_acc:+.1%}  (smaller = less memorization)", flush=True)
     print(f"  Threshold: {args.threshold:.0%}", flush=True)
     print(f"  {'PASS — ready for Level ' + str(args.level + 1) if all_pass else 'FAIL — needs more training'}",
           flush=True)
