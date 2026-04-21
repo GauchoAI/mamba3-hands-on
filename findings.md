@@ -274,14 +274,110 @@ character-level generation across two languages.
 
 ---
 
+## Entry 9 — The universal step function: what worked and what didn't
+
+**Commit:** `exp: universal step function + multi-task interference`
+
+### Multi-task with separate heads (failed)
+
+Trained one Mamba-3 with task indicator tokens and separate heads for
+parity, sorting, counting. d_state=8, 16: parity and counting stuck at
+random. Only sorting learned (~67%). The task-indicator-plus-separate-heads
+design split the model into three isolated circuits that competed for state.
+
+### Universal step function — no task labels (partial success)
+
+Redesigned: one head, no task labels. Format: `[input...] [SEP] [output...]`.
+Five tasks mixed: parity, sort, reverse, minmax, length. The model must
+figure out from context what to compute.
+
+Results at step 3000, d_state=16, 31K params:
+
+| Task | Accuracy | Random | Verdict |
+|---|---|---|---|
+| Sort | 87% | 6% | ✓ Learned |
+| Minmax | 66% | 6% | ✓ Learning |
+| Reverse | 64% | 6% | ✓ Learning |
+| Parity | 48% | 50% | ✗ Random |
+| Length | 2% | 6% | ✗ Random |
+
+Sort, reverse, and minmax are clearly above random. The step function IS
+learning to handle multiple tasks. But parity and length are stuck — both
+produce a single token after SEP, so the model can't distinguish them.
+
+### Why this is not enough — the Von Neumann insight
+
+**The critical realization:** these successes may be pattern matching over
+a small finite space, not genuine algorithms.
+
+- **Sorting with vocab=10** is probably counting sort — the model memorizes
+  how many of each value it's seen and outputs them in order. Give it
+  vocab=1000 and it would fail. This is a lookup table, not a comparison
+  algorithm.
+- **Parity with binary** works because there are only 2 input values and
+  one trivial rotation. It's the simplest possible case.
+- **Reverse with L≤10** might be position memorization, not a general
+  reversal algorithm.
+
+**For unbounded solutions** — sorting any numbers, solving Hanoi with any
+number of disks — the model needs to learn **micro-operations** (COMPARE,
+SWAP, INCREMENT, PUSH/POP) that compose into algorithms, not memorize the
+answers for a small vocabulary.
+
+This is the Von Neumann architecture: instructions and data in the same
+stream, processed by the same step function. The training data shouldn't
+be "here are sorted sequences" but "here is COMPARE executing on two
+values, here is SWAP, and here is how they chain into a sort."
+
+### The three layers of mathematical thinking
+
+This exploration led to identifying three layers the model needs:
+
+1. **Numerical computation** (pure step function): `3 + 5 = 8`,
+   `COMPARE(7, 3) → 7 > 3`. No symbols, no language. State manipulation.
+
+2. **Symbolic manipulation** (the bridge): Algebra, equation solving,
+   simplification. Each step is a rule applied to a pattern:
+   `2x + 3 = 7 → 2x = 4 → x = 2`. The rules (DISTRIBUTE, FACTOR,
+   SUBSTITUTE, CANCEL) are higher-level micro-operations over expressions,
+   not just numbers. A CAS like SymPy can generate these traces.
+
+3. **Mathematical language** (pure orator): "By the commutative property..."
+   "Therefore, since x > 0...". This is Brain 1 — explaining, proving.
+
+A mathematician who only has Layer 3 is a poet. A calculator with only
+Layer 1 can compute but can't generalize. Layer 2 — symbolic manipulation —
+is where language meets computation. Teaching the model this layer is the
+key to genuine reasoning.
+
+### What this means for the training data
+
+The training data for the "left brain" (step function) should be
+**code-generated execution traces** of micro-operations:
+
+- **Tier 1:** Numerical — ADD, CMP, SWAP, PUSH, POP on concrete values
+- **Tier 2:** Symbolic — DISTRIBUTE, FACTOR, SIMPLIFY on algebraic expressions
+- **Tier 3:** Composition — chains of micro-ops that implement algorithms
+
+The code generators (sorting algorithms, SymPy, etc.) produce the traces.
+The model learns the micro-operations from the traces. And eventually,
+Brain 1 (language) learns to WRITE programs of micro-ops that Brain 2
+(step function) executes.
+
+See `ARCHITECTURE.md` for the full FPGA analogy and experimental plan.
+
+---
+
 ## Open threads
 
-- **Length generalization.** Trained on L=16, holds at L=32 (90%), degrades
-  beyond. The small residual decay (`A ≤ -1e-4`) erodes parity over long
-  sequences. `A_floor = 0` or a gated `A` might fix this.
-- **Ablation.** Is the parity win from the RoPE, the trapezoidal gate, or
-  both? Worth stripping each one out individually.
-- **MIMO.** Implementing rank-r lift would be the natural next step for
-  harder state tracking.
-- **Associative recall.** Another benchmark from the paper, closer to
-  language-modeling value than parity.
+- **Von Neumann training data.** Design and implement code generators for
+  micro-operation execution traces. Start with comparison-based sorting
+  (not counting sort) and stack operations.
+- **Symbolic math traces.** Use SymPy to generate algebraic manipulation
+  traces. Teach DISTRIBUTE, FACTOR, SUBSTITUTE as learnable operations.
+- **Scaling test.** Re-run sorting with vocab=100+ to distinguish genuine
+  comparison sorting from counting sort / lookup table memorization.
+- **The compilation problem.** How does Brain 1 learn to emit programs
+  that Brain 2 executes? This is the hardest open question.
+- **Length generalization.** Still unsolved from Entry 3.
+- **MIMO.** Still not implemented.
