@@ -39,6 +39,10 @@ from datetime import datetime
 def mutate_config(parent_config, mutation_strength=0.3):
     """Create a child config by mutating a parent."""
     child = parent_config.copy()
+    # Ensure all keys exist with defaults
+    child.setdefault("loss_fn", "stable_ce")
+    child.setdefault("backend", "pytorch")
+    child.setdefault("steps_per_cycle", 200)
 
     # Mutate learning rate (log-scale)
     if random.random() < 0.5:
