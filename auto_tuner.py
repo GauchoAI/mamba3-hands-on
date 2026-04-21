@@ -384,14 +384,27 @@ def run_tuner(args):
             parity_acc = type_accs.get("parity", 0)
             marker = "★" if exp == results[0][0] else " "
             status = "ALIVE" if exp.alive else "DEAD"
+            lr = exp.opt.param_groups[0]["lr"]
+            wd = exp.cfg.weight_decay
+            perp_tag = "perp" if exp.use_perp else f"wd={wd}"
             print(f"  {marker} {exp.cfg.name()}: fresh={fresh:.1%}  "
                   f"parity={parity_acc:.0%}  best={exp.best_acc:.1%}  "
-                  f"[{status}]", flush=True)
+                  f"lr={lr:.0e}  [{perp_tag}]  {exp.n_params:,}p", flush=True)
+
+            # Show per-type details for the leader
+            if exp == results[0][0]:
+                for t, a in sorted(type_accs.items()):
+                    if a > 0:
+                        print(f"      {t}: {a:.0%}", flush=True)
 
         # Update teacher with best experiment's results
         best_exp, best_fresh, best_type_accs = results[0]
         teacher.set_step(cycle * args.steps_per_cycle)
         teacher.observe(best_type_accs)
+        if cycle % 5 == 0:
+            print(f"  teacher:\n{teacher.get_status()}", flush=True)
+            if teacher.mastery_log:
+                print(teacher.get_learning_report(), flush=True)
 
         # Prune: kill bottom half after warmup
         if cycle >= args.prune_after and cycle % args.prune_every == 0:
