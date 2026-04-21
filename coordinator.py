@@ -457,8 +457,8 @@ def run_coordinator(args):
         generation += 1
 
         try:
-            _run_generation(mgr, teacher, metrics, args, generation,
-                           max_workers, should_stop)
+            _run_generation(mgr, metrics, args, generation,
+                           max_workers)
         except Exception as e:
             print(f"  ⚠ Generation {generation} error: {e}", flush=True)
             import traceback
@@ -482,7 +482,7 @@ def run_coordinator(args):
               flush=True)
 
 
-def _run_generation(mgr, teacher, metrics, args, generation, max_workers, should_stop):
+def _run_generation(mgr, metrics, args, generation, max_workers):
     """One generation of the evolutionary loop. Called from main loop with try/except."""
     results = mgr.get_all_metrics()
     running = mgr.get_running()
