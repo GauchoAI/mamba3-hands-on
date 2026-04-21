@@ -853,6 +853,13 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
                    actual_workers, len(results))
     write_dashboard(results, generation, gpu_pct, mem_pct, evo_state)
 
+    # Push to Firebase (real-time)
+    try:
+        from firebase_push import push_snapshot, push_event
+        push_snapshot(results, generation, gpu_pct, mem_pct, evo_state)
+    except Exception as e:
+        print(f"  ⚠ Firebase snapshot failed: {e}", flush=True)
+
     # ── Genetic evolution ──
     if len(results) < 2:
         return
@@ -909,6 +916,11 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
                 f"child of {best['exp_id']}, replaced {worst['exp_id']}")
             metrics.log_event("pause", worst["exp_id"],
                 f"paused for evolution (fresh={worst.get('best_fresh',0):.1%})")
+            try:
+                from firebase_push import push_event as fb_event
+                fb_event("evolve", child_id, f"child of {best['exp_id']} [{selection_reason}]")
+            except Exception:
+                pass
             metrics.update_status(worst["exp_id"], "paused")
             print(f"  🧬 Evolution: paused {worst['exp_id']} "
                   f"(fresh={worst.get('best_fresh', 0):.1%}), "

@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🐀 Mamba-3 Evolution — Live</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; font-size: 14px; }
+  .tabular-nums { font-variant-numeric: tabular-nums; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+  .live-dot { animation: pulse 2s infinite; }
+</style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+<div class="max-w-7xl mx-auto px-4 py-4">
+
+<!-- Header -->
+<div class="flex justify-between items-center mb-4">
+  <div>
+    <h1 class="text-2xl font-bold">🐀 Mamba-3 Evolution</h1>
+    <p class="text-gray-500 text-xs">
+      <span class="live-dot text-green-400">●</span> Live from H100 ·
+      <span id="last-update" class="text-gray-400">connecting...</span> ·
+      <span id="freshness" class="text-gray-400"></span>
+    </p>
+  </div>
+  <div class="flex gap-4 text-sm">
+    <div class="text-center">
+      <div id="gpu-pct" class="text-2xl font-bold text-blue-400 tabular-nums">—</div>
+      <div class="text-xs text-gray-500">GPU</div>
+    </div>
+    <div class="text-center">
+      <div id="mem-pct" class="text-2xl font-bold text-orange-400 tabular-nums">—</div>
+      <div class="text-xs text-gray-500">VRAM</div>
+    </div>
+    <div class="text-center">
+      <div id="n-running" class="text-2xl font-bold text-green-400 tabular-nums">—</div>
+      <div class="text-xs text-gray-500">Workers</div>
+    </div>
+    <div class="text-center">
+      <div id="best-fresh" class="text-2xl font-bold text-yellow-400 tabular-nums">—</div>
+      <div class="text-xs text-gray-500">Best Fresh</div>
+    </div>
+  </div>
+</div>
+
+<!-- Plateau banner -->
+<div id="plateau-banner" class="hidden bg-red-900/50 border border-red-700 rounded-lg p-3 mb-4">
+  <span class="text-red-300 font-bold">🔥 PLATEAU MODE</span>
+  <span id="plateau-details" class="text-red-400 text-sm ml-2"></span>
+</div>
+
+<!-- Charts row -->
+<div class="grid grid-cols-3 gap-3 mb-4">
+  <div class="col-span-2 bg-gray-900 rounded-lg p-3">
+    <h2 class="text-xs font-bold text-gray-500 mb-1">Task Accuracy (%)</h2>
+    <div style="height:250px"><canvas id="taskChart"></canvas></div>
+  </div>
+  <div class="bg-gray-900 rounded-lg p-3">
+    <h2 class="text-xs font-bold text-gray-500 mb-1">GPU Utilization</h2>
+    <div style="height:110px"><canvas id="gpuChart"></canvas></div>
+    <h2 class="text-xs font-bold text-gray-500 mb-1 mt-2">Workers</h2>
+    <div style="height:100px"><canvas id="workersChart"></canvas></div>
+  </div>
+</div>
+
+<!-- Leaderboard + Events -->
+<div class="grid grid-cols-3 gap-3 mb-4">
+  <div class="col-span-2 bg-gray-900 rounded-lg p-3">
+    <h2 class="text-xs font-bold text-gray-500 mb-2">Leaderboard</h2>
+    <table class="w-full text-sm">
+      <thead><tr class="text-gray-500 text-xs border-b border-gray-800">
+        <th class="py-1 text-left">#</th>
+        <th class="py-1 text-left">ID</th>
+        <th class="py-1 text-right">Fresh</th>
+        <th class="py-1 text-right">Parity</th>
+        <th class="py-1 text-left">Arch</th>
+        <th class="py-1 text-left">Method</th>
+        <th class="py-1 text-right">Cycles</th>
+      </tr></thead>
+      <tbody id="leaderboard"></tbody>
+    </table>
+  </div>
+  <div class="bg-gray-900 rounded-lg p-3">
+    <h2 class="text-xs font-bold text-gray-500 mb-2">Live Events</h2>
+    <div id="events" class="space-y-1 max-h-72 overflow-y-auto text-xs font-mono"></div>
+  </div>
+</div>
+
+<!-- Task progress -->
+<div class="bg-gray-900 rounded-lg p-3 mb-4">
+  <h2 class="text-xs font-bold text-gray-500 mb-2">Curriculum Progress</h2>
+  <div id="curriculum" class="flex flex-wrap gap-1"></div>
+</div>
+
+</div>
+
+<script>
+// Firebase config
+firebase.initializeApp({
+  databaseURL: "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app"
+});
+const db = firebase.database();
+
+// State
+let gpuHistory = [];
+let workerHistory = [];
+let taskChart = null;
+let gpuChart = null;
+let workersChart = null;
+let lastTimestamp = 0;
+
+// Colors
+const TASK_COLORS = {
+  parity: '#3b82f6', binary_pattern_next: '#6366f1',
+  same_different: '#22c55e', odd_one_out: '#84cc16',
+  sequence_completion: '#eab308', pattern_period: '#f59e0b',
+  run_length_next: '#f97316', mirror_detection: '#ef4444',
+  repeat_count: '#ec4899', arithmetic_next: '#a855f7',
+  geometric_next: '#8b5cf6', alternating_next: '#6366f1',
+  logic_gate: '#14b8a6', logic_chain: '#06b6d4', modus_ponens: '#0ea5e9',
+};
+
+// ── Freshness indicator ──
+setInterval(() => {
+  if (lastTimestamp > 0) {
+    const ago = Math.round((Date.now()/1000 - lastTimestamp));
+    const el = document.getElementById('freshness');
+    if (ago < 120) {
+      el.textContent = `${ago}s ago`;
+      el.className = 'text-green-400';
+    } else {
+      el.textContent = `${Math.round(ago/60)}min ago ⚠`;
+      el.className = 'text-red-400';
+    }
+  }
+}, 1000);
+
+// ── Snapshot listener ──
+db.ref('mamba3/snapshot').on('value', snap => {
+  const d = snap.val();
+  if (!d) return;
+
+  lastTimestamp = d.timestamp || 0;
+  const time = new Date(d.timestamp * 1000).toLocaleTimeString();
+  document.getElementById('last-update').textContent = time;
+  document.getElementById('gpu-pct').textContent = (d.gpu_pct || 0).toFixed(0) + '%';
+  document.getElementById('mem-pct').textContent = (d.mem_pct || 0).toFixed(0) + '%';
+  document.getElementById('n-running').textContent = d.n_running || 0;
+  document.getElementById('best-fresh').textContent = ((d.best_fresh || 0) * 100).toFixed(1) + '%';
+
+  // Plateau
+  const pb = document.getElementById('plateau-banner');
+  if (d.plateau && d.plateau.active) {
+    pb.classList.remove('hidden');
+    document.getElementById('plateau-details').textContent =
+      `Severity ${d.plateau.severity} · Stuck ${d.plateau.stuck_gens} gens at ${(d.plateau.best_ever*100).toFixed(1)}% · Mutation ${(1+d.plateau.severity).toFixed(1)}x`;
+  } else {
+    pb.classList.add('hidden');
+  }
+
+  // Leaderboard
+  const lb = document.getElementById('leaderboard');
+  lb.innerHTML = '';
+  (d.leaderboard || []).forEach((exp, i) => {
+    const star = i === 0 ? '★ ' : '';
+    const freshPct = (exp.fresh * 100).toFixed(1);
+    const parityPct = (exp.parity * 100).toFixed(0);
+    const mom = exp.momentum > 0.001 ? '↑' : exp.momentum < -0.001 ? '↓' : '';
+    const spec = (exp.specialist || []).join(',');
+    lb.innerHTML += `<tr class="border-b border-gray-800/50 hover:bg-gray-800/50">
+      <td class="py-1 text-gray-500">${i+1}</td>
+      <td class="py-1 font-mono text-xs">${star}${exp.exp_id} ${mom}</td>
+      <td class="py-1 text-right font-bold tabular-nums text-yellow-400">${freshPct}%</td>
+      <td class="py-1 text-right tabular-nums">${parityPct}%</td>
+      <td class="py-1 text-xs text-gray-400">d=${exp.d_model} L=${exp.n_layers}</td>
+      <td class="py-1 text-xs">${exp.method}${spec ? ' 🎯'+spec : ''}</td>
+      <td class="py-1 text-right tabular-nums text-gray-500">${exp.cycle}</td>
+    </tr>`;
+  });
+
+  // Curriculum
+  const cur = document.getElementById('curriculum');
+  const ALL_TASKS = ['parity','binary_pattern_next','same_different','odd_one_out',
+    'sequence_completion','pattern_period','run_length_next','mirror_detection',
+    'repeat_count','arithmetic_next','geometric_next','alternating_next',
+    'logic_gate','logic_chain','modus_ponens'];
+  cur.innerHTML = '';
+  ALL_TASKS.forEach(task => {
+    const info = (d.tasks || {})[task];
+    const acc = info ? info.acc : 0;
+    let cls, label;
+    if (acc >= 0.9) { cls = 'bg-green-600 text-white'; label = `✅ ${(acc*100).toFixed(0)}%`; }
+    else if (acc > 0) { cls = 'bg-yellow-700 text-yellow-100'; label = `${(acc*100).toFixed(0)}%`; }
+    else { cls = 'bg-gray-800 text-gray-600'; label = '🔒'; }
+    const short = task.replace(/_/g,' ').replace('next','→');
+    cur.innerHTML += `<span class="px-2 py-1 rounded text-xs ${cls}" title="${task}: ${(acc*100).toFixed(1)}%">${short} ${label}</span>`;
+  });
+
+  // Task accuracy bar chart
+  updateTaskChart(d.tasks || {});
+
+  // GPU history
+  gpuHistory.push(d.gpu_pct || 0);
+  if (gpuHistory.length > 60) gpuHistory.shift();
+  workerHistory.push(d.n_running || 0);
+  if (workerHistory.length > 60) workerHistory.shift();
+  updateGpuChart();
+  updateWorkersChart();
+});
+
+// ── Events listener ──
+db.ref('mamba3/events').orderByChild('timestamp').limitToLast(30).on('child_added', snap => {
+  const e = snap.val();
+  if (!e) return;
+  const time = new Date(e.timestamp * 1000).toLocaleTimeString();
+  const icons = {mastery:'★',evolve:'🧬',pause:'⏸',unlock:'🔓',error:'❌',test:'🔧'};
+  const icon = icons[e.type] || '·';
+  const color = e.type === 'mastery' ? 'text-yellow-400' :
+                e.type === 'error' ? 'text-red-400' : 'text-gray-400';
+  const div = document.getElementById('events');
+  div.innerHTML = `<div class="${color}"><span class="text-gray-600">${time}</span> ${icon} <b>${e.exp_id||''}</b> ${e.details||''}</div>` + div.innerHTML;
+  // Keep max 30
+  while (div.children.length > 30) div.removeChild(div.lastChild);
+});
+
+// ── Charts ──
+function updateTaskChart(tasks) {
+  const labels = Object.keys(tasks).sort();
+  const data = labels.map(t => (tasks[t].acc || 0) * 100);
+  const colors = labels.map(t => TASK_COLORS[t] || '#666');
+
+  if (!taskChart) {
+    taskChart = new Chart(document.getElementById('taskChart'), {
+      type: 'bar',
+      data: {
+        labels: labels.map(l => l.replace(/_/g,' ')),
+        datasets: [{ data, backgroundColor: colors, borderWidth: 0 }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { min: 0, max: 100, ticks: { color: '#666', font: {size:9} } },
+          x: { ticks: { color: '#888', font: {size:8}, maxRotation: 45 } }
+        }
+      }
+    });
+  } else {
+    taskChart.data.labels = labels.map(l => l.replace(/_/g,' '));
+    taskChart.data.datasets[0].data = data;
+    taskChart.data.datasets[0].backgroundColor = colors;
+    taskChart.update();
+  }
+}
+
+function updateGpuChart() {
+  if (!gpuChart) {
+    gpuChart = new Chart(document.getElementById('gpuChart'), {
+      type: 'line',
+      data: { labels: gpuHistory.map((_,i) => i), datasets: [{
+        data: gpuHistory, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)',
+        fill: true, pointRadius: 0, tension: 0.3, borderWidth: 1.5
+      }]},
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { min: 0, max: 100, ticks: { color: '#666', font: {size:8} } },
+                  x: { display: false } }
+      }
+    });
+  } else {
+    gpuChart.data.labels = gpuHistory.map((_,i) => i);
+    gpuChart.data.datasets[0].data = gpuHistory;
+    gpuChart.update();
+  }
+}
+
+function updateWorkersChart() {
+  if (!workersChart) {
+    workersChart = new Chart(document.getElementById('workersChart'), {
+      type: 'line',
+      data: { labels: workerHistory.map((_,i) => i), datasets: [{
+        data: workerHistory, borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.1)',
+        fill: true, pointRadius: 0, tension: 0.3, borderWidth: 1.5
+      }]},
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: { legend: { display: false } },
+        scales: { y: { min: 0, ticks: { color: '#666', font: {size:8} } },
+                  x: { display: false } }
+      }
+    });
+  } else {
+    workersChart.data.labels = workerHistory.map((_,i) => i);
+    workersChart.data.datasets[0].data = workerHistory;
+    workersChart.update();
+  }
+}
+</script>
+
+</body>
+</html>
