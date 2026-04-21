@@ -15,7 +15,7 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 6006))  # Use TensorBoard port (publicly mapped)
+    port = int(os.environ.get("PORT", 16006))  # Replace TensorBoard (Caddy proxies 6006→16006)
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
     server = HTTPServer(("0.0.0.0", port), NoCacheHandler)
     print(f"Serving on port {port} (no-cache)", flush=True)
