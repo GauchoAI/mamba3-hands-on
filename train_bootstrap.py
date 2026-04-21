@@ -168,33 +168,51 @@ def compute_loss(logits, tokens, sep_positions):
 
 
 def evaluate_on_examples(model, examples, device, n_eval=500):
-    """Evaluate exact match on a list of (inp, out, type) tuples."""
+    """Evaluate exact match on a list of (inp, out, type) tuples. BATCHED."""
     model.eval()
     correct = 0
     total = 0
+    n = min(n_eval, len(examples))
+    batch_size = 64
 
     with torch.no_grad():
-        for i in range(min(n_eval, len(examples))):
-            inp, out, task_type = examples[i]
-            tokens = torch.tensor([inp + out], dtype=torch.long, device=device)
-            logits = model(tokens)
+        for start in range(0, n, batch_size):
+            end = min(start + batch_size, n)
+            batch_examples = examples[start:end]
 
-            sep = len(inp) - 1
-            all_correct = True
-            for t in range(sep, sep + len(out) - 1):
-                if t + 1 >= tokens.shape[1]:
-                    break
-                pred = logits[0, t].argmax().item()
-                target = tokens[0, t + 1].item()
-                if target == SPECIAL_TOKENS["<PAD>"]:
-                    break
-                if pred != target:
-                    all_correct = False
-                    break
+            # Pad to same length
+            seqs = []
+            sep_positions = []
+            out_lengths = []
+            for inp, out, _ in batch_examples:
+                seqs.append(inp + out)
+                sep_positions.append(len(inp) - 1)
+                out_lengths.append(len(out))
+            max_len = max(len(s) for s in seqs)
+            tokens = torch.full((len(seqs), max_len), SPECIAL_TOKENS["<PAD>"],
+                               dtype=torch.long, device=device)
+            for i, seq in enumerate(seqs):
+                tokens[i, :len(seq)] = torch.tensor(seq)
 
-            if all_correct:
-                correct += 1
-            total += 1
+            logits = model(tokens)  # (B, L, V) — one forward pass for whole batch
+
+            for i in range(len(batch_examples)):
+                sep = sep_positions[i]
+                _, out, _ = batch_examples[i]
+                all_correct = True
+                for t in range(sep, sep + len(out) - 1):
+                    if t + 1 >= tokens.shape[1]:
+                        break
+                    pred = logits[i, t].argmax().item()
+                    target = tokens[i, t + 1].item()
+                    if target == SPECIAL_TOKENS["<PAD>"]:
+                        break
+                    if pred != target:
+                        all_correct = False
+                        break
+                if all_correct:
+                    correct += 1
+                total += 1
 
     model.train()
     return correct / max(total, 1)
@@ -222,41 +240,23 @@ def evaluate(model, dataset, n_eval=500):
 
 
 def evaluate_by_type(model, dataset, n_per_type=100):
-    """Evaluate accuracy broken down by task type, on FRESH data."""
-    fresh = make_fresh_eval_set(n_per_type * 8, seed=None)  # enough for all types
-    model.eval()
-    type_stats = {}
+    """Evaluate accuracy broken down by task type, on FRESH data. Uses batched eval."""
+    fresh = make_fresh_eval_set(n_per_type * 8, seed=None)
 
-    with torch.no_grad():
-        for inp, out, task_type in fresh:
-            if task_type not in type_stats:
-                type_stats[task_type] = {"correct": 0, "total": 0}
-            if type_stats[task_type]["total"] >= n_per_type:
-                continue
+    # Group by type
+    by_type = {}
+    for inp, out, task_type in fresh:
+        if task_type not in by_type:
+            by_type[task_type] = []
+        if len(by_type[task_type]) < n_per_type:
+            by_type[task_type].append((inp, out, task_type))
 
-            tokens = torch.tensor([inp + out], dtype=torch.long, device=dataset.device)
-            logits = model(tokens)
+    results = {}
+    for task_type, examples in sorted(by_type.items()):
+        acc = evaluate_on_examples(model, examples, dataset.device, len(examples))
+        results[task_type] = acc
 
-            sep = len(inp) - 1
-            all_correct = True
-            for t in range(sep, sep + len(out) - 1):
-                if t + 1 >= tokens.shape[1]:
-                    break
-                pred = logits[0, t].argmax().item()
-                target = tokens[0, t + 1].item()
-                if target == SPECIAL_TOKENS["<PAD>"]:
-                    break
-                if pred != target:
-                    all_correct = False
-                    break
-
-            type_stats[task_type]["total"] += 1
-            if all_correct:
-                type_stats[task_type]["correct"] += 1
-
-    model.train()
-    return {t: s["correct"] / max(s["total"], 1)
-            for t, s in sorted(type_stats.items())}
+    return results
 
 
 def train(args):
@@ -282,31 +282,116 @@ def train(args):
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params:,} params", flush=True)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    base_lr = args.lr
+    opt = torch.optim.AdamW(model.parameters(), lr=base_lr)
+    ckpt_dir = Path("checkpoints")
+    ckpt_dir.mkdir(exist_ok=True)
 
-    for step in range(1, args.steps + 1):
-        tokens, sep_pos = dataset.get_batch(args.batch_size)
-        logits = model(tokens)
-        loss = compute_loss(logits, tokens, sep_pos)
+    # Track best fresh accuracy for checkpoint selection
+    best_fresh = 0.0
+    current_lr = base_lr
+    global_step = 0
 
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
+    # Cycle parameters
+    learn_steps = args.cycle_learn     # steps at high LR (learning)
+    digest_steps = args.cycle_digest   # steps at low LR (digesting)
+    cycle_len = learn_steps + digest_steps
+    gap_throttle = 0.10                # if gap > this, slow down
 
-        if step % args.eval_every == 0 or step == 1:
-            # Eval on BOTH training data and fresh data
-            train_acc = evaluate_on_examples(model, dataset.examples, dataset.device, 300)
-            fresh_acc = evaluate(model, dataset, n_eval=300)
-            gap = train_acc - fresh_acc
-            print(f"step {step:5d}  loss={loss.item():.3f}  "
-                  f"train={train_acc:.1%}  fresh={fresh_acc:.1%}  "
-                  f"gap={gap:+.1%}", flush=True)
+    print(f"Cycles: {learn_steps} learn + {digest_steps} digest = {cycle_len} per cycle",
+          flush=True)
+    print(f"Gap throttle: >{gap_throttle:.0%} → reduce LR", flush=True)
+    print(f"Target: {args.steps} total steps, ~{args.steps // cycle_len} cycles", flush=True)
+    print(flush=True)
 
-            if step % (args.eval_every * 5) == 0:
-                print("  --- per-type (fresh data) ---", flush=True)
-                type_accs = evaluate_by_type(model, dataset)
-                for t, a in type_accs.items():
-                    print(f"    {t}: {a:.0%}", flush=True)
+    while global_step < args.steps:
+        # ── Regenerate training data each cycle ──
+        cycle_num = global_step // cycle_len + 1
+        print(f"=== Cycle {cycle_num} — regenerating training data ===", flush=True)
+        import generators.level0_patterns as gen0
+        raw = gen0.generate_dataset(len(dataset.examples))
+        dataset.examples = []
+        for ex in raw:
+            inp_tokens = [SPECIAL_TOKENS["<BOS>"]] + tokenize(ex["input"]) + [SPECIAL_TOKENS["<SEP>"]]
+            out_tokens = tokenize(ex["output"]) + [SPECIAL_TOKENS["<EOS>"]]
+            dataset.examples.append((inp_tokens, out_tokens, ex.get("type", "")))
+
+        # ── Learning phase (high LR) ──
+        for param_group in opt.param_groups:
+            param_group["lr"] = current_lr
+        phase = "LEARN"
+
+        for step_in_cycle in range(cycle_len):
+            global_step += 1
+            if global_step > args.steps:
+                break
+
+            # Switch to digest phase
+            if step_in_cycle == learn_steps:
+                phase = "DIGEST"
+                digest_lr = current_lr * 0.1
+                for param_group in opt.param_groups:
+                    param_group["lr"] = digest_lr
+
+            tokens, sep_pos = dataset.get_batch(args.batch_size)
+            logits = model(tokens)
+            loss = compute_loss(logits, tokens, sep_pos)
+
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+
+            if global_step % args.eval_every == 0:
+                train_acc = evaluate_on_examples(model, dataset.examples, dataset.device, 500)
+                fresh_acc = evaluate(model, dataset, n_eval=500)
+                gap = train_acc - fresh_acc
+                lr_now = opt.param_groups[0]["lr"]
+
+                print(f"step {global_step:5d}  loss={loss.item():.3f}  "
+                      f"train={train_acc:.1%}  fresh={fresh_acc:.1%}  "
+                      f"gap={gap:+.1%}  lr={lr_now:.1e}  [{phase}]", flush=True)
+
+                # Gap-based throttle: if memorizing too much, slow down
+                if gap > gap_throttle and phase == "LEARN":
+                    current_lr = max(current_lr * 0.7, base_lr * 0.01)
+                    for param_group in opt.param_groups:
+                        param_group["lr"] = current_lr
+                    print(f"  ⚠ gap>{gap_throttle:.0%}, throttling LR → {current_lr:.1e}",
+                          flush=True)
+                elif gap < 0.05 and current_lr < base_lr:
+                    # Gap is healthy, recover LR
+                    current_lr = min(current_lr * 1.2, base_lr)
+                    if phase == "LEARN":
+                        for param_group in opt.param_groups:
+                            param_group["lr"] = current_lr
+
+                # Save checkpoint (always keep latest + best)
+                torch.save({
+                    "model": model.state_dict(),
+                    "cfg": cfg,
+                    "level": args.level,
+                    "step": global_step,
+                    "train_acc": train_acc,
+                    "fresh_acc": fresh_acc,
+                }, ckpt_dir / f"level{args.level}.pt")
+
+                if fresh_acc > best_fresh:
+                    best_fresh = fresh_acc
+                    torch.save({
+                        "model": model.state_dict(),
+                        "cfg": cfg,
+                        "level": args.level,
+                        "step": global_step,
+                        "train_acc": train_acc,
+                        "fresh_acc": fresh_acc,
+                    }, ckpt_dir / f"level{args.level}_best.pt")
+                    print(f"  ★ new best fresh={fresh_acc:.1%}", flush=True)
+
+                if global_step % (args.eval_every * 4) == 0:
+                    print("  --- per-type (fresh data) ---", flush=True)
+                    type_accs = evaluate_by_type(model, dataset)
+                    for t, a in type_accs.items():
+                        print(f"    {t}: {a:.0%}", flush=True)
 
     # Final evaluation
     print("\n--- Final evaluation (fresh data) ---", flush=True)
@@ -322,23 +407,23 @@ def train(args):
     fresh_acc = evaluate(model, dataset, n_eval=1000)
     print(f"\n  Train exact match: {train_acc:.1%}", flush=True)
     print(f"  Fresh exact match: {fresh_acc:.1%}  ← this is the real score", flush=True)
-    print(f"  Gap: {train_acc - fresh_acc:+.1%}  (smaller = less memorization)", flush=True)
+    print(f"  Best fresh ever:   {best_fresh:.1%}", flush=True)
+    print(f"  Gap: {train_acc - fresh_acc:+.1%}", flush=True)
     print(f"  Threshold: {args.threshold:.0%}", flush=True)
     print(f"  {'PASS — ready for Level ' + str(args.level + 1) if all_pass else 'FAIL — needs more training'}",
           flush=True)
 
-    # Save checkpoint
-    ckpt_dir = Path("checkpoints")
-    ckpt_dir.mkdir(exist_ok=True)
-    ckpt_path = ckpt_dir / f"level{args.level}.pt"
+    # Save final
     torch.save({
         "model": model.state_dict(),
         "cfg": cfg,
         "level": args.level,
-        "step": args.steps,
-        "accuracy": overall,
-    }, ckpt_path)
-    print(f"Saved checkpoint → {ckpt_path}", flush=True)
+        "step": global_step,
+        "train_acc": train_acc,
+        "fresh_acc": fresh_acc,
+    }, ckpt_dir / f"level{args.level}.pt")
+    print(f"Saved checkpoint → {ckpt_dir / f'level{args.level}.pt'}", flush=True)
+    print(f"Best checkpoint  → {ckpt_dir / f'level{args.level}_best.pt'}", flush=True)
 
 
 if __name__ == "__main__":
@@ -352,7 +437,11 @@ if __name__ == "__main__":
     parser.add_argument("--d-model", type=int, default=64)
     parser.add_argument("--d-state", type=int, default=16)
     parser.add_argument("--headdim", type=int, default=16)
-    parser.add_argument("--eval-every", type=int, default=200)
+    parser.add_argument("--eval-every", type=int, default=250)
     parser.add_argument("--threshold", type=float, default=0.95)
+    parser.add_argument("--cycle-learn", type=int, default=500,
+                        help="Steps per cycle at high LR (learning phase)")
+    parser.add_argument("--cycle-digest", type=int, default=200,
+                        help="Steps per cycle at low LR (digest phase)")
     args = parser.parse_args()
     train(args)
