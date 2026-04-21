@@ -267,16 +267,28 @@ def train(args):
         teacher.set_step(cycle * steps_per_cycle)
         teacher.observe(type_accs)
 
-        # Log mastery events
+        # Log mastery events — to SQLite AND Firebase
         if len(teacher.mastery_log) > prev_mastery_count:
             for entry in teacher.mastery_log[prev_mastery_count:]:
                 metrics.log_event("mastery", exp_id,
                     f"{entry['task']} mastered in {entry['steps_to_master']} steps")
+                try:
+                    import firebase_push as fb
+                    fb.evt_mastery(exp_id, entry['task'], entry['steps_to_master'],
+                                  entry.get('examples_to_master', 0),
+                                  teacher.task_configs.get(entry['task'], type('',(),{'difficulty':0})).difficulty)
+                except Exception:
+                    pass
 
-        # Log unlock events
+        # Log unlock events — to SQLite AND Firebase
         for t in teacher.unlocked_tasks:
             if t not in type_accs:  # newly unlocked
                 metrics.log_event("unlock", exp_id, f"{t} unlocked")
+                try:
+                    import firebase_push as fb
+                    fb.evt_unlock(exp_id, t)
+                except Exception:
+                    pass
 
         # Log
         parity = type_accs.get("parity", 0)
@@ -307,15 +319,19 @@ def train(args):
         if cycle % 10 == 0:
             metrics.log_teacher(exp_id, cycle, teacher)
 
-        # Push to Firebase (every 5 cycles to avoid flooding)
-        if cycle % 5 == 0:
-            try:
-                from firebase_push import push_experiment_cycle, push_experiment
-                push_experiment_cycle(exp_id, cycle, fresh, cycle_loss, type_accs)
-                push_experiment(exp_id, cfg, "running", cycle, best_fresh,
+        # Push ALL data to Firebase every cycle — workers are the source of truth
+        try:
+            import firebase_push as fb
+            # Per-cycle timeseries (every cycle)
+            fb.push_experiment_cycle(exp_id, cycle, fresh, cycle_loss, type_accs)
+            # Experiment state (every cycle)
+            fb.push_experiment(exp_id, cfg, "running", cycle, best_fresh,
                               parent_id=cfg.get("_parent_id"), n_params=model.total_params())
-            except Exception:
-                pass
+            # Teacher state with difficulties (every 5 cycles)
+            if cycle % 5 == 0:
+                fb.push_experiment_teacher(exp_id, teacher)
+        except Exception:
+            pass
 
         # Write metrics JSON for coordinator (legacy)
         write_metrics(run_dir, {
