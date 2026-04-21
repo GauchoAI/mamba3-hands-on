@@ -52,10 +52,6 @@ def generate_dashboard(experiments, teacher, cycle, output_dir="."):
             "series": series,
         })
 
-    # Pass discovered tasks to HTML generator
-    _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir, all_tasks)
-    _write_md(exp_data, teacher_lines, learning_report, cycle, output_dir, all_tasks)
-
     # Sort by best accuracy
     exp_data.sort(key=lambda x: -x["best"])
 
@@ -63,8 +59,8 @@ def generate_dashboard(experiments, teacher, cycle, output_dir="."):
     teacher_lines = teacher.get_status().split("\n")
     learning_report = teacher.get_learning_report() if teacher.mastery_log else ""
 
-    _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir)
-    _write_md(exp_data, teacher_lines, learning_report, cycle, output_dir)
+    _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir, all_tasks)
+    _write_md(exp_data, teacher_lines, learning_report, cycle, output_dir, all_tasks)
 
 
 def _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir, all_tasks):
@@ -143,6 +139,36 @@ def _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir, all
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # Build dynamic HTML sections outside f-string to avoid nested brace issues
+    charts_html = ""
+    for key in chart_keys:
+        charts_html += f'  <div>\n'
+        charts_html += f'    <h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">{chart_titles[key]}</h2>\n'
+        charts_html += f'    <div class="chart-container"><canvas id="chart_{key}"></canvas></div>\n'
+        charts_html += f'  </div>\n'
+
+    curriculum_html = ""
+    for line in teacher_lines:
+        if not line.strip():
+            continue
+        if "✓" in line:
+            cls = "bg-green-100 border border-green-300"
+        elif "🔒" in line:
+            cls = "bg-gray-100 border border-gray-200 opacity-50"
+        else:
+            cls = "bg-yellow-50 border border-yellow-200"
+        curriculum_html += f'<div class="text-center p-2 rounded {cls}">'
+        curriculum_html += f'<div class="text-xs font-mono">{line.strip()[:60]}</div></div>\n'
+
+    learning_html = ""
+    if learning_report:
+        learning_html = (
+            '<h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Learning to Learn</h2>\n'
+            f'<div class="bg-blue-50 p-4 rounded mb-4 font-mono text-sm whitespace-pre-wrap">{learning_report}</div>\n'
+        )
+
+    datasets_json = json.dumps(all_datasets)
+
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -165,12 +191,7 @@ def _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir, all
 </header>
 
 <div class="grid grid-cols-2 gap-8 mb-8">
-{''.join(f"""  <div>
-    <h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">{chart_titles[key]}</h2>
-    <div class="chart-container">
-      <canvas id="chart_{key}"></canvas>
-    </div>
-  </div>""" for key in chart_keys)}
+{charts_html}
 </div>
 
 <h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Leaderboard</h2>
@@ -192,17 +213,15 @@ def _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir, all
   {teacher_html}
 </div>
 
-{f"""<h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Learning to Learn</h2>
-<div class="bg-blue-50 p-4 rounded mb-4 font-mono text-sm whitespace-pre-wrap">{learning_report}</div>""" if learning_report else ''}
+{learning_html}
 
 <h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Curriculum Progress</h2>
 <div class="grid grid-cols-5 gap-2 mb-8">
-{''.join(f"""<div class="text-center p-2 rounded {'bg-green-100 border border-green-300' if '✓' in line else 'bg-gray-50 border border-gray-200' if '🔒' not in line else 'bg-gray-100 border border-gray-200 opacity-50'}">
-  <div class="text-xs font-mono">{line.strip()[:50]}</div>
-</div>""" for line in teacher_lines if line.strip())}</div>
+{curriculum_html}
+</div>
 
 <script>
-const allData = {json.dumps(all_datasets)};
+const allData = {datasets_json};
 
 const chartOpts = {{
   responsive: true,

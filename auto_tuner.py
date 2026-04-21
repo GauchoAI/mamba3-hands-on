@@ -392,24 +392,12 @@ def run_tuner(args):
         # Refresh cache if needed (teacher state may change)
         cache.get_data()
 
-        # Train all alive experiments — use CUDA streams for parallelism
-        if device == "cuda":
-            streams = []
-            for exp in exps:
-                if not exp.alive:
-                    continue
-                s = torch.cuda.Stream()
-                streams.append((exp, s))
-                with torch.cuda.stream(s):
-                    exp.train_cycle(cache, steps=args.steps_per_cycle)
-            # Wait for all streams
-            for exp, s in streams:
-                s.synchronize()
-        else:
-            for exp in exps:
-                if not exp.alive:
-                    continue
-                exp.train_cycle(cache, steps=args.steps_per_cycle)
+        # Train all alive experiments
+        # Sequential but with torch.cuda.synchronize() only at the end
+        for exp in exps:
+            if not exp.alive:
+                continue
+            exp.train_cycle(cache, steps=args.steps_per_cycle)
 
         # Evaluate all
         results = []
