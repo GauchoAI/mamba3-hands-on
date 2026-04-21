@@ -99,6 +99,17 @@ def push_snapshot(results, generation, gpu_pct, mem_pct, evo_state=None):
         }
         snapshot["lineage"] = dict(evo_state.lineage)
 
+    # Also push task accuracy timeseries
+    _put(f"mamba3/task_history/{generation}", {
+        k: round(v["acc"], 3) for k, v in task_best.items()
+    })
+
+    # Push best_fresh timeseries
+    _put(f"mamba3/fresh_history/{generation}", {
+        "best": round(snapshot["best_fresh"], 4),
+        "t": time.time(),
+    })
+
     return _put("mamba3/snapshot", snapshot)
 
 
