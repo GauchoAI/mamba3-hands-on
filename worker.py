@@ -307,6 +307,16 @@ def train(args):
         if cycle % 10 == 0:
             metrics.log_teacher(exp_id, cycle, teacher)
 
+        # Push to Firebase (every 5 cycles to avoid flooding)
+        if cycle % 5 == 0:
+            try:
+                from firebase_push import push_experiment_cycle, push_experiment
+                push_experiment_cycle(exp_id, cycle, fresh, cycle_loss, type_accs)
+                push_experiment(exp_id, cfg, "running", cycle, best_fresh,
+                              parent_id=cfg.get("_parent_id"), n_params=model.total_params())
+            except Exception:
+                pass
+
         # Write metrics JSON for coordinator (legacy)
         write_metrics(run_dir, {
             "cycle": cycle,
