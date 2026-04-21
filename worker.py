@@ -20,6 +20,26 @@ from collections import defaultdict
 
 from progressive_model import ProgressiveModel, ByteTokenizer, VOCAB_SIZE, PAD
 from grokking import stable_cross_entropy, PerpGradOptimizer
+import torch.nn.functional as F
+
+
+def get_loss_fn(name="stable_ce"):
+    """Return a loss function by name. Evolvable."""
+    if name == "stable_ce":
+        return stable_cross_entropy
+    elif name == "ce":
+        return lambda logits, targets, reduction='none': F.cross_entropy(logits, targets, reduction=reduction)
+    elif name == "focal":
+        def focal_loss(logits, targets, reduction='none', gamma=2.0):
+            ce = F.cross_entropy(logits, targets, reduction='none')
+            pt = torch.exp(-ce)
+            loss = ((1 - pt) ** gamma) * ce
+            if reduction == 'mean':
+                return loss.mean()
+            return loss
+        return focal_loss
+    else:
+        return stable_cross_entropy
 from generators.teacher import AdaptiveTeacher
 from metrics_db import MetricsWriter
 
@@ -69,6 +89,10 @@ def train(args):
     opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=wd)
     use_perp = wd == 0.0
     perp = PerpGradOptimizer(model) if use_perp else None
+
+    # Loss function (evolvable)
+    loss_fn_name = cfg.get("loss_fn", "stable_ce")
+    loss_fn = get_loss_fn(loss_fn_name)
 
     # Teacher
     teacher = AdaptiveTeacher(sequential_unlock=True)
@@ -160,7 +184,7 @@ def train(args):
                 logits_flat = logits[:, :L-1].reshape(-1, V)
                 targets_flat = token_tensor[:, 1:].reshape(-1)
                 mask_flat = pred_mask.reshape(-1)
-                loss_all = stable_cross_entropy(logits_flat, targets_flat, reduction='none')
+                loss_all = loss_fn(logits_flat, targets_flat, reduction='none')
                 loss = (loss_all * mask_flat).sum() / (mask_flat.sum() + 1e-8)
 
                 opt.zero_grad(set_to_none=True)
@@ -181,27 +205,37 @@ def train(args):
         for ex in eval_raw:
             by_type[ex["type"]].append(ex)
 
-        type_accs = {}
+        type_accs = {}       # per-byte accuracy (granular feedback)
+        type_accs_exact = {}  # exact match (strict)
         model.eval()
         with torch.no_grad():
             for task_type, task_examples in by_type.items():
-                correct = 0
-                total = 0
+                bytes_correct = 0
+                bytes_total = 0
+                exact_correct = 0
+                exact_total = 0
                 for ex in task_examples[:30]:
                     tokens, sep_pos = tok.encode_curriculum(ex)
                     out_bytes = list(ex["output"].encode("utf-8"))
                     t = torch.tensor([tokens], dtype=torch.long, device=device)
                     logits = model(t)
-                    ok = True
+                    all_ok = True
                     for j, expected in enumerate(out_bytes):
                         p = sep_pos + j
-                        if p >= logits.shape[1] or logits[0, p].argmax().item() != expected:
-                            ok = False
-                            break
-                    if ok:
-                        correct += 1
-                    total += 1
-                type_accs[task_type] = correct / max(total, 1)
+                        if p < logits.shape[1]:
+                            pred = logits[0, p].argmax().item()
+                            if pred == expected:
+                                bytes_correct += 1
+                            else:
+                                all_ok = False
+                            bytes_total += 1
+                        else:
+                            all_ok = False
+                    if all_ok:
+                        exact_correct += 1
+                    exact_total += 1
+                type_accs[task_type] = bytes_correct / max(bytes_total, 1)
+                type_accs_exact[task_type] = exact_correct / max(exact_total, 1)
         model.train()
 
         fresh = sum(type_accs.values()) / max(len(type_accs), 1)
@@ -225,11 +259,14 @@ def train(args):
 
         # Log
         parity = type_accs.get("parity", 0)
+        parity_exact = type_accs_exact.get("parity", 0)
         same_diff = type_accs.get("same_different", 0)
         method = "PerpGrad" if use_perp else f"wd={wd}"
+        lfn = loss_fn_name
         log.write(f"  cycle {cycle:4d}  loss={cycle_loss:.4f}  fresh={fresh:.1%}  "
-                  f"parity={parity:.0%}  same_diff={same_diff:.0%}  "
-                  f"{elapsed:.1f}s  [{method}]\n")
+                  f"parity={parity:.0%}(exact:{parity_exact:.0%})  "
+                  f"same_diff={same_diff:.0%}  "
+                  f"{elapsed:.1f}s  [{method}/{lfn}]\n")
         for t, a in sorted(type_accs.items()):
             if a > 0:
                 status = "✓" if a >= 0.90 else ("…" if a >= 0.40 else "✗")

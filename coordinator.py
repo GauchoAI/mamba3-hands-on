@@ -70,6 +70,10 @@ def mutate_config(parent_config, mutation_strength=0.3):
     if random.random() < 0.1:
         child["backend"] = "tinygrad" if child.get("backend") != "tinygrad" else "pytorch"
 
+    # Mutate loss function
+    if random.random() < 0.15:
+        child["loss_fn"] = random.choice(["stable_ce", "ce", "focal"])
+
     return child
 
 
