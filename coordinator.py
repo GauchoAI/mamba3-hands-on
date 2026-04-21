@@ -456,104 +456,20 @@ def run_coordinator(args):
         time.sleep(args.generation_every)
         generation += 1
 
-        # Read all metrics
-        results = mgr.get_all_metrics()
-        running = mgr.get_running()
-
-        print(f"\n[Gen {generation}] {len(running)} running, "
-              f"{len(results)} total experiments", flush=True)
-
-        # Print leaderboard
-        for i, r in enumerate(results[:10]):
-            marker = "★" if i == 0 else " "
-            parity = r.get("type_accs", {}).get("parity", 0)
-            cfg = r.get("config", {})
-            wd = cfg.get("weight_decay", 0)
-            method = f"wd={wd}" if wd > 0 else "perp"
-            print(f"  {marker} {r['exp_id']}: fresh={r.get('best_fresh', 0):.1%}  "
-                  f"parity={parity:.0%}  cycle={r.get('cycle', 0)}  "
-                  f"d={cfg.get('d_model', '?')}  [{method}]  "
-                  f"[{r['status']}]", flush=True)
-
-        # Check GPU usage + log + update dashboard
-        gpu_pct, mem_pct = get_gpu_usage()
         try:
-            import subprocess
-            out = subprocess.check_output(
-                ["nvidia-smi", "--query-gpu=memory.used,memory.total",
-                 "--format=csv,noheader,nounits"], text=True).strip()
-            mem_used, mem_total = [float(x) for x in out.split(",")]
-        except Exception:
-            mem_used, mem_total = 0, 80000
-        metrics.log_gpu(gpu_pct, mem_pct, mem_used, mem_total,
-                       len(running), len(results))
-        write_dashboard(results, generation, gpu_pct, mem_pct)
-
-        # ── Genetic evolution ──
-        if len(results) < 2:
-            continue
-
-        running_results = [r for r in results if r["status"] == "running"]
-        if len(running_results) < 2:
-            continue
-        at_capacity = mem_pct > 90 or len(running) >= max_workers
-        has_headroom = mem_pct < 85 and gpu_pct < 90
-
-        print(f"  GPU: {gpu_pct:.0f}%  VRAM: {mem_pct:.0f}%  "
-              f"{'at capacity' if at_capacity else f'headroom ({100-mem_pct:.0f}% VRAM free)'}",
-              flush=True)
-
-        # Auto-scale: spawn more workers if GPU has headroom
-        if has_headroom and not at_capacity and running_results:
-            parent = random.choice(running_results[:max(1, len(running_results) // 2)])
-            child_cfg = mutate_config(parent.get("config", SEED_CONFIGS[0]))
-            mgr.spawn(child_cfg)
-            max_workers = len(running) + 1  # raise the cap
-            print(f"  📈 Auto-scaled to {max_workers} workers (GPU has headroom)", flush=True)
-
-        if at_capacity and generation % args.evolve_every == 0:
-            # EVOLVE: pause worst running, spawn child of best
-            worst = None
-            for r in reversed(running_results):
-                if r["exp_id"] in running:
-                    worst = r
-                    break
-
-            best = running_results[0]
-
-            if worst and best and worst["exp_id"] != best["exp_id"]:
-                # Pause the worst
-                mgr.pause(worst["exp_id"])
-
-                # Spawn child of the best
-                parent_cfg = best.get("config", SEED_CONFIGS[0])
-                child_cfg = mutate_config(parent_cfg)
-                child_id = mgr.spawn(child_cfg)
-
-                metrics.log_event("evolve", child_id,
-                    f"child of {best['exp_id']}, replaced {worst['exp_id']}")
-                metrics.log_event("pause", worst["exp_id"],
-                    f"paused for evolution (fresh={worst.get('best_fresh',0):.1%})")
-                metrics.update_status(worst["exp_id"], "paused")
-                print(f"  🧬 Evolution: paused {worst['exp_id']} "
-                      f"(fresh={worst.get('best_fresh', 0):.1%}), "
-                      f"spawned {child_id} from {best['exp_id']} "
-                      f"(fresh={best.get('best_fresh', 0):.1%})", flush=True)
-
-        elif not at_capacity:
-            # Room for more — spawn a mutant of a random top-half worker
-            top_half = running_results[:max(1, len(running_results) // 2)]
-            parent = random.choice(top_half)
-            parent_cfg = parent.get("config", SEED_CONFIGS[0])
-            child_cfg = mutate_config(parent_cfg)
-            mgr.spawn(child_cfg)
+            _run_generation(mgr, teacher, metrics, args, generation,
+                           max_workers, should_stop)
+        except Exception as e:
+            print(f"  ⚠ Generation {generation} error: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            # Don't crash — just skip this generation and continue
 
     # Shutdown all workers
     print("\nStopping all workers...", flush=True)
     for exp_id in list(mgr.processes.keys()):
         mgr.pause(exp_id)
 
-    # Final leaderboard
     results = mgr.get_all_metrics()
     print(f"\n{'='*60}", flush=True)
     print(f"FINAL LEADERBOARD", flush=True)
@@ -564,6 +480,98 @@ def run_coordinator(args):
               f"d={cfg.get('d_model')} L={cfg.get('n_kernel_layers')} "
               f"wd={cfg.get('weight_decay')}  cycles={r.get('cycle', 0)}",
               flush=True)
+
+
+def _run_generation(mgr, teacher, metrics, args, generation, max_workers, should_stop):
+    """One generation of the evolutionary loop. Called from main loop with try/except."""
+    results = mgr.get_all_metrics()
+    running = mgr.get_running()
+
+    print(f"\n[Gen {generation}] {len(running)} running, "
+          f"{len(results)} total experiments", flush=True)
+
+    # Print leaderboard
+    for i, r in enumerate(results[:10]):
+        marker = "★" if i == 0 else " "
+        parity = r.get("type_accs", {}).get("parity", 0)
+        cfg = r.get("config", {})
+        wd = cfg.get("weight_decay", 0)
+        method = f"wd={wd}" if wd > 0 else "perp"
+        backend = cfg.get("backend", "pytorch")
+        tag = f"[{method}]" if backend == "pytorch" else f"[{method}/tg]"
+        print(f"  {marker} {r['exp_id']}: fresh={r.get('best_fresh', 0):.1%}  "
+              f"parity={parity:.0%}  cycle={r.get('cycle', 0)}  "
+              f"d={cfg.get('d_model', '?')}  {tag}  "
+              f"[{r['status']}]", flush=True)
+
+    # Check GPU usage + log + update dashboard
+    gpu_pct, mem_pct = get_gpu_usage()
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.total",
+             "--format=csv,noheader,nounits"], text=True).strip()
+        mem_used, mem_total = [float(x) for x in out.split(",")]
+    except Exception:
+        mem_used, mem_total = 0, 80000
+    metrics.log_gpu(gpu_pct, mem_pct, mem_used, mem_total,
+                   len(running), len(results))
+    write_dashboard(results, generation, gpu_pct, mem_pct)
+
+    # ── Genetic evolution ──
+    if len(results) < 2:
+        return
+
+    running_results = [r for r in results if r["status"] == "running"]
+    if len(running_results) < 2:
+        return
+
+    at_capacity = mem_pct > 90 or len(running) >= max_workers
+    has_headroom = mem_pct < 85 and gpu_pct < 90
+
+    print(f"  GPU: {gpu_pct:.0f}%  VRAM: {mem_pct:.0f}%  "
+          f"{'at capacity' if at_capacity else f'headroom ({100-mem_pct:.0f}% VRAM free)'}",
+          flush=True)
+
+    # Auto-scale: spawn more workers if GPU has headroom
+    if has_headroom and not at_capacity and running_results:
+        parent = random.choice(running_results[:max(1, len(running_results) // 2)])
+        child_cfg = mutate_config(parent.get("config", SEED_CONFIGS[0]))
+        mgr.spawn(child_cfg)
+        print(f"  📈 Auto-scaled (GPU has headroom)", flush=True)
+
+    if at_capacity and generation % args.evolve_every == 0:
+        # EVOLVE: pause worst running, spawn child of best
+        worst = None
+        for r in reversed(running_results):
+            if r["exp_id"] in running:
+                worst = r
+                break
+
+        best = running_results[0]
+
+        if worst and best and worst["exp_id"] != best["exp_id"]:
+            mgr.pause(worst["exp_id"])
+
+            parent_cfg = best.get("config", SEED_CONFIGS[0])
+            child_cfg = mutate_config(parent_cfg)
+            child_id = mgr.spawn(child_cfg)
+
+            metrics.log_event("evolve", child_id,
+                f"child of {best['exp_id']}, replaced {worst['exp_id']}")
+            metrics.log_event("pause", worst["exp_id"],
+                f"paused for evolution (fresh={worst.get('best_fresh',0):.1%})")
+            metrics.update_status(worst["exp_id"], "paused")
+            print(f"  🧬 Evolution: paused {worst['exp_id']} "
+                  f"(fresh={worst.get('best_fresh', 0):.1%}), "
+                  f"spawned {child_id} from {best['exp_id']} "
+                  f"(fresh={best.get('best_fresh', 0):.1%})", flush=True)
+
+    elif not at_capacity:
+        top_half = running_results[:max(1, len(running_results) // 2)]
+        parent = random.choice(top_half)
+        parent_cfg = parent.get("config", SEED_CONFIGS[0])
+        child_cfg = mutate_config(parent_cfg)
+        mgr.spawn(child_cfg)
 
 
 if __name__ == "__main__":
