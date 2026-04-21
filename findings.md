@@ -545,18 +545,146 @@ hypothesis is confirmed.
 
 ---
 
+## Entry 12 — Augmented survey + H100 deployment with Triton
+
+**Commits:** `exp: H100 comparison script` → `perf: Triton kernel for SSM scan`
+
+### Head-to-head results (M4, d_model=64, 3000 steps)
+
+```
+Plain:     75.3% fresh  (169,232 params)
+Augmented: 67.0% fresh  (199,914 params)
+Δ: -8.3%  ← augmented lost
+```
+
+The augmented model lost. But *why* matters more than the number.
+
+### Diagnostic survey — what does the augmented model actually do?
+
+We built `exp_augmented_survey.py` to capture per-example internals:
+spike rates, register addressing, norms — split by correct vs wrong.
+
+**Key finding: spikes correlate with success.**
+
+```
+             reg_spike(output)  mem_spike(output)  final_reg_norm
+CORRECT:     0.157              0.097              152.1
+WRONG:       0.094              0.050               77.9
+```
+
+When the model gets an answer right, it spikes 1.7x more during output
+generation and accumulates 2x more register content. The architecture
+IS being used — just not enough.
+
+**Register slot distribution:**
+- reg[0]: 72% of all writes (dominant)
+- reg[4]: 15%, reg[5]: 7%, reg[6]: 6%
+- reg[1,2,3,7]: dead (0%)
+
+Only 4 of 8 registers are used. The model hasn't learned to specialize
+registers by task type — it's using reg[0] as a generic scratchpad.
+
+**Spike timing: output > input.**
+Spikes fire mostly during answer generation, not during question reading.
+The model writes to registers while producing output, not while encoding
+the problem. This suggests it's using registers as intermediate compute
+rather than as structured memory of the input.
+
+### The user's insight: don't constrain, improve the data
+
+We proposed adding sparsity penalties to force selective spiking. The
+user rejected this:
+
+> "Why would we make the choice for the model on how much it's going to
+> use registers? If you want to steer it, improve the training data."
+
+This is the right call. Penalizing spike rates is us imposing assumptions.
+The model should decide how to use its tools — we just need data that
+genuinely requires structured memory, not just pattern matching.
+
+### VOCAB_SIZE bug found on CUDA
+
+MPS silently ignores out-of-bounds embedding lookups. CUDA correctly
+asserts. Token for n=999 is `64 + 999 + 64 = 1127`, but VOCAB_SIZE
+was 1088. Fixed to 1152. This bug existed since the bootstrap was built
+but never caused visible failures on Apple Silicon.
+
+**Lesson:** MPS is forgiving. CUDA is correct. Always test on CUDA.
+
+### H100 deployment — from 56% to 100% GPU utilization
+
+**Problem:** Our pure-Python sequential scan launched one tiny CUDA kernel
+per timestep per batch. The H100 finished each kernel in microseconds
+then waited for Python to schedule the next one.
+
+**Optimizations applied (incremental):**
+
+1. **Precompute outer products** — moved all batch-parallel ops (einsum,
+   trapezoidal blending, gating) out of the per-timestep loop. The Python
+   loop body shrank to just state multiply-add + output contraction.
+   *Result: faster, still ~56% GPU.*
+
+2. **BF16 mixed precision** — H100 native bfloat16. Free 2x throughput
+   on matmuls. *Result: marginal improvement, not the bottleneck.*
+
+3. **Batch 64 → 4096** — sequences are tiny (avg 20 tokens, max 75).
+   With d_model=256, total VRAM is still ~315MB on an 80GB GPU.
+   *Result: more parallel work per kernel, up to ~60% GPU.*
+
+4. **Triton kernel** — eliminated the Python for-loop entirely.
+   Each thread block handles one (batch, head) pair and loops L steps
+   in GPU registers. With batch=4096 and 16 heads = 65K thread blocks.
+   *Result: 100% GPU, 43GB VRAM, 0.69ms per scan call.*
+
+```
+         Before Triton    After Triton
+GPU:     56%              100%
+ms/step: 16-19ms          TBD (running now)
+ex/s:    ~30K             TBD
+```
+
+**Architecture of the Triton kernel (`ssm_triton_kernel.py`):**
+
+```
+one program per (batch_idx, head_idx):
+    h[hD, dS] = zeros  // state in registers
+    for t in 0..L:
+        h = decay[t] * h + inp[t]           // state update
+        y[t] = sum(h * C[t]) + D * x[t]     // output
+        y[t] *= silu(z[t])                   // gate
+        store y[t]
+```
+
+No Python. No kernel launch overhead per timestep. The recurrence is
+inherently sequential over L, but L≈20 — the parallelism comes from
+the 65K independent (batch, head) pairs running simultaneously.
+
+**Fallback:** `torch.jit.script` version for MPS/CPU. Same loop, JIT-
+compiled so no Python interpreter overhead. Dispatched automatically
+based on device.
+
+### Current: H100 running d_model=256, batch=4096, 10K steps
+
+Both plain and augmented models with adaptive teacher. This is the
+first run where:
+- The GPU is actually saturated
+- The model is large enough to potentially generalize (1M params)
+- Both models get the same adaptive curriculum
+
+If the augmented model still loses at this scale, the architecture
+needs rethinking. If it wins, we have our brain of a fly.
+
+---
+
 ## Open threads
 
-- **Head-to-head test.** Plain vs augmented on Level 0. Running.
-- **Scale the student.** 2-4 layers, d_state=32-64, d_model=128. Same
-  teacher, same curriculum. Does 80% become 95%?
+- **H100 results pending.** Plain vs augmented, d_model=256, 10K steps.
+- **Checkpoint portability.** Train on H100, probe/debug on M4 MPS.
+  Same weights, Triton→JIT fallback is transparent.
+- **Register specialization.** Can we design tasks that force different
+  registers to serve different purposes? (Via data, not penalties.)
 - **Level 1 (comparison).** Build generator, train from Level 0 checkpoint.
-  Test with unseen value ranges to prove generalization.
 - **Von Neumann training data.** Micro-operation execution traces for
   Level 3 composition.
-- **Symbolic math traces.** SymPy-generated algebraic manipulation for
-  Level 5.
-- **H100 deployment.** Move the bootstrap framework to GPU with official
-  Mamba-3 CUDA kernels (chunked parallel scan).
 - **The compilation problem.** How Brain 1 (language) learns to program
   Brain 2 (step function). The hardest open question.
