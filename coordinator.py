@@ -460,10 +460,19 @@ def run_coordinator(args):
             _run_generation(mgr, metrics, args, generation,
                            max_workers)
         except Exception as e:
-            print(f"  ⚠ Generation {generation} error: {e}", flush=True)
+            # LOUD error — never eat exceptions silently
             import traceback
-            traceback.print_exc()
-            # Don't crash — just skip this generation and continue
+            err_msg = traceback.format_exc()
+            print(f"\n{'!'*60}", flush=True)
+            print(f"  ERROR in generation {generation}: {e}", flush=True)
+            print(err_msg, flush=True)
+            print(f"{'!'*60}\n", flush=True)
+            # Log to events DB if available
+            try:
+                metrics.log_event("error", None, f"Gen {generation}: {e}")
+            except Exception:
+                pass
+            # Continue — don't crash the coordinator
 
     # Shutdown all workers
     print("\nStopping all workers...", flush=True)
