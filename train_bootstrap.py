@@ -34,8 +34,8 @@ SPECIAL_TOKENS = {
 }
 # Numbers 0-999 get tokens 64+
 NUM_OFFSET = 64
-# Total vocab: 64 (specials+letters) + 1024 (numbers up to 999) = 1088
-VOCAB_SIZE = 1088
+# Total vocab: NUM_OFFSET(64) + 64(negative shift) + 1024(numbers 0-999) = 1152
+VOCAB_SIZE = 1152
 
 
 def tokenize(text):
