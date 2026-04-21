@@ -49,7 +49,7 @@ STAGE_MAP = {
 }
 
 
-def render_html(reader: MetricsReader, output="dashboard.html"):
+def render_html(reader: MetricsReader, output="index.html"):
     experiments = reader.get_experiments()
     active_tasks = reader.get_active_tasks()
     gpu_history = reader.get_gpu_history(limit=500)
