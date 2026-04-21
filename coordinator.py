@@ -201,40 +201,189 @@ class WorkerManager:
 
 # ── Dashboard writer ────────────────────────────────────────────────
 
-def write_dashboard(results, generation, runs_dir):
-    """Write dashboard.md + dashboard.html from coordinator's view."""
-    from dashboard import generate_dashboard
+def write_dashboard(results, generation, gpu_pct, mem_pct):
+    """Write dashboard.html + dashboard.md from coordinator's view."""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Also write a simple markdown leaderboard
-    lines = [f"# Coordinator Dashboard — Generation {generation}",
-             f"Updated: {datetime.now().strftime('%H:%M:%S')}", ""]
-    lines.append("## Leaderboard")
-    lines.append("| Rank | ID | Status | Fresh | Parity | Params | Config | Method |")
-    lines.append("|------|-----|--------|-------|--------|--------|--------|--------|")
+    # Collect chart data from all experiments
+    colors = ["#0066CC", "#CC3300", "#339933", "#CC6600", "#6633CC",
+              "#CC3399", "#336699", "#996633", "#009999", "#993366",
+              "#666600", "#003366"]
+
+    # Discover all tasks that have non-zero accuracy
+    all_tasks = set()
+    for r in results:
+        for t, a in r.get("type_accs", {}).items():
+            if a > 0:
+                all_tasks.add(t)
+    all_tasks = sorted(all_tasks)
+    chart_keys = ["fresh"] + all_tasks
+
+    TASK_DESC = {
+        "fresh": "Overall Generalization",
+        "parity": "Stage 0: Parity",
+        "binary_pattern_next": "Stage 0: Binary Patterns",
+        "same_different": "Stage 1: Same/Different",
+        "odd_one_out": "Stage 1: Odd One Out",
+        "sequence_completion": "Stage 2: Sequence Completion",
+        "pattern_period": "Stage 2: Pattern Period",
+        "run_length_next": "Stage 2: Run Length",
+        "mirror_detection": "Stage 3: Mirror Detection",
+        "repeat_count": "Stage 3: Repeat Count",
+        "arithmetic_next": "Stage 4: Arithmetic",
+        "geometric_next": "Stage 4: Geometric",
+        "alternating_next": "Stage 4: Alternating",
+        "logic_gate": "Stage 5: Logic Gates",
+        "logic_chain": "Stage 5: Logic Chains",
+        "modus_ponens": "Stage 5: Modus Ponens",
+    }
+
+    # Build chart datasets — one line per experiment per chart
+    import json
+    all_datasets = {}
+    for key in chart_keys:
+        datasets = []
+        for i, r in enumerate(results):
+            cfg = r.get("config", {})
+            wd = cfg.get("weight_decay", 0)
+            method = f"wd={wd}" if wd > 0 else "perp"
+            color = colors[i % len(colors)]
+            alive = r["status"] == "running"
+            # Single data point per experiment (current value)
+            val = r.get("type_accs", {}).get(key, 0) * 100 if key != "fresh" else r.get("best_fresh", 0) * 100
+            ds = {
+                "label": f"{r['exp_id']} d={cfg.get('d_model','?')} [{method}]",
+                "data": [{"x": r.get("cycle", 0), "y": round(val, 1)}],
+                "borderColor": color,
+                "backgroundColor": color,
+                "pointRadius": 6,
+                "pointStyle": "circle" if alive else "crossRot",
+            }
+            datasets.append(ds)
+        all_datasets[key] = datasets
+    datasets_json = json.dumps(all_datasets)
+
+    # Leaderboard HTML
+    leaderboard = ""
     for i, r in enumerate(results):
         cfg = r.get("config", {})
-        method = f"wd={cfg.get('weight_decay', '?')}" if cfg.get("weight_decay", 0) > 0 else "PerpGrad"
+        wd = cfg.get("weight_decay", 0)
+        method = f"wd={wd}" if wd > 0 else "PerpGrad"
         parity = r.get("type_accs", {}).get("parity", 0)
-        lines.append(
-            f"| {i+1} | {r['exp_id']} | {r['status']} | "
-            f"{r.get('best_fresh', 0):.1%} | {parity:.0%} | "
-            f"{r.get('params', '?'):,} | d={cfg.get('d_model', '?')} L={cfg.get('n_kernel_layers', '?')} | "
-            f"{method} |"
-        )
+        status = r["status"]
+        sc = "text-green-600" if status == "running" else "text-yellow-600" if status == "paused" else "text-gray-400"
+        star = "★" if i == 0 else ""
+        leaderboard += f"""<tr class="border-b border-gray-100">
+            <td class="py-2 pr-3 font-mono text-sm">{star} {r['exp_id']}</td>
+            <td class="py-2 pr-3 text-right">{r.get('params', 0):,}</td>
+            <td class="py-2 pr-3">d={cfg.get('d_model','')} L={cfg.get('n_kernel_layers','')}</td>
+            <td class="py-2 pr-3">{method}</td>
+            <td class="py-2 pr-3 text-right font-bold">{r.get('best_fresh',0):.1%}</td>
+            <td class="py-2 pr-3 text-right">{parity:.0%}</td>
+            <td class="py-2 pr-3 text-right">{r.get('cycle',0)}</td>
+            <td class="py-2 pr-3 {sc}">{status}</td>
+        </tr>"""
 
-    # Teacher status from best experiment
+    # Charts HTML
+    charts_html = ""
+    for key in chart_keys:
+        title = TASK_DESC.get(key, key)
+        charts_html += f"""<div>
+            <h3 class="text-sm font-bold mb-1 border-b border-gray-200 pb-1">{title}</h3>
+            <div class="chart-container"><canvas id="chart_{key}"></canvas></div>
+        </div>\n"""
+
+    # Teacher + learning report
+    teacher_html = ""
+    learning_html = ""
     if results:
-        lines.append("")
-        lines.append("## Best Experiment Teacher")
-        lines.append(f"```\n{results[0].get('teacher_status', 'N/A')}\n```")
+        teacher_html = results[0].get("teacher_status", "").replace("\n", "<br>")
+        ml = results[0].get("mastery_log", [])
+        if ml:
+            learning_html = "<br>".join(
+                f"Task {e['task_index']+1}: {e['task']} — {e['steps_to_master']} steps"
+                for e in ml
+            )
 
-        if results[0].get("mastery_log"):
-            lines.append("")
-            lines.append("## Learning-to-Learn")
-            for entry in results[0]["mastery_log"]:
-                lines.append(f"- Task {entry['task_index']+1}: {entry['task']} — "
-                           f"{entry['steps_to_master']} steps, {entry['examples_to_master']:,} examples")
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="refresh" content="30">
+<title>Mamba-3 Evolution Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>body {{ font-family: 'Georgia', serif; }} .chart-container {{ height: 200px; }}</style>
+</head>
+<body class="bg-white text-gray-900 max-w-6xl mx-auto px-8 py-6">
 
+<header class="border-b-2 border-black pb-2 mb-6">
+  <h1 class="text-3xl font-bold tracking-tight">Mamba-3 Evolution</h1>
+  <p class="text-gray-500 text-sm mt-1">Generation {generation} · {now} · GPU {gpu_pct:.0f}% · VRAM {mem_pct:.0f}% · {len([r for r in results if r['status']=='running'])} workers · Auto-refreshes 30s</p>
+</header>
+
+<h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Leaderboard</h2>
+<table class="w-full mb-6 text-sm">
+<thead><tr class="border-b-2 border-gray-300 text-left text-gray-500">
+  <th class="py-1 pr-3">ID</th><th class="py-1 pr-3 text-right">Params</th>
+  <th class="py-1 pr-3">Arch</th><th class="py-1 pr-3">Method</th>
+  <th class="py-1 pr-3 text-right">Best Fresh</th><th class="py-1 pr-3 text-right">Parity</th>
+  <th class="py-1 pr-3 text-right">Cycles</th><th class="py-1 pr-3">Status</th>
+</tr></thead>
+<tbody>{leaderboard}</tbody>
+</table>
+
+<div class="grid grid-cols-2 gap-6 mb-6">
+{charts_html}
+</div>
+
+<div class="grid grid-cols-2 gap-6 mb-6">
+<div>
+  <h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Curriculum Teacher</h2>
+  <div class="bg-gray-50 p-3 rounded font-mono text-xs leading-relaxed">{teacher_html}</div>
+</div>
+<div>
+  <h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Learning to Learn</h2>
+  <div class="bg-blue-50 p-3 rounded font-mono text-xs">{learning_html if learning_html else 'No tasks mastered yet'}</div>
+</div>
+</div>
+
+<script>
+const allData = {datasets_json};
+const chartOpts = {{
+  responsive: true, maintainAspectRatio: false,
+  plugins: {{ legend: {{ position: 'bottom', labels: {{ font: {{ size: 9 }} }} }} }},
+  scales: {{ x: {{ type: 'linear', title: {{ display: true, text: 'Cycle' }} }}, y: {{ min: 0, max: 100 }} }}
+}};
+for (const [key, datasets] of Object.entries(allData)) {{
+  const el = document.getElementById('chart_' + key);
+  if (el) new Chart(el, {{ type: 'scatter', data: {{ datasets }}, options: chartOpts }});
+}}
+</script>
+
+<footer class="text-gray-400 text-xs mt-6 border-t pt-2">
+  Mamba-3 · GauchoAI · Evolutionary Model Shopping · {len(results)} experiments total
+</footer>
+</body></html>"""
+
+    Path("dashboard.html").write_text(html)
+
+    # Markdown version
+    lines = [f"# Evolution Dashboard — Gen {generation}", f"GPU {gpu_pct:.0f}% · VRAM {mem_pct:.0f}%", ""]
+    lines.append("| Rank | ID | Params | Arch | Method | Fresh | Parity | Cycles | Status |")
+    lines.append("|------|-----|--------|------|--------|-------|--------|--------|--------|")
+    for i, r in enumerate(results):
+        cfg = r.get("config", {})
+        wd = cfg.get("weight_decay", 0)
+        method = f"wd={wd}" if wd > 0 else "PerpGrad"
+        parity = r.get("type_accs", {}).get("parity", 0)
+        star = "★" if i == 0 else ""
+        lines.append(f"| {i+1} | {star}{r['exp_id']} | {r.get('params',0):,} | "
+                    f"d={cfg.get('d_model','')}L={cfg.get('n_kernel_layers','')} | {method} | "
+                    f"{r.get('best_fresh',0):.1%} | {parity:.0%} | {r.get('cycle',0)} | {r['status']} |")
+    if results and results[0].get("teacher_status"):
+        lines.extend(["", "## Teacher", f"```\n{results[0]['teacher_status']}\n```"])
     Path("dashboard.md").write_text("\n".join(lines))
 
 
@@ -312,7 +461,7 @@ def run_coordinator(args):
                   f"[{r['status']}]", flush=True)
 
         # Update dashboard
-        write_dashboard(results, generation, args.runs_dir)
+        write_dashboard(results, generation, gpu_pct, mem_pct)
 
         # ── Genetic evolution ──
         if len(results) < 2:
