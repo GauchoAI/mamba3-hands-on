@@ -79,7 +79,7 @@ class EvolutionState:
         return current
 
     def check_plateau(self, current_best, patience=10):
-        """Detect if the population is stuck. Returns True if no improvement for `patience` generations."""
+        """Detect if the population is stuck. Uses trajectory, not just patience counter."""
         if current_best > self.best_ever + 0.005:  # 0.5% improvement threshold
             self.best_ever = current_best
             self.best_ever_gen = self.generation
@@ -95,6 +95,21 @@ class EvolutionState:
                   f"\n  🔥 Activating aggressive exploration mode.\n", flush=True)
 
         return self.plateau_mode
+
+    def bootstrap_from_db(self, db_path="metrics.db"):
+        """Load historical best from SQLite so plateau detection kicks in immediately."""
+        try:
+            import sqlite3
+            db = sqlite3.connect(db_path)
+            row = db.execute("SELECT MAX(best_fresh) FROM cycles").fetchone()
+            if row and row[0]:
+                self.best_ever = row[0]
+                self.best_ever_gen = max(0, self.generation - 20)  # assume it's been stuck
+                print(f"  📊 Bootstrapped from DB: best_ever={self.best_ever:.1%}, "
+                      f"treating as stagnant", flush=True)
+            db.close()
+        except Exception as e:
+            print(f"  ⚠ DB bootstrap failed: {e}", flush=True)
 
     def get_plateau_severity(self):
         """How stuck are we? 0 = not stuck, 1+ = very stuck."""
@@ -661,6 +676,7 @@ def run_coordinator(args):
     metrics = MetricsWriter()
 
     evo_state = EvolutionState()
+    evo_state.bootstrap_from_db()  # know history immediately, don't wait 10 mins
 
     mgr = WorkerManager(runs_dir=args.runs_dir)
 
