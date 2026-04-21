@@ -115,16 +115,16 @@ class AdaptiveTeacher:
                 target_weight = 1.0   # normal
             else:
                 target_weight = 1.5   # more practice, but not overwhelming
-
-            # Smooth transition — move 30% toward target each observation
-            cfg.weight = cfg.weight * 0.7 + target_weight * 0.3
-                # Regress difficulty if struggling
+                # Regress difficulty if struggling consistently
                 if len(cfg.history) >= 3 and all(a < STRUGGLING_THRESHOLD for a in cfg.history[-3:]):
                     if cfg.difficulty_level > 0:
                         cfg.difficulty_level -= 1
                         cfg.history.clear()
                         print(f"  📉 {task_type}: difficulty {cfg.difficulty_level+1}→{cfg.difficulty_level}",
                               flush=True)
+
+            # Smooth transition — move 30% toward target each observation
+            cfg.weight = cfg.weight * 0.7 + target_weight * 0.3
 
     def get_status(self) -> str:
         """Return a summary string of the teacher's view."""
