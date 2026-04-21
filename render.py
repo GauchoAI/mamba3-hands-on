@@ -104,7 +104,7 @@ def render_html(reader: MetricsReader, output="index.html"):
             "borderWidth": 1.5, "pointRadius": 0, "tension": 0.3,
         })
 
-    # Per-task accuracy (top 6 experiments)
+    # Per-task accuracy + difficulty (top 6 experiments)
     task_chart_data = {}
     for task in active_tasks:
         datasets = []
@@ -114,14 +114,28 @@ def render_html(reader: MetricsReader, output="index.html"):
                 continue
             color = COLORS[i % len(COLORS)]
             alive = exp["status"] == "running"
+            # Accuracy line (solid, left Y)
             datasets.append({
-                "label": exp["exp_id"],
+                "label": f"{exp['exp_id']} acc",
                 "data": [{"x": h["cycle"], "y": round(h["accuracy"] * 100, 1)} for h in history],
                 "borderColor": color, "backgroundColor": "transparent",
                 "borderWidth": 2 if alive else 1,
                 "borderDash": [] if alive else [5, 5],
                 "pointRadius": 0, "tension": 0.3,
+                "yAxisID": "y",
             })
+            # Difficulty line (dashed, right Y, same color lighter)
+            if any(h.get("difficulty", 0) > 0 for h in history):
+                datasets.append({
+                    "label": f"{exp['exp_id']} diff",
+                    "data": [{"x": h["cycle"], "y": round(h.get("difficulty", 0) * 100, 1)} for h in history],
+                    "borderColor": color + "66",  # 40% opacity
+                    "backgroundColor": "transparent",
+                    "borderWidth": 1,
+                    "borderDash": [4, 4],
+                    "pointRadius": 0, "tension": 0.3,
+                    "yAxisID": "y2",
+                })
         if datasets:
             task_chart_data[task] = datasets
 
@@ -427,7 +441,27 @@ mkChart('chart_loss', D.loss, null, 'Loss');
 
 for (const [key, datasets] of Object.entries(D)) {{
   if (key.startsWith('task_')) {{
-    mkChart(key, datasets, 100, '%');
+    // Dual axis: accuracy (left) + difficulty (right)
+    const el = document.getElementById(key);
+    if (!el) continue;
+    new Chart(el, {{
+      type: 'line',
+      data: {{ datasets }},
+      options: {{
+        ...base,
+        scales: {{
+          x: {{ type: 'linear', title: {{ display: true, text: 'Cycle', font: {{ size: 9 }} }},
+                 ticks: {{ font: {{ size: 8 }} }} }},
+          y: {{ position: 'left', min: 0, max: 100,
+                title: {{ display: true, text: 'Accuracy %', font: {{ size: 9 }} }},
+                ticks: {{ font: {{ size: 8 }} }} }},
+          y2: {{ position: 'right', min: 0, max: 100,
+                 title: {{ display: true, text: 'Difficulty %', font: {{ size: 9 }}, color: '#999' }},
+                 ticks: {{ font: {{ size: 8 }}, color: '#999' }},
+                 grid: {{ drawOnChartArea: false }} }},
+        }},
+      }},
+    }});
   }}
 }}
 </script>
