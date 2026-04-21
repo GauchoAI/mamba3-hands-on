@@ -456,8 +456,98 @@ CURRICULUM.md             # language + reasoning curriculum
 
 ---
 
+## Entry 11 — The augmented architecture: registers, spikes, persistent memory
+
+**Commit:** `arch: augmented Mamba-3 with registers + spike gates + persistent memory`
+
+### The insight
+
+The SSM state is `h = decay * h + input` — one fixed-size buffer at one
+timescale. Biology has at least four timescales of memory: ion channels
+(milliseconds), working memory (seconds), short-term (hours), long-term
+(years). Plus explicit mechanisms for deciding WHAT to remember.
+
+Scaling the SSM (more layers, more params) doesn't add new KINDS of state.
+It just makes the same buffer bigger. That's like giving a fish a bigger
+bowl instead of legs. The architecture needs qualitatively different components.
+
+### The augmented architecture
+
+```
+Input → SSM (Mamba-3) → per-step register/memory ops → output
+                              ↕               ↕
+                       Register Bank    Persistent Memory
+                       (working memory) (long-term, slow decay)
+                              ↑               ↑
+                         Spike Gate       Spike Gate
+                       (when to write)  (when to write)
+```
+
+**Register Bank (8 slots):** Explicit addressable memory. The model learns
+WHEN to write (spike gate), WHERE to write (soft attention over slots),
+and WHAT to write. Registers persist across the sequence unless overwritten.
+Like CPU registers — small, fast, explicitly controlled.
+
+**Persistent Memory (16 slots):** Same interface but with slow decay
+(0.995 per step). Old memories fade unless refreshed. Frequently reinforced
+patterns persist naturally. Like biological long-term memory consolidation.
+
+**Spike Gates:** Threshold mechanism initialized to NOT fire (bias=-2.0).
+The model must actively learn when something is noteworthy enough to store.
+Uses steep sigmoid — output is near-0 (silence) or near-1 (fire). This is
+the "aha moment" detector.
+
+### Parameters
+
+| Component | Params | Role |
+|---|---|---|
+| SSM (Mamba-3) | 28,752 | Sequential processing |
+| Register Bank | ~15K | Working memory |
+| Persistent Memory | ~15K | Long-term memory |
+| Combine + Norm | ~12K | Integration |
+| **Total** | **59,562** | **2x plain, not 100x** |
+
+### Key design decisions
+
+1. **Spike gates start silent.** The model begins by relying purely on
+   the SSM (which it already knows how to use from Level 0 pretraining).
+   Register writes are learned gradually — only when the model discovers
+   that storing something helps prediction.
+
+2. **SSM runs first, registers second.** The SSM processes the full
+   sequence, then the register layer operates on top. This preserves the
+   SSM's proven capabilities while adding new ones.
+
+3. **Three sources combined with residual.** Output = Linear(SSM + reg_read
+   + mem_read) + SSM. The residual ensures the SSM's contribution is never
+   lost, even if registers are unused.
+
+4. **Not everything is a tensor.** The register addressing and spike
+   decisions introduce discrete-ish behavior (sharp sigmoids, argmax-like
+   attention). This is intentionally less "smooth" than standard neural
+   net operations — it's closer to how actual memory works.
+
+### Hypothesis
+
+If 6 pattern types compete for SSM state (causing the 80% ceiling), the
+augmented model should break through by storing each pattern type's
+signature in a different register. The SSM detects "this is a sequence
+completion task" → spike fires → writes the pattern to register 3. Next
+time it needs that pattern, it reads from register 3 instead of trying
+to reconstruct it from the decaying SSM state.
+
+### Next: head-to-head comparison
+
+Train plain vs augmented on Level 0 pattern recognition. Same teacher,
+same data, same everything. Measure: final fresh accuracy, spike frequency,
+register utilization. If the augmented model breaks 80%, the architecture
+hypothesis is confirmed.
+
+---
+
 ## Open threads
 
+- **Head-to-head test.** Plain vs augmented on Level 0. Running.
 - **Scale the student.** 2-4 layers, d_state=32-64, d_model=128. Same
   teacher, same curriculum. Does 80% become 95%?
 - **Level 1 (comparison).** Build generator, train from Level 0 checkpoint.
