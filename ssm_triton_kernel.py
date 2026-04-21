@@ -76,7 +76,8 @@ def _ssm_scan_fwd_kernel(
 
         # Skip + gate: y = (y + D*x) * silu(z)
         y_t = y_t + D_val * x_vec
-        y_t = y_t * z_vec * tl.sigmoid(z_vec)
+        z_sig = 1.0 / (1.0 + tl.exp(-z_vec))
+        y_t = y_t * z_vec * z_sig
 
         # Store y[b, t, head, :]
         y_base = b * y_stride_b + t * y_stride_l + head * y_stride_h

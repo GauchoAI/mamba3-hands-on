@@ -358,7 +358,8 @@ if __name__ == "__main__":
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--bf16", action="store_true", default=True)
     parser.add_argument("--no-bf16", action="store_false", dest="bf16")
-    parser.add_argument("--no-compile", action="store_true", default=False)
+    parser.add_argument("--no-compile", action="store_true", default=True,
+                        help="Skip torch.compile — Triton kernel handles the hot path")
     args = parser.parse_args()
 
     if torch.cuda.is_available():
