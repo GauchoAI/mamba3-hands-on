@@ -76,7 +76,23 @@ def mutate_config(parent_config, mutation_strength=0.3):
 
     # Mutate loss function
     if random.random() < 0.15:
-        child["loss_fn"] = random.choice(["stable_ce", "ce", "focal"])
+        child["loss_fn"] = random.choice(["stable_ce", "ce", "focal", "label_smooth"])
+
+    # Mutate optimizer
+    if random.random() < 0.1:
+        child["optimizer"] = random.choice(["adamw", "lion"])
+
+    # Mutate warm restarts
+    if random.random() < 0.1:
+        child["warm_restarts"] = not child.get("warm_restarts", False)
+
+    # Mutate noise injection
+    if random.random() < 0.1:
+        child["noise_scale"] = random.choice([0.0, 0.0005, 0.001, 0.002])
+
+    # Mutate PerpGrad (independent of weight decay)
+    if random.random() < 0.1:
+        child["use_perp"] = not child.get("use_perp", child.get("weight_decay", 0) == 0)
 
     return child
 
@@ -96,10 +112,26 @@ SEED_CONFIGS = [
      "batch_size": 512, "lr": 1e-3, "weight_decay": 0.0, "steps_per_cycle": 200},
     {"d_model": 48,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
      "batch_size": 256, "lr": 2e-3, "weight_decay": 0.05, "steps_per_cycle": 200},
-    # tinygrad experiment — same config as best grokking, different backend
+    # tinygrad experiment
     {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
      "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200,
      "backend": "tinygrad"},
+    # Label smoothing — directly targets overconfidence/DAME bug
+    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
+     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200,
+     "loss_fn": "label_smooth"},
+    # Lion optimizer — faster convergence on small models
+    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
+     "batch_size": 256, "lr": 3e-4, "weight_decay": 0.1, "steps_per_cycle": 200,
+     "optimizer": "lion"},
+    # Warm restarts + focal loss — escape minima + focus on hard examples
+    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
+     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200,
+     "loss_fn": "focal", "warm_restarts": True},
+    # Noise injection + PerpGrad — shake + prevent NLM
+    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
+     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.0, "steps_per_cycle": 200,
+     "use_perp": True, "noise_scale": 0.001},
 ]
 
 

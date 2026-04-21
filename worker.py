@@ -20,6 +20,10 @@ from collections import defaultdict
 
 from progressive_model import ProgressiveModel, ByteTokenizer, VOCAB_SIZE, PAD
 from grokking import stable_cross_entropy, PerpGradOptimizer
+from strategies import (
+    SAM, label_smoothed_cross_entropy, Lion,
+    WarmRestartScheduler, inject_noise,
+)
 import torch.nn.functional as F
 
 
@@ -38,6 +42,8 @@ def get_loss_fn(name="stable_ce"):
                 return loss.mean()
             return loss
         return focal_loss
+    elif name == "label_smooth":
+        return lambda logits, targets, reduction='none': label_smoothed_cross_entropy(logits, targets, smoothing=0.1, reduction=reduction)
     else:
         return stable_cross_entropy
 from generators.teacher import AdaptiveTeacher
@@ -84,11 +90,20 @@ def train(args):
         model.add_kernel_layer()
     model.set_mode("kernel")
 
-    # Optimizer
+    # Optimizer (evolvable: adamw, lion)
     wd = cfg.get("weight_decay", 0.0)
-    opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=wd)
-    use_perp = wd == 0.0
+    optimizer_name = cfg.get("optimizer", "adamw")
+    if optimizer_name == "lion":
+        opt = Lion(model.parameters(), lr=cfg["lr"], weight_decay=wd)
+    else:
+        opt = torch.optim.AdamW(model.parameters(), lr=cfg["lr"], weight_decay=wd)
+
+    # Strategy flags
+    use_perp = cfg.get("use_perp", wd == 0.0)
     perp = PerpGradOptimizer(model) if use_perp else None
+    use_warm_restarts = cfg.get("warm_restarts", False)
+    scheduler = WarmRestartScheduler(opt, T_0=100) if use_warm_restarts else None
+    noise_scale = cfg.get("noise_scale", 0.0)
 
     # Loss function (evolvable)
     loss_fn_name = cfg.get("loss_fn", "stable_ce")
@@ -193,7 +208,13 @@ def train(args):
                     perp.project()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 opt.step()
+                if scheduler:
+                    scheduler.step()
                 cycle_loss += loss.item()
+
+        # Noise injection at end of cycle (if enabled)
+        if noise_scale > 0:
+            inject_noise(model, noise_scale)
 
         cycle_loss /= max(steps_per_cycle, 1)
         elapsed = time.time() - t0
