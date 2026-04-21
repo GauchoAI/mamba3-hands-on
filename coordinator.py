@@ -605,9 +605,11 @@ def _run_generation(mgr, metrics, args, generation, max_workers):
 
     if at_capacity and generation % args.evolve_every == 0:
         # EVOLVE: pause worst running, spawn child of best
+        # Grace period: don't pause experiments younger than 200 cycles
+        GRACE_CYCLES = 200
         worst = None
         for r in reversed(running_results):
-            if r["exp_id"] in running:
+            if r["exp_id"] in running and r.get("cycle", 0) >= GRACE_CYCLES:
                 worst = r
                 break
 
