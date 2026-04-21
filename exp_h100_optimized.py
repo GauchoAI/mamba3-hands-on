@@ -108,7 +108,8 @@ def train_with_teacher(model, name, dataset, device, args, ckpt_prefix,
     print(f"Training: {name} ({n_params:,} params)", flush=True)
     print(f"  steps={args.steps}  batch={args.batch_size}  lr={args.lr}", flush=True)
     print(f"  bf16={'ON' if args.bf16 else 'OFF'}  compile={'ON' if use_compile else 'OFF'}", flush=True)
-    print(f"  cycles: {args.cycle_learn} learn + {args.cycle_digest} digest", flush=True)
+    print(f"  weight_decay={args.weight_decay}  grokfast={args.grokfast_alpha}", flush=True)
+    print(f"  data refresh every {args.cycle_learn + args.cycle_digest} steps", flush=True)
     print(f"{'='*60}", flush=True)
 
     # Compile model for speed
@@ -122,13 +123,11 @@ def train_with_teacher(model, name, dataset, device, args, ckpt_prefix,
             train_model = model
 
     base_lr = args.lr
-    opt = torch.optim.AdamW(model.parameters(), lr=base_lr)
+    opt = torch.optim.AdamW(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
     teacher = AdaptiveTeacher()
 
     # Mixed precision
     use_amp = args.bf16 and device == "cuda"
-    scaler = torch.amp.GradScaler('cuda', enabled=(use_amp and not args.bf16))
-    # BF16 doesn't need scaler, but we use autocast
 
     ckpt_dir = Path("checkpoints")
     ckpt_dir.mkdir(exist_ok=True)
@@ -140,7 +139,14 @@ def train_with_teacher(model, name, dataset, device, args, ckpt_prefix,
     learn_steps = args.cycle_learn
     digest_steps = args.cycle_digest
     cycle_len = learn_steps + digest_steps
-    gap_throttle = 0.10
+
+    # Grokfast: EMA of gradients to amplify slow (generalizing) components
+    grokfast_ema = {}
+    grokfast_alpha = args.grokfast_alpha  # 0.0 = disabled, 0.8-0.98 = typical
+
+    print(f"  weight_decay={args.weight_decay}  grokfast_alpha={grokfast_alpha}", flush=True)
+    if grokfast_alpha > 0:
+        print(f"  Grokfast: ON (amplifies generalizing gradients)", flush=True)
 
     history = []
     step_times = []
@@ -156,19 +162,15 @@ def train_with_teacher(model, name, dataset, device, args, ckpt_prefix,
             out = tokenize(ex["output"]) + [SPECIAL_TOKENS["<EOS>"]]
             dataset.examples.append((inp, out, ex.get("type", "")))
 
+        # Constant LR — no learn/digest cycles. Grokking needs steady pressure.
         for param_group in opt.param_groups:
-            param_group["lr"] = current_lr
-        phase = "LEARN"
+            param_group["lr"] = base_lr
+        phase = "TRAIN"
 
         for step_in_cycle in range(cycle_len):
             global_step += 1
             if global_step > args.steps:
                 break
-
-            if step_in_cycle == learn_steps:
-                phase = "DIGEST"
-                for param_group in opt.param_groups:
-                    param_group["lr"] = current_lr * 0.1
 
             t0 = time.time()
 
@@ -180,7 +182,19 @@ def train_with_teacher(model, name, dataset, device, args, ckpt_prefix,
 
             opt.zero_grad(set_to_none=True)
             loss.backward()
-            # Gradient clipping
+
+            # Grokfast: EMA filter on gradients (amplify slow/generalizing components)
+            if grokfast_alpha > 0:
+                for name_p, p in model.named_parameters():
+                    if p.grad is not None:
+                        if name_p not in grokfast_ema:
+                            grokfast_ema[name_p] = p.grad.data.clone()
+                        else:
+                            grokfast_ema[name_p].mul_(grokfast_alpha).add_(
+                                p.grad.data, alpha=1 - grokfast_alpha
+                            )
+                            p.grad.data.add_(grokfast_ema[name_p])
+
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
 
@@ -213,17 +227,8 @@ def train_with_teacher(model, name, dataset, device, args, ckpt_prefix,
                     "gap": gap, "phase": phase, "ms_per_step": avg_ms,
                 })
 
-                # Gap throttle
-                if gap > gap_throttle and phase == "LEARN":
-                    current_lr = max(current_lr * 0.7, base_lr * 0.01)
-                    for param_group in opt.param_groups:
-                        param_group["lr"] = current_lr
-                    print(f"    throttle LR → {current_lr:.1e}", flush=True)
-                elif gap < 0.05 and current_lr < base_lr:
-                    current_lr = min(current_lr * 1.2, base_lr)
-                    if phase == "LEARN":
-                        for param_group in opt.param_groups:
-                            param_group["lr"] = current_lr
+                # No gap throttle — let grokking happen naturally.
+                # Weight decay + Grokfast handle the memorization→generalization transition.
 
                 # Checkpoint
                 ckpt_data = {
@@ -363,6 +368,11 @@ if __name__ == "__main__":
     parser.add_argument("--no-bf16", action="store_false", dest="bf16")
     parser.add_argument("--no-compile", action="store_true", default=True,
                         help="Skip torch.compile — Triton kernel handles the hot path")
+    parser.add_argument("--weight-decay", type=float, default=0.1,
+                        help="AdamW weight decay — high values (0.1+) enable grokking")
+    parser.add_argument("--grokfast-alpha", type=float, default=0.98,
+                        help="Grokfast EMA alpha (0=disabled, 0.98=typical). "
+                        "Amplifies slow/generalizing gradient components.")
     args = parser.parse_args()
 
     if torch.cuda.is_available():
