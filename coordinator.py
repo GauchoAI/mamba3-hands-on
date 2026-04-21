@@ -27,11 +27,135 @@ sys.path.insert(0, os.path.dirname(__file__))
 import argparse
 import json
 import time
+import math
 import random
 import signal
 import subprocess
 from pathlib import Path
 from datetime import datetime
+
+
+# ── Evolution state ─────────────────────────────────────────────────
+
+class EvolutionState:
+    """Tracks momentum, lineage, and generation for meta-evolution."""
+    def __init__(self):
+        self.history = {}      # exp_id → [(cycle, best_fresh), ...]
+        self.lineage = {}      # exp_id → {"parent": exp_id, "grandparent": exp_id}
+        self.generation = 0
+
+    def record(self, exp_id, cycle, best_fresh):
+        if exp_id not in self.history:
+            self.history[exp_id] = []
+        self.history[exp_id].append((cycle, best_fresh))
+
+    def get_momentum(self, exp_id, window=5):
+        h = self.history.get(exp_id, [])
+        if len(h) < window:
+            return 0.0
+        recent = h[-1][1]
+        old = h[-window][1]
+        return (recent - old) / window
+
+    def register_lineage(self, child_id, parent_id):
+        parent_info = self.lineage.get(parent_id, {"parent": None})
+        self.lineage[child_id] = {
+            "parent": parent_id,
+            "grandparent": parent_info.get("parent"),
+        }
+
+    def get_lineage_root(self, exp_id, depth=3):
+        """Walk up the lineage tree to find ancestor."""
+        current = exp_id
+        for _ in range(depth):
+            info = self.lineage.get(current, {})
+            parent = info.get("parent")
+            if parent is None:
+                return current
+            current = parent
+        return current
+
+
+# ── Scoring: momentum + task specialists ────────────────────────────
+
+def score_experiments(results, evo_state, momentum_weight=0.5):
+    """Score experiments with momentum bonus and tag task specialists."""
+    # Record history + compute momentum
+    for r in results:
+        eid = r["exp_id"]
+        cycle = r.get("cycle", 0)
+        fresh = r.get("best_fresh", 0)
+        evo_state.record(eid, cycle, fresh)
+        momentum = evo_state.get_momentum(eid)
+        r["momentum"] = momentum
+        r["effective_score"] = fresh + momentum_weight * max(momentum, 0)
+
+    # Tag task specialists
+    task_best = {}  # task → (exp_id, accuracy)
+    for r in results:
+        for task, acc in r.get("type_accs", {}).items():
+            if task not in task_best or acc > task_best[task][1]:
+                task_best[task] = (r["exp_id"], acc)
+
+    specialist_map = {}  # exp_id → [tasks]
+    for task, (eid, acc) in task_best.items():
+        if acc > 0:
+            specialist_map.setdefault(eid, []).append(task)
+
+    for r in results:
+        r["specialist_for"] = specialist_map.get(r["exp_id"], [])
+
+    # Sort by effective score
+    results.sort(key=lambda x: -x["effective_score"])
+    return results
+
+
+# ── Parent selection: temperature + focal + lineage dropout ─────────
+
+def select_parent(running_results, evo_state, generation,
+                  specialist_prob=0.3, max_temp=5.0, decay_constant=50.0):
+    """Select a parent using temperature-annealed softmax + focal attention."""
+    if not running_results:
+        return running_results[0] if running_results else None, "default"
+
+    # Focal task attention: 30% chance to breed from a task specialist
+    if random.random() < specialist_prob:
+        specialists = [r for r in running_results if r.get("specialist_for")]
+        if specialists:
+            chosen = random.choice(specialists)
+            task = random.choice(chosen["specialist_for"])
+            return chosen, f"specialist:{task}"
+
+    # Temperature-annealed softmax selection
+    temperature = max(0.1, max_temp * math.exp(-generation / decay_constant))
+    scores = [r.get("effective_score", r.get("best_fresh", 0)) for r in running_results]
+
+    # Softmax with temperature
+    max_score = max(scores) if scores else 0
+    weights = [math.exp((s - max_score) / temperature) for s in scores]
+    total = sum(weights)
+    if total == 0:
+        return running_results[0], "fallback"
+    weights = [w / total for w in weights]
+
+    chosen = random.choices(running_results, weights=weights, k=1)[0]
+
+    # Lineage dropout: if >50% share same ancestor, force diversity
+    if len(running_results) >= 6:
+        chosen_root = evo_state.get_lineage_root(chosen["exp_id"])
+        same_lineage = sum(
+            1 for r in running_results
+            if evo_state.get_lineage_root(r["exp_id"]) == chosen_root
+        )
+        if same_lineage > len(running_results) * 0.5:
+            # Pick from a different lineage
+            others = [r for r in running_results
+                     if evo_state.get_lineage_root(r["exp_id"]) != chosen_root]
+            if others:
+                chosen = random.choice(others)
+                return chosen, f"lineage_dropout(was:{chosen_root})"
+
+    return chosen, f"temp={temperature:.1f}"
 
 
 # ── Genetic config mutation ─────────────────────────────────────────
@@ -489,6 +613,8 @@ def run_coordinator(args):
     from metrics_db import MetricsWriter
     metrics = MetricsWriter()
 
+    evo_state = EvolutionState()
+
     mgr = WorkerManager(runs_dir=args.runs_dir)
 
     # Auto-detect max workers if not set
@@ -520,7 +646,7 @@ def run_coordinator(args):
 
         try:
             _run_generation(mgr, metrics, args, generation,
-                           max_workers)
+                           max_workers, evo_state)
         except Exception as e:
             # LOUD error — never eat exceptions silently
             import traceback
@@ -582,9 +708,11 @@ def _enforce_disk_budget(runs_dir, results, max_gb=50):
                   flush=True)
 
 
-def _run_generation(mgr, metrics, args, generation, max_workers):
+def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
     """One generation of the evolutionary loop. Called from main loop with try/except."""
+    evo_state.generation = generation
     results = mgr.get_all_metrics()
+    results = score_experiments(results, evo_state)
     running = mgr.get_running()
 
     print(f"\n[Gen {generation}] {len(running)} running, "
@@ -599,9 +727,14 @@ def _run_generation(mgr, metrics, args, generation, max_workers):
         method = f"wd={wd}" if wd > 0 else "perp"
         backend = cfg.get("backend", "pytorch")
         tag = f"[{method}]" if backend == "pytorch" else f"[{method}/tg]"
+        mom = r.get("momentum", 0)
+        mom_str = f"↑{mom:.3f}" if mom > 0.001 else (f"↓{mom:.3f}" if mom < -0.001 else "→")
+        spec = ",".join(r.get("specialist_for", [])[:2])
+        spec_str = f" 🎯{spec}" if spec else ""
         print(f"  {marker} {r['exp_id']}: fresh={r.get('best_fresh', 0):.1%}  "
+              f"eff={r.get('effective_score', 0):.1%}  {mom_str}  "
               f"parity={parity:.0%}  cycle={r.get('cycle', 0)}  "
-              f"d={cfg.get('d_model', '?')}  {tag}  "
+              f"d={cfg.get('d_model', '?')}  {tag}{spec_str}  "
               f"[{r['status']}]", flush=True)
 
     # Check GPU usage + log + update dashboard
@@ -634,10 +767,11 @@ def _run_generation(mgr, metrics, args, generation, max_workers):
 
     # Auto-scale: spawn more workers if GPU has headroom
     if has_headroom and not at_capacity and running_results:
-        parent = random.choice(running_results[:max(1, len(running_results) // 2)])
+        parent, reason = select_parent(running_results, evo_state, generation)
         child_cfg = mutate_config(parent.get("config", SEED_CONFIGS[0]))
-        mgr.spawn(child_cfg, parent_id=parent["exp_id"])
-        print(f"  📈 Auto-scaled from {parent['exp_id']} (GPU has headroom)", flush=True)
+        child_id = mgr.spawn(child_cfg, parent_id=parent["exp_id"])
+        evo_state.register_lineage(child_id, parent["exp_id"])
+        print(f"  📈 Auto-scaled from {parent['exp_id']} ({reason})", flush=True)
 
     if at_capacity and generation % args.evolve_every == 0:
         # EVOLVE: pause worst running, spawn child of best
@@ -651,12 +785,15 @@ def _run_generation(mgr, metrics, args, generation, max_workers):
 
         best = running_results[0]
 
+        best, selection_reason = select_parent(running_results, evo_state, generation)
+
         if worst and best and worst["exp_id"] != best["exp_id"]:
             mgr.pause(worst["exp_id"])
 
             parent_cfg = best.get("config", SEED_CONFIGS[0])
             child_cfg = mutate_config(parent_cfg)
             child_id = mgr.spawn(child_cfg, parent_id=best["exp_id"])
+            evo_state.register_lineage(child_id, best["exp_id"])
 
             metrics.log_event("evolve", child_id,
                 f"child of {best['exp_id']}, replaced {worst['exp_id']}")
@@ -666,14 +803,15 @@ def _run_generation(mgr, metrics, args, generation, max_workers):
             print(f"  🧬 Evolution: paused {worst['exp_id']} "
                   f"(fresh={worst.get('best_fresh', 0):.1%}), "
                   f"spawned {child_id} from {best['exp_id']} "
-                  f"(fresh={best.get('best_fresh', 0):.1%})", flush=True)
+                  f"[{selection_reason}]", flush=True)
 
     elif not at_capacity:
-        top_half = running_results[:max(1, len(running_results) // 2)]
-        parent = random.choice(top_half)
+        parent, reason = select_parent(running_results, evo_state, generation)
         parent_cfg = parent.get("config", SEED_CONFIGS[0])
         child_cfg = mutate_config(parent_cfg)
-        mgr.spawn(child_cfg, parent_id=parent["exp_id"])
+        child_id = mgr.spawn(child_cfg, parent_id=parent["exp_id"])
+        evo_state.register_lineage(child_id, parent["exp_id"])
+        print(f"  🎯 Parent: {parent['exp_id']} ({reason})", flush=True)
 
     # Disk management: keep checkpoints under budget
     _enforce_disk_budget(mgr.runs_dir, results, max_gb=50)
