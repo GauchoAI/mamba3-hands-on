@@ -175,52 +175,35 @@ class Mamba3Block(nn.Module):
         # previous x into the state, i.e. 2nd-order discretization.
         trap = torch.sigmoid(trap_raw)                      # (B, L, H)
 
-        # ---- Sequential scan (naive, O(L) in time) ----
-        # h: (B, H, hD, dS) — state per head
+        # ---- Precompute all inputs in one batched operation ----
+        # Outer product B*x for all timesteps: (B, L, H, hD, dS)
+        Bx_all = torch.einsum("blhp,blhn->blhpn", x, Bp_rot)
+
+        if self.use_trap:
+            # Trapezoidal: blend current and shifted-previous inputs
+            Bx_prev = F.pad(Bx_all[:, :-1], (0,0, 0,0, 0,0, 1,0))  # shift right, zero-pad
+            trap_exp = trap[..., None, None]  # (B, L, H, 1, 1)
+            inp_all = trap_exp * Bx_all + (1 - trap_exp) * Bx_prev
+        else:
+            inp_all = Bx_all
+
+        # Scale by dt
+        inp_all = inp_all * DT[..., None, None]  # (B, L, H, hD, dS)
+
+        # ---- Sequential scan (tight loop — only state recurrence) ----
         h = u.new_zeros(B_, nH, hD, dS)
-        ys = []
-        # precompute B_t * x_t outer product: (B, L, H, hD, dS)
-        # We keep it per-step to save memory for long L.
-        x_prev = u.new_zeros(B_, nH, hD)
-        B_prev = u.new_zeros(B_, nH, dS)
+        y = u.new_zeros(B_, L, nH, hD)
+
+        # Pre-slice for less Python overhead in the loop
+        decay_exp = decay[..., None, None]  # (B, L, H, 1, 1)
+        z_silu = F.silu(z)  # (B, L, H, hD) — precompute all gating
 
         for t in range(L):
-            dt_t   = DT[:,   t]                            # (B, H)
-            dec_t  = decay[:, t]                            # (B, H)
-            trap_t = trap[:,  t]                            # (B, H)
-            B_t    = Bp_rot[:, t]                           # (B, H, dS)
-            C_t    = Cp_rot[:, t]                           # (B, H, dS)
-            x_t    = x[:, t]                                # (B, H, hD)
+            h = decay_exp[:, t] * h + inp_all[:, t]
+            y_t = torch.einsum("bhpn,bhn->bhp", h, Cp_rot[:, t])
+            y_t = y_t + self.D[None, :, None] * x[:, t]
+            y[:, t] = y_t * z_silu[:, t]
 
-            # Trapezoidal input: blend current and previous (B * x) contributions.
-            cur  = torch.einsum("bhp,bhn->bhpn", x_t,    B_t)      # (B, H, hD, dS)
-            if self.use_trap:
-                prev = torch.einsum("bhp,bhn->bhpn", x_prev, B_prev)
-                inp  = trap_t[..., None, None] * cur + (1 - trap_t)[..., None, None] * prev
-            else:
-                inp  = cur                                         # ablate: pure Euler
-
-            # Scale input by dt (discretization)
-            inp = inp * dt_t[..., None, None]
-
-            # State update: h = decay * h + inp
-            h = dec_t[..., None, None] * h + inp
-
-            # Output: y_t = C_t . h  (per head, per channel)
-            y_t = torch.einsum("bhpn,bhn->bhp", h, C_t)    # (B, H, hD)
-
-            # Add D skip: y += D * x
-            y_t = y_t + self.D[None, :, None] * x_t
-
-            # Gate with z (SiLU-GLU style, like Mamba-2)
-            y_t = y_t * F.silu(z[:, t])
-
-            ys.append(y_t)
-
-            x_prev = x_t
-            B_prev = B_t
-
-        y = torch.stack(ys, dim=1)                          # (B, L, H, hD)
         y = y.reshape(B_, L, self.d_inner)
 
         out = self.out_proj(y)
