@@ -109,8 +109,8 @@ class WorkerManager:
                     if p.is_dir() and p.name.startswith("exp_")]
         self.next_id = max(existing, default=-1) + 1
 
-    def spawn(self, config):
-        """Launch a new worker process."""
+    def spawn(self, config, parent_id=None):
+        """Launch a new worker process. Optionally inherit weights from parent."""
         self._find_next_id()
         exp_id = f"exp_{self.next_id:03d}"
         run_dir = self.runs_dir / exp_id
@@ -119,6 +119,28 @@ class WorkerManager:
         config_path = run_dir / "config.json"
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
+
+        # Safe weight inheritance: copy parent checkpoint if architecturally compatible
+        if parent_id:
+            parent_dir = self.runs_dir / parent_id
+            parent_ckpt = parent_dir / "checkpoint.pt"
+            parent_cfg_path = parent_dir / "config.json"
+            if parent_ckpt.exists() and parent_cfg_path.exists():
+                try:
+                    parent_cfg = json.load(open(parent_cfg_path))
+                    # Only inherit if architecture matches
+                    arch_keys = ["d_model", "d_state", "headdim", "n_kernel_layers"]
+                    compatible = all(
+                        config.get(k) == parent_cfg.get(k) for k in arch_keys
+                    )
+                    if compatible and config.get("backend") == parent_cfg.get("backend", "pytorch"):
+                        import shutil
+                        shutil.copy2(parent_ckpt, run_dir / "checkpoint.pt")
+                        print(f"    📋 Inherited weights from {parent_id}", flush=True)
+                    else:
+                        print(f"    🆕 Fresh start (arch differs from {parent_id})", flush=True)
+                except Exception as e:
+                    print(f"    ⚠ Weight inheritance failed: {e}", flush=True)
 
         # Choose worker script based on backend
         backend = config.get("backend", "pytorch")
@@ -491,6 +513,35 @@ def run_coordinator(args):
               flush=True)
 
 
+def _enforce_disk_budget(runs_dir, results, max_gb=50):
+    """Evict paused experiments' checkpoints if disk usage exceeds budget."""
+    import shutil
+    total_bytes = sum(
+        f.stat().st_size for f in runs_dir.rglob("*") if f.is_file()
+    )
+    total_gb = total_bytes / 1e9
+
+    if total_gb <= max_gb:
+        return
+
+    # Find paused experiments, sorted by worst performance (evict worst first)
+    paused = [r for r in results if r.get("status") == "paused"]
+    paused.sort(key=lambda x: x.get("best_fresh", 0))
+
+    for r in paused:
+        if total_gb <= max_gb * 0.8:  # evict down to 80% of budget
+            break
+        exp_dir = runs_dir / r["exp_id"]
+        ckpt = exp_dir / "checkpoint.pt"
+        if ckpt.exists():
+            size = ckpt.stat().st_size / 1e9
+            ckpt.unlink()
+            total_gb -= size
+            print(f"  🗑 Evicted checkpoint {r['exp_id']} "
+                  f"(fresh={r.get('best_fresh',0):.1%}, freed {size*1000:.0f}MB)",
+                  flush=True)
+
+
 def _run_generation(mgr, metrics, args, generation, max_workers):
     """One generation of the evolutionary loop. Called from main loop with try/except."""
     results = mgr.get_all_metrics()
@@ -545,8 +596,8 @@ def _run_generation(mgr, metrics, args, generation, max_workers):
     if has_headroom and not at_capacity and running_results:
         parent = random.choice(running_results[:max(1, len(running_results) // 2)])
         child_cfg = mutate_config(parent.get("config", SEED_CONFIGS[0]))
-        mgr.spawn(child_cfg)
-        print(f"  📈 Auto-scaled (GPU has headroom)", flush=True)
+        mgr.spawn(child_cfg, parent_id=parent["exp_id"])
+        print(f"  📈 Auto-scaled from {parent['exp_id']} (GPU has headroom)", flush=True)
 
     if at_capacity and generation % args.evolve_every == 0:
         # EVOLVE: pause worst running, spawn child of best
@@ -563,7 +614,7 @@ def _run_generation(mgr, metrics, args, generation, max_workers):
 
             parent_cfg = best.get("config", SEED_CONFIGS[0])
             child_cfg = mutate_config(parent_cfg)
-            child_id = mgr.spawn(child_cfg)
+            child_id = mgr.spawn(child_cfg, parent_id=best["exp_id"])
 
             metrics.log_event("evolve", child_id,
                 f"child of {best['exp_id']}, replaced {worst['exp_id']}")
@@ -580,7 +631,10 @@ def _run_generation(mgr, metrics, args, generation, max_workers):
         parent = random.choice(top_half)
         parent_cfg = parent.get("config", SEED_CONFIGS[0])
         child_cfg = mutate_config(parent_cfg)
-        mgr.spawn(child_cfg)
+        mgr.spawn(child_cfg, parent_id=parent["exp_id"])
+
+    # Disk management: keep checkpoints under budget
+    _enforce_disk_budget(mgr.runs_dir, results, max_gb=50)
 
 
 if __name__ == "__main__":
