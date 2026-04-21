@@ -73,9 +73,9 @@
   </div>
 </div>
 
-<!-- Leaderboard + Events -->
+<!-- Leaderboard + Detail (side by side) -->
 <div class="grid grid-cols-3 gap-3 mb-3">
-  <div class="col-span-2 bg-white rounded-lg shadow-sm p-3 max-h-[420px] overflow-y-auto">
+  <div class="col-span-2 bg-white rounded-lg shadow-sm p-3 max-h-[480px] overflow-y-auto">
     <h2 class="text-xs font-bold text-gray-500 mb-2">Leaderboard <span class="font-normal text-gray-400">(click to inspect)</span></h2>
     <table class="w-full">
       <thead><tr class="border-b-2 border-gray-200 text-xs text-gray-400">
@@ -86,22 +86,22 @@
       <tbody id="leaderboard"></tbody>
     </table>
   </div>
-  <div class="bg-white rounded-lg shadow-sm p-3 max-h-[420px] overflow-y-auto">
-    <h2 class="text-xs font-bold text-gray-500 mb-2">Live Events</h2>
-    <div id="events" class="space-y-0.5"></div>
-  </div>
-</div>
-
-<!-- Detail + Family tree -->
-<div class="grid grid-cols-2 gap-3 mb-3">
-  <div id="detail-panel" class="bg-white rounded-lg shadow-sm p-3 min-h-[300px]">
+  <div id="detail-panel" class="bg-white rounded-lg shadow-sm p-3 max-h-[480px] overflow-y-auto">
     <h2 class="text-xs font-bold text-gray-500 mb-2">Experiment Detail</h2>
     <div id="detail-content" class="text-sm text-gray-400">Click any experiment to inspect</div>
     <div style="height:160px" class="mt-2"><canvas id="detailChart"></canvas></div>
   </div>
-  <div class="bg-white rounded-lg shadow-sm p-3 min-h-[300px]">
-    <h2 class="text-xs font-bold text-gray-500 mb-2">Family Tree</h2>
-    <svg id="familyTree" width="100%" height="260" class="bg-gray-50 rounded"></svg>
+</div>
+
+<!-- Family tree + Events -->
+<div class="grid grid-cols-2 gap-3 mb-3">
+  <div class="bg-white rounded-lg shadow-sm p-3">
+    <h2 class="text-xs font-bold text-gray-500 mb-2">Family Tree <span class="font-normal text-gray-400">(click nodes)</span></h2>
+    <svg id="familyTree" width="100%" height="300" class="bg-gray-50 rounded"></svg>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-3 max-h-[340px] overflow-y-auto">
+    <h2 class="text-xs font-bold text-gray-500 mb-2">Live Events</h2>
+    <div id="events" class="space-y-0.5"></div>
   </div>
 </div>
 
@@ -328,22 +328,121 @@ db.ref('mamba3/experiments').on('value', s=>{
   }
 });
 
-// Family tree
-function drawTree(lb,lineage){const svg=document.getElementById('familyTree');const W=svg.clientWidth||400;const H=260;svg.innerHTML='';svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
-  const exps=lb.slice(0,20);const pos={};const cols=Math.min(exps.length,10);const rows=Math.ceil(exps.length/cols);
-  exps.forEach((e,i)=>{const col=i%cols;const row=Math.floor(i/cols);pos[e.exp_id]={x:25+col*((W-50)/(cols-1||1)),y:25+row*((H-50)/(rows-1||1)),exp:e};});
-  // Lines
-  exps.forEach(e=>{const pid=e.parent_id||lineage?.[e.exp_id]?.parent;if(pid&&pos[pid]&&pos[e.exp_id]){const p=pos[pid],c=pos[e.exp_id];
-    const l=document.createElementNS('http://www.w3.org/2000/svg','line');l.setAttribute('x1',p.x);l.setAttribute('y1',p.y);l.setAttribute('x2',c.x);l.setAttribute('y2',c.y);
-    l.setAttribute('stroke','#ddd');l.setAttribute('stroke-width','1');svg.appendChild(l);}});
-  // Nodes
-  exps.forEach((e,i)=>{const p=pos[e.exp_id];if(!p)return;const g=document.createElementNS('http://www.w3.org/2000/svg','g');g.style.cursor='pointer';g.setAttribute('onclick',`showDetail('${e.exp_id}')`);
-    const r=4+(e.fresh||0)*25;const circle=document.createElementNS('http://www.w3.org/2000/svg','circle');
-    circle.setAttribute('cx',p.x);circle.setAttribute('cy',p.y);circle.setAttribute('r',r);
-    const col=e.status==='running'?(i===0?'#e67e22':'#27ae60'):'#bbb';circle.setAttribute('fill',col);circle.setAttribute('opacity','0.85');
-    const t=document.createElementNS('http://www.w3.org/2000/svg','text');t.setAttribute('x',p.x);t.setAttribute('y',p.y+r+9);
-    t.setAttribute('text-anchor','middle');t.setAttribute('fill','#999');t.setAttribute('font-size','7');t.textContent=e.exp_id.replace('exp_','');
-    g.appendChild(circle);g.appendChild(t);svg.appendChild(g);});
+// Family tree — proper hierarchical top-down layout
+function drawTree(lb, lineage) {
+  const svg = document.getElementById('familyTree');
+  const W = svg.clientWidth || 500;
+  const H = 300;
+  svg.innerHTML = '';
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  const exps = lb.slice(0, 20);
+  if (!exps.length) return;
+
+  // Build parent→children map
+  const children = {};
+  const hasParent = new Set();
+  exps.forEach(e => {
+    const pid = e.parent_id || (lineage && lineage[e.exp_id] && lineage[e.exp_id].parent);
+    if (pid) {
+      if (!children[pid]) children[pid] = [];
+      children[pid].push(e.exp_id);
+      hasParent.add(e.exp_id);
+    }
+  });
+
+  // Find roots (no parent or parent not in our set)
+  const expSet = new Set(exps.map(e => e.exp_id));
+  const roots = exps.filter(e => !hasParent.has(e.exp_id) || !expSet.has(e.parent_id || (lineage?.[e.exp_id]?.parent)));
+
+  // BFS to assign layers
+  const layers = {};
+  const queue = roots.map(r => ({ id: r.exp_id, depth: 0 }));
+  const visited = new Set();
+  while (queue.length) {
+    const { id, depth } = queue.shift();
+    if (visited.has(id)) continue;
+    visited.add(id);
+    if (!layers[depth]) layers[depth] = [];
+    layers[depth].push(id);
+    (children[id] || []).forEach(cid => {
+      if (expSet.has(cid)) queue.push({ id: cid, depth: depth + 1 });
+    });
+  }
+  // Add orphans
+  exps.forEach(e => {
+    if (!visited.has(e.exp_id)) {
+      if (!layers[0]) layers[0] = [];
+      layers[0].push(e.exp_id);
+    }
+  });
+
+  const expMap = {};
+  exps.forEach(e => { expMap[e.exp_id] = e; });
+
+  // Position nodes
+  const pos = {};
+  const maxDepth = Math.max(...Object.keys(layers).map(Number));
+  const yStep = maxDepth > 0 ? (H - 50) / maxDepth : 0;
+  Object.entries(layers).forEach(([depth, ids]) => {
+    const d = parseInt(depth);
+    const xStep = ids.length > 1 ? (W - 60) / (ids.length - 1) : 0;
+    ids.forEach((id, i) => {
+      pos[id] = {
+        x: ids.length > 1 ? 30 + i * xStep : W / 2,
+        y: 20 + d * yStep,
+      };
+    });
+  });
+
+  // Draw edges (curved)
+  exps.forEach(e => {
+    const pid = e.parent_id || (lineage && lineage[e.exp_id] && lineage[e.exp_id].parent);
+    if (pid && pos[pid] && pos[e.exp_id]) {
+      const p = pos[pid], c = pos[e.exp_id];
+      const mid = (p.y + c.y) / 2;
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', `M${p.x},${p.y} C${p.x},${mid} ${c.x},${mid} ${c.x},${c.y}`);
+      path.setAttribute('stroke', '#d0d0d0');
+      path.setAttribute('stroke-width', '1');
+      path.setAttribute('fill', 'none');
+      svg.appendChild(path);
+    }
+  });
+
+  // Draw nodes
+  exps.forEach((e, i) => {
+    const p = pos[e.exp_id];
+    if (!p) return;
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.style.cursor = 'pointer';
+    g.setAttribute('onclick', `showDetail('${e.exp_id}')`);
+
+    const r = 5 + (e.fresh || 0) * 20;
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', p.x);
+    circle.setAttribute('cy', p.y);
+    circle.setAttribute('r', r);
+    const col = e.status === 'running'
+      ? (i === 0 ? '#e67e22' : '#27ae60')
+      : '#ccc';
+    circle.setAttribute('fill', col);
+    circle.setAttribute('opacity', '0.85');
+    circle.setAttribute('stroke', i === 0 ? '#c0392b' : 'none');
+    circle.setAttribute('stroke-width', i === 0 ? '2' : '0');
+
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', p.x);
+    label.setAttribute('y', p.y + r + 10);
+    label.setAttribute('text-anchor', 'middle');
+    label.setAttribute('fill', '#888');
+    label.setAttribute('font-size', '8');
+    label.textContent = e.exp_id.replace('exp_', '') + ' ' + ((e.fresh||0)*100).toFixed(0) + '%';
+
+    g.appendChild(circle);
+    g.appendChild(label);
+    svg.appendChild(g);
+  });
 }
 </script>
 </body>
