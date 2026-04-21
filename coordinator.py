@@ -412,6 +412,9 @@ def run_coordinator(args):
     print(f"  generation_every={args.generation_every}s", flush=True)
     print(f"{'='*60}\n", flush=True)
 
+    from metrics_db import MetricsWriter
+    metrics = MetricsWriter()
+
     mgr = WorkerManager(runs_dir=args.runs_dir)
 
     # Auto-detect max workers if not set
@@ -460,8 +463,18 @@ def run_coordinator(args):
                   f"d={cfg.get('d_model', '?')}  [{method}]  "
                   f"[{r['status']}]", flush=True)
 
-        # Check GPU usage + update dashboard
+        # Check GPU usage + log + update dashboard
         gpu_pct, mem_pct = get_gpu_usage()
+        try:
+            import subprocess
+            out = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=memory.used,memory.total",
+                 "--format=csv,noheader,nounits"], text=True).strip()
+            mem_used, mem_total = [float(x) for x in out.split(",")]
+        except Exception:
+            mem_used, mem_total = 0, 80000
+        metrics.log_gpu(gpu_pct, mem_pct, mem_used, mem_total,
+                       len(running), len(results))
         write_dashboard(results, generation, gpu_pct, mem_pct)
 
         # ── Genetic evolution ──
@@ -505,6 +518,11 @@ def run_coordinator(args):
                 child_cfg = mutate_config(parent_cfg)
                 child_id = mgr.spawn(child_cfg)
 
+                metrics.log_event("evolve", child_id,
+                    f"child of {best['exp_id']}, replaced {worst['exp_id']}")
+                metrics.log_event("pause", worst["exp_id"],
+                    f"paused for evolution (fresh={worst.get('best_fresh',0):.1%})")
+                metrics.update_status(worst["exp_id"], "paused")
                 print(f"  🧬 Evolution: paused {worst['exp_id']} "
                       f"(fresh={worst.get('best_fresh', 0):.1%}), "
                       f"spawned {child_id} from {best['exp_id']} "

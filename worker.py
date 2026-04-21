@@ -21,6 +21,7 @@ from collections import defaultdict
 from progressive_model import ProgressiveModel, ByteTokenizer, VOCAB_SIZE, PAD
 from grokking import stable_cross_entropy, PerpGradOptimizer
 from generators.teacher import AdaptiveTeacher
+from metrics_db import MetricsWriter
 
 
 def load_config(path):
@@ -72,6 +73,12 @@ def train(args):
     # Teacher
     teacher = AdaptiveTeacher(sequential_unlock=True)
     tok = ByteTokenizer()
+
+    # Metrics DB
+    db_path = str(run_dir.parent.parent / "metrics.db")
+    metrics = MetricsWriter(db_path)
+    exp_id = run_dir.name
+    metrics.register_experiment(exp_id, cfg, model.total_params())
 
     # Resume if checkpoint exists
     ckpt_path = run_dir / "checkpoint.pt"
@@ -201,8 +208,20 @@ def train(args):
         best_fresh = max(best_fresh, fresh)
 
         # Update teacher
+        prev_mastery_count = len(teacher.mastery_log)
         teacher.set_step(cycle * steps_per_cycle)
         teacher.observe(type_accs)
+
+        # Log mastery events
+        if len(teacher.mastery_log) > prev_mastery_count:
+            for entry in teacher.mastery_log[prev_mastery_count:]:
+                metrics.log_event("mastery", exp_id,
+                    f"{entry['task']} mastered in {entry['steps_to_master']} steps")
+
+        # Log unlock events
+        for t in teacher.unlocked_tasks:
+            if t not in type_accs:  # newly unlocked
+                metrics.log_event("unlock", exp_id, f"{t} unlocked")
 
         # Log
         parity = type_accs.get("parity", 0)
@@ -219,7 +238,14 @@ def train(args):
             log.write(teacher.get_learning_report() + "\n")
         log.flush()
 
-        # Write metrics for coordinator
+        # Write to SQLite timeseries
+        metrics.log_cycle(exp_id, cycle, cycle_loss, fresh, best_fresh,
+                         elapsed_s=elapsed)
+        metrics.log_tasks(exp_id, cycle, type_accs)
+        if cycle % 10 == 0:
+            metrics.log_teacher(exp_id, cycle, teacher)
+
+        # Write metrics JSON for coordinator (legacy)
         write_metrics(run_dir, {
             "cycle": cycle,
             "loss": cycle_loss,
