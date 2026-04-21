@@ -61,6 +61,8 @@ SEARCH_CONFIGS = [
     ExperimentConfig(d_model=128, d_state=16, headdim=16, n_kernel_layers=1, batch_size=512),
     ExperimentConfig(d_model=32,  d_state=8,  headdim=8,  n_kernel_layers=2, batch_size=2048),
     ExperimentConfig(d_model=64,  d_state=8,  headdim=8,  n_kernel_layers=1, batch_size=2048),
+    # Grokking experiment: high weight decay + no PerpGrad, classic grokking recipe
+    ExperimentConfig(d_model=64,  d_state=16, headdim=16, n_kernel_layers=1, batch_size=128, lr=1e-3, weight_decay=0.1),
 ]
 
 
@@ -171,7 +173,10 @@ class Experiment:
         self.opt = torch.optim.AdamW(
             self.model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
         )
-        self.perp = PerpGradOptimizer(self.model)
+        # Use PerpGrad only when weight_decay is 0 (paper approach)
+        # Grokking experiment uses weight_decay instead
+        self.use_perp = cfg.weight_decay == 0.0
+        self.perp = PerpGradOptimizer(self.model) if self.use_perp else None
         self.n_params = self.model.total_params()
 
         # Tracking
@@ -206,7 +211,8 @@ class Experiment:
 
             self.opt.zero_grad(set_to_none=True)
             loss.backward()
-            self.perp.project()
+            if self.perp:
+                self.perp.project()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.opt.step()
             last_loss = loss.item()
