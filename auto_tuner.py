@@ -444,6 +444,10 @@ def run_tuner(args):
                     torch.cuda.empty_cache() if device == "cuda" else None
                     print(f"  ✗ Pruned {e.cfg.name()} (fresh={f:.1%})", flush=True)
 
+        # Update dashboard
+        from dashboard import generate_dashboard
+        generate_dashboard(exps, teacher, cycle + 1)
+
         # Record results for mastered tasks
         for exp, fresh, type_accs in results:
             if not exp.alive:
