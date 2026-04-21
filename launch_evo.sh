@@ -20,10 +20,8 @@ while true; do
     EXIT_CODE=$?
     echo "[$(date)] Coordinator exited with code $EXIT_CODE" >> coordinator.log
 
-    if [ $EXIT_CODE -eq 0 ]; then
-        echo "[$(date)] Clean exit. Stopping."
-        break
-    fi
+    # Always restart — never stop the watchdog
+    # The only way to stop is to kill the watchdog itself
 
     echo "[$(date)] Coordinator crashed. Restarting in 5s..." >> coordinator.log
     sleep 5
