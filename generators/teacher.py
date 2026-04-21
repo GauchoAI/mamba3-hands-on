@@ -26,17 +26,26 @@ class TaskConfig:
     accuracy: float = 0.0
     history: list = field(default_factory=list)
     stagnant_count: int = 0     # how many evals with no improvement
+    # Samples-to-mastery tracking
+    unlock_step: int = 0        # global step when this task was unlocked
+    mastery_step: int = 0       # global step when first hit MASTERY_THRESHOLD
+    examples_seen: int = 0      # total examples of this type seen
+    mastered: bool = False       # has it ever hit mastery?
 
 
 # Maps difficulty [0, 1] to generator kwargs via linear interpolation
-# Each entry: { param: (min_val, max_val) }
+# Each entry: { param: (min_val_at_0, max_val_at_1) }
 DIFFICULTY_RANGES = {
-    "sequence_completion": {
-        "max_alpha":   (3, 20),
-        "max_period":  (2, 6),
-        "min_repeats": (3, 2),
-        "max_repeats": (6, 4),
+    # Stage 0: binary foundations
+    "parity": {
+        "min_len": (3, 4),
+        "max_len": (4, 12),
     },
+    "binary_pattern_next": {
+        "min_repeats": (3, 2),
+        "max_repeats": (5, 4),
+    },
+    # Stage 1: comparison
     "same_different": {
         "max_val": (3, 200),
     },
@@ -45,10 +54,12 @@ DIFFICULTY_RANGES = {
         "min_len": (3, 6),
         "max_len": (4, 12),
     },
-    "repeat_count": {
-        "max_alpha": (2, 10),
-        "min_len":   (3, 6),
-        "max_len":   (4, 14),
+    # Stage 2: pattern detection
+    "sequence_completion": {
+        "max_alpha":   (3, 20),
+        "max_period":  (2, 6),
+        "min_repeats": (3, 2),
+        "max_repeats": (6, 4),
     },
     "pattern_period": {
         "max_alpha":   (3, 12),
@@ -56,6 +67,22 @@ DIFFICULTY_RANGES = {
         "min_repeats": (3, 2),
         "max_repeats": (5, 3),
     },
+    "run_length_next": {
+        "max_run": (2, 5),
+        "max_val": (2, 5),
+    },
+    # Stage 3: sequence memory
+    "mirror_detection": {
+        "max_val": (3, 20),
+        "min_len": (3, 5),
+        "max_len": (3, 9),
+    },
+    "repeat_count": {
+        "max_alpha": (2, 10),
+        "min_len":   (3, 6),
+        "max_len":   (4, 14),
+    },
+    # Stage 4: arithmetic reasoning
     "arithmetic_next": {
         "max_start": (5, 50),
         "max_step":  (2, 20),
@@ -67,11 +94,17 @@ DIFFICULTY_RANGES = {
         "min_len":  (3, 4),
         "max_len":  (3, 6),
     },
-    "mirror_detection": {
-        "max_val": (3, 20),
-        "min_len": (3, 5),
-        "max_len": (3, 9),
+    "alternating_next": {
+        "max_val": (5, 15),
     },
+    # Stage 5: logic
+    "logic_gate": {
+        "max_inputs": (2, 2),   # stays simple — gates are gates
+    },
+    "logic_chain": {
+        "max_depth": (1, 4),    # 1 gate → 4 gates chained
+    },
+    "modus_ponens": {},         # no difficulty scaling — it's conceptual
 }
 
 MASTERY_THRESHOLD = 0.90   # must hit this on FRESH to advance
@@ -79,17 +112,68 @@ ADVANCE_RATE = 0.05        # how much difficulty increases per mastery
 RETREAT_RATE = 0.02        # how much to back off if struggling
 STRUGGLING_THRESHOLD = 0.40
 
-# Tasks unlock in this order. Each must be mastered before the next is introduced.
-# Within each task, difficulty scales from 0→1 continuously.
+# Tasks unlock in this order. Each builds on capabilities from the previous.
+# The curriculum is designed so each task teaches a skill the next one needs.
+#
+# Stage 0 — Binary foundations (teaches: detect patterns in binary streams)
+#   The simplest possible patterns. Like learning to see.
+#   SSM state learns to track binary state / parity.
+#   parity:              0 1 1 0 1 → DIFF (odd) or SAME (even)
+#   binary_pattern_next: 0 0 1 1 0 0 1 1 → 0 (detect binary cycle)
+#
+# Stage 1 — Comparison (teaches: attend to values, compare)
+#   SSM learns to hold values in state and compare them.
+#   same_different:     compare two values → SAME/DIFF
+#   odd_one_out:        compare N values, find the outlier
+#
+# Stage 2 — Pattern detection (teaches: detect repetition, periodicity)
+#   SSM learns to recognize repeating structure in sequences.
+#   Registers could store the detected pattern for reuse.
+#   sequence_completion: A B A B A ? → B (detect the cycle, predict next)
+#   pattern_period:      1 2 3 1 2 3 → period=3 (count the cycle length)
+#   run_length_next:     0 1 1 2 2 2 ? → 3 (detect the run-length pattern)
+#
+# Stage 3 — Sequence memory (teaches: remember and compare across positions)
+#   Requires holding the full sequence in structured memory.
+#   Registers/spikes should fire to store key positions.
+#   mirror_detection:   1 2 3 2 1 → MIRROR (compare first half to reversed second)
+#   repeat_count:       A B A B A → count(A)=3 (accumulate count in register)
+#
+# Stage 4 — Arithmetic reasoning (teaches: compute, not just compare)
+#   Requires the step function to perform actual computation.
+#   arithmetic_next:    2 5 8 11 ? → 14 (detect step, apply it)
+#   geometric_next:     2 6 18 ? → 54 (detect ratio, apply it)
+#   alternating_next:   1 10 2 9 3 8 ? → 4 (two interleaved sequences)
+#
+# Stage 5 — Logic (teaches: boolean reasoning, circuit evaluation)
+#   Modus ponens, truth tables, gate evaluation.
+#   This is where it starts to truly reason.
+#   logic_gate:         AND 1 0 → 0, OR 1 0 → 1, XOR 1 1 → 0
+#   logic_chain:        AND 1 1 OR 0 → OR(AND(1,1), 0) = 1
+#   modus_ponens:       IF 1 THEN 1 → 1 (p→q, p, therefore q)
+#
 TASK_ORDER = [
-    "same_different",         # simplest: compare two values
-    "mirror_detection",       # compare sequence to its reverse
-    "odd_one_out",            # find the outlier
-    "sequence_completion",    # predict next in repeating pattern
-    "pattern_period",         # identify the period
-    "repeat_count",           # count occurrences
-    "arithmetic_next",        # arithmetic reasoning
-    "geometric_next",         # multiplicative reasoning
+    # Stage 0: binary foundations
+    "parity",
+    "binary_pattern_next",
+    # Stage 1: comparison
+    "same_different",
+    "odd_one_out",
+    # Stage 2: pattern detection
+    "sequence_completion",
+    "pattern_period",
+    "run_length_next",
+    # Stage 3: sequence memory
+    "mirror_detection",
+    "repeat_count",
+    # Stage 4: arithmetic reasoning
+    "arithmetic_next",
+    "geometric_next",
+    "alternating_next",
+    # Stage 5: logic
+    "logic_gate",
+    "logic_chain",
+    "modus_ponens",
 ]
 
 
@@ -103,9 +187,12 @@ class AdaptiveTeacher:
         self.sequential_unlock = sequential_unlock
         self.task_configs = {}
         self.unlocked_tasks = set()
+        self.global_step = 0          # track training steps
+        self.mastery_log = []         # list of (task, steps_to_master, examples_to_master)
+        self.boss_mode = False        # final boss activated?
+        self.boss_results = {}        # unseen task results
 
         if sequential_unlock:
-            # Start with only the first task
             first = TASK_ORDER[0]
             self.task_configs[first] = TaskConfig()
             self.unlocked_tasks.add(first)
@@ -124,6 +211,10 @@ class AdaptiveTeacher:
             params[param] = int(round(val))
         return params
 
+    def set_step(self, step):
+        """Update global step counter (call from training loop)."""
+        self.global_step = step
+
     def _try_unlock_next(self):
         """Unlock the next task if all current tasks are mastered at difficulty >= 0.3."""
         if not self.sequential_unlock:
@@ -139,10 +230,18 @@ class AdaptiveTeacher:
         for task_type in TASK_ORDER:
             if task_type not in self.unlocked_tasks:
                 self.unlocked_tasks.add(task_type)
-                self.task_configs[task_type] = TaskConfig(weight=1.5)  # extra practice for new task
-                print(f"  🔓 Unlocked: {task_type} "
+                self.task_configs[task_type] = TaskConfig(
+                    weight=1.5, unlock_step=self.global_step
+                )
+                print(f"  🔓 Unlocked: {task_type} at step {self.global_step} "
                       f"(all previous tasks mastered at diff≥0.3)", flush=True)
                 return
+
+        # All tasks unlocked and mastered → final boss!
+        if not self.boss_mode:
+            self.boss_mode = True
+            print(f"\n  🏆 ALL TASKS MASTERED — FINAL BOSS MODE at step {self.global_step}",
+                  flush=True)
 
     def observe(self, per_type_accs: dict):
         """Update configs based on FRESH per-type accuracies."""
@@ -162,6 +261,23 @@ class AdaptiveTeacher:
                 cfg.difficulty = min(cfg.difficulty + ADVANCE_RATE, 1.0)
                 cfg.weight = max(cfg.weight * 0.7 + 0.7 * 0.3, 0.5)  # reduce weight
                 cfg.stagnant_count = 0
+
+                # Record first mastery
+                if not cfg.mastered:
+                    cfg.mastered = True
+                    cfg.mastery_step = self.global_step
+                    steps_to_master = self.global_step - cfg.unlock_step
+                    self.mastery_log.append({
+                        "task": task_type,
+                        "unlock_step": cfg.unlock_step,
+                        "mastery_step": self.global_step,
+                        "steps_to_master": steps_to_master,
+                        "examples_to_master": cfg.examples_seen,
+                        "task_index": len(self.mastery_log),
+                    })
+                    print(f"  ★ {task_type}: MASTERED in {steps_to_master} steps "
+                          f"({cfg.examples_seen:,} examples)", flush=True)
+
                 if cfg.difficulty > old_diff:
                     print(f"  ↑ {task_type}: difficulty {old_diff:.2f}→{cfg.difficulty:.2f} "
                           f"(mastered at {acc:.0%})", flush=True)
@@ -187,15 +303,44 @@ class AdaptiveTeacher:
 
     def get_status(self) -> str:
         lines = []
-        for task_type, cfg in sorted(self.task_configs.items()):
+        for task_type in TASK_ORDER:
+            if task_type not in self.task_configs:
+                lines.append(f"    🔒 {task_type}: locked")
+                continue
+            cfg = self.task_configs[task_type]
             d = cfg.difficulty
             w = cfg.weight
             a = cfg.accuracy
             status = "✓" if a >= MASTERY_THRESHOLD else ("…" if a >= STRUGGLING_THRESHOLD else "✗")
             params = self._interpolate_params(task_type, d)
             param_str = " ".join(f"{k}={v}" for k, v in sorted(params.items()))
+            mastery_info = ""
+            if cfg.mastered:
+                steps = cfg.mastery_step - cfg.unlock_step
+                mastery_info = f"  mastered_in={steps}steps"
             lines.append(f"    {status} {task_type}: acc={a:.0%}  diff={d:.2f}  "
-                        f"w={w:.1f}  [{param_str}]")
+                        f"w={w:.1f}{mastery_info}  [{param_str}]")
+        if self.boss_mode:
+            lines.append(f"    🏆 BOSS MODE ACTIVE")
+        return "\n".join(lines)
+
+    def get_learning_report(self) -> str:
+        """Report on learning-to-learn: do later tasks take fewer examples?"""
+        if not self.mastery_log:
+            return "  No tasks mastered yet."
+        lines = ["  --- Learning-to-Learn Report ---"]
+        for entry in self.mastery_log:
+            lines.append(f"    Task {entry['task_index']+1}: {entry['task']}"
+                        f"  steps={entry['steps_to_master']}"
+                        f"  examples={entry['examples_to_master']:,}")
+        if len(self.mastery_log) >= 2:
+            first = self.mastery_log[0]["steps_to_master"]
+            last = self.mastery_log[-1]["steps_to_master"]
+            if first > 0:
+                ratio = last / first
+                trend = "accelerating!" if ratio < 0.7 else (
+                    "improving" if ratio < 1.0 else "no acceleration yet")
+                lines.append(f"    Ratio (last/first): {ratio:.2f} — {trend}")
         return "\n".join(lines)
 
     def generate(self, count: int) -> list:
@@ -211,7 +356,26 @@ class AdaptiveTeacher:
             "arithmetic_next": gen0.gen_arithmetic_next,
             "geometric_next": gen0.gen_geometric_next,
             "mirror_detection": gen0.gen_mirror_detection,
+            "parity": gen0.gen_parity,
+            "binary_pattern_next": gen0.gen_binary_pattern_next,
+            "run_length_next": gen0.gen_run_length_next,
+            "alternating_next": gen0.gen_alternating_next,
+            "logic_gate": gen0.gen_logic_gate,
+            "logic_chain": gen0.gen_logic_chain,
+            "modus_ponens": gen0.gen_modus_ponens,
         }
+
+        # In boss mode, mix in unseen tasks
+        if self.boss_mode:
+            try:
+                from generators.boss_tasks import BOSS_GENERATORS
+                for name, fn in BOSS_GENERATORS.items():
+                    TASK_TO_FN[name] = fn
+                    if name not in self.task_configs:
+                        self.task_configs[name] = TaskConfig(weight=2.0)
+                        self.unlocked_tasks.add(name)
+            except ImportError:
+                pass  # boss tasks not yet defined
 
         tasks = []
         weights = []
@@ -220,6 +384,8 @@ class AdaptiveTeacher:
                 tasks.append(task_type)
                 weights.append(cfg.weight)
 
+        # Count examples per type
+        type_counts = {}
         examples = []
         for _ in range(count):
             task_type = random.choices(tasks, weights=weights, k=1)[0]
@@ -233,5 +399,11 @@ class AdaptiveTeacher:
                 ex = fn()
 
             examples.append(ex)
+            type_counts[task_type] = type_counts.get(task_type, 0) + 1
+
+        # Update examples_seen
+        for task_type, n in type_counts.items():
+            if task_type in self.task_configs:
+                self.task_configs[task_type].examples_seen += n
 
         return examples
