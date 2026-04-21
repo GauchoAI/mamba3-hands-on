@@ -292,6 +292,10 @@ def train(args):
     current_lr = base_lr
     global_step = 0
 
+    # Adaptive teacher
+    from generators.teacher import AdaptiveTeacher
+    teacher = AdaptiveTeacher()
+
     # Cycle parameters
     learn_steps = args.cycle_learn     # steps at high LR (learning)
     digest_steps = args.cycle_digest   # steps at low LR (digesting)
@@ -302,14 +306,14 @@ def train(args):
           flush=True)
     print(f"Gap throttle: >{gap_throttle:.0%} → reduce LR", flush=True)
     print(f"Target: {args.steps} total steps, ~{args.steps // cycle_len} cycles", flush=True)
+    print(f"Adaptive teacher: ON", flush=True)
     print(flush=True)
 
     while global_step < args.steps:
-        # ── Regenerate training data each cycle ──
+        # ── Regenerate training data each cycle via teacher ──
         cycle_num = global_step // cycle_len + 1
-        print(f"=== Cycle {cycle_num} — regenerating training data ===", flush=True)
-        import generators.level0_patterns as gen0
-        raw = gen0.generate_dataset(len(dataset.examples))
+        print(f"=== Cycle {cycle_num} — teacher generating adaptive data ===", flush=True)
+        raw = teacher.generate(len(dataset.examples))
         dataset.examples = []
         for ex in raw:
             inp_tokens = [SPECIAL_TOKENS["<BOS>"]] + tokenize(ex["input"]) + [SPECIAL_TOKENS["<SEP>"]]
@@ -392,6 +396,10 @@ def train(args):
                     type_accs = evaluate_by_type(model, dataset)
                     for t, a in type_accs.items():
                         print(f"    {t}: {a:.0%}", flush=True)
+                    # Feed back to teacher
+                    teacher.observe(type_accs)
+                    print("  --- teacher status ---", flush=True)
+                    print(teacher.get_status(), flush=True)
 
     # Final evaluation
     print("\n--- Final evaluation (fresh data) ---", flush=True)
