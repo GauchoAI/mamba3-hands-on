@@ -941,19 +941,83 @@ The brain of a fly, becoming the brain of a human.
 
 ---
 
+## Entry 15 — First 100K run complete, overnight launched
+
+### First run results (100K steps, plain vs augmented)
+
+**Plain model timeline:**
+```
+Step 2K:    parity MASTERED (100% fresh, 30K examples)
+Step 14K:   binary_pattern_next MASTERED (100%, 13K examples — 2x faster!)
+Step 24K:   same_different UNLOCKED (was 49% before any training — transfer!)
+Step 48K:   same_different peaked at 75%
+Step 62K:   parity hit difficulty 1.0 (length 12, still 100%)
+Step 100K:  parity 100%, binary_pattern 100%, same_different ~57-70%
+```
+
+same_different never hit 90% mastery in 100K steps. The model learned
+to compare numbers 0-3 at ~70% accuracy but couldn't break through.
+The transition from binary (0/1) to numeric reasoning is the current
+bottleneck.
+
+**Augmented model: failed**
+```
+Step 100K:  train=70%, fresh=3.8%, parity only 38%
+            Spikes: reg=0.74, mem=0.23
+            Wildly unstable — loss swinging between 0.3 and 1.8
+```
+
+The augmented model never stabilized. Registers and memory added
+complexity without providing useful structure for these tasks. The
+plain model dramatically outperformed it. The augmented architecture
+needs fundamental rethinking — possibly interleaving registers with
+the scan rather than post-processing, or only activating registers
+at Stage 3+ when sequence memory is actually needed.
+
+**Key observations from the 100K run:**
+
+1. **Transfer is real.** same_different was at 49% before any training,
+   purely from parity/binary transfer. sequence_completion and
+   alternating_next also showed small transfer (6%).
+
+2. **Catastrophic forgetting is temporary.** Parity dropped to 43%
+   around step 38K while learning same_different, but recovered to
+   100% by step 62K. The teacher's retreat mechanism works, just slowly.
+
+3. **Binary → numeric is the hardest transition.** The model spent 24K
+   steps in a pure binary world. Moving to numbers 0-3 required
+   learning entirely new token representations.
+
+4. **Learning to learn (partial).** Task 1: 30K examples. Task 2: 13K
+   examples. Half the examples needed. But the step count was the same
+   (2000 steps) because task 2 shared the batch with task 1.
+
+### Overnight run launched
+
+Resumed from the 100K checkpoint at step 100K. 600K total steps (~10
+hours). The teacher restarted fresh (old code didn't save teacher
+state) but the model weights carry all learned representations. Parity
+should re-master instantly.
+
+Added checkpoint resume support: model weights + optimizer state +
+teacher state + grokfast EMA all saved and restored. Future runs will
+have seamless continuation.
+
+---
+
 ## Open threads
 
-- **Curriculum run in progress.** H100, 100K steps, grokking-aware.
-  Parity mastered, binary_pattern_next mastered, climbing difficulty.
-- **Samples-to-mastery tracking.** Task 1: 30K examples. Task 2: 13K
-  examples. Watching for acceleration.
-- **Transfer learning.** same_different at 60% without training = free
-  transfer. Track which tasks benefit from prior learning.
-- **Augmented model.** Once plain model advances through curriculum,
-  re-run with registers/spikes. Hypothesis: registers help at Stage 3+
-  (sequence memory tasks that need structured storage).
-- **Few-shot eval.** After curriculum, test on completely novel task
-  types with only 2-3 in-context examples.
+- **Overnight run in progress.** 600K steps, ~10 hours. Resumed from
+  100K plain checkpoint. Monitoring every 20 minutes.
+- **same_different breakthrough.** Needs to crack 90%. The grokking
+  transition for numeric comparison hasn't happened yet.
+- **Samples-to-mastery.** Task 1: 30K examples. Task 2: 13K examples.
+  Watch if task 3 (same_different) continues the acceleration.
+- **Augmented model.** Failed at 100K steps. Needs architectural
+  rethink — activate registers only for Stage 3+ tasks, or interleave
+  with the scan.
+- **Few-shot eval.** After curriculum, test on novel task types with
+  2-3 in-context examples.
 - **Language transition.** Switch to byte-level LM, train on reasoning
   traces. The curriculum checkpoint becomes the foundation.
 - **Formal math.** SymPy-generated algebraic traces (BOOTSTRAP.md L5).
