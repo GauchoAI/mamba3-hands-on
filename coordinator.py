@@ -625,8 +625,8 @@ def _run_generation(mgr, metrics, args, generation, max_workers):
     if len(running_results) < 2:
         return
 
-    at_capacity = mem_pct > 90 or len(running) >= max_workers
-    has_headroom = mem_pct < 85 and gpu_pct < 90
+    at_capacity = mem_pct > 75 or len(running) >= max_workers
+    has_headroom = mem_pct < 65 and gpu_pct < 90
 
     print(f"  GPU: {gpu_pct:.0f}%  VRAM: {mem_pct:.0f}%  "
           f"{'at capacity' if at_capacity else f'headroom ({100-mem_pct:.0f}% VRAM free)'}",
