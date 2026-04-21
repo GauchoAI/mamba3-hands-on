@@ -236,8 +236,10 @@ class Experiment:
 
         self.cycle += 1
         lr = self.opt.param_groups[0]["lr"]
-        self.log.write(f"[Cycle {self.cycle}] loss={last_loss:.4f}  lr={lr:.1e}  "
-                       f"wd={self.cfg.weight_decay}  perp={'ON' if self.use_perp else 'OFF'}\n")
+        method = "PerpGrad" if self.use_perp else f"wd={self.cfg.weight_decay}"
+        elapsed = (time.time() - t0) if 't0' in dir() else 0
+        self.log.write(f"  step {self.cycle * steps:5d}  loss={last_loss:.4f}  "
+                       f"lr={lr:.1e}  [{method}]  {self.n_params:,}p\n")
         self.log.flush()
         return last_loss
 
@@ -281,11 +283,13 @@ class Experiment:
         self.best_acc = max(self.best_acc, fresh)
         self.history.append((self.cycle, fresh, type_accs))
 
-        # Log detailed results
-        self.log.write(f"  EVAL fresh={fresh:.1%}  best={self.best_acc:.1%}\n")
+        # Log in curriculum style
+        self.log.write(f"  fresh={fresh:.1%}  best={self.best_acc:.1%}  "
+                       f"gap={1.0 - fresh:+.1%}\n")
         for t, a in sorted(type_accs.items()):
             if a > 0:
-                self.log.write(f"    {t}: {a:.0%}\n")
+                status = "✓" if a >= 0.90 else ("…" if a >= 0.40 else "✗")
+                self.log.write(f"    {status} {t}: {a:.0%}\n")
         self.log.flush()
 
         return fresh, type_accs

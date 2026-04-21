@@ -76,9 +76,28 @@ def _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir, all
 
     # Build datasets for each chart (fresh + one per discovered task)
     chart_keys = ["fresh"] + list(all_tasks)
-    chart_titles = {"fresh": "Overall Fresh Accuracy (%)"}
-    for t in all_tasks:
-        chart_titles[t] = f"{t.replace('_', ' ').title()} (%)"
+    # Clear, descriptive chart titles
+    TASK_DESCRIPTIONS = {
+        "fresh": "Overall Generalization (fresh data, all tasks)",
+        "parity": "Stage 0: Parity — count 1s mod 2",
+        "binary_pattern_next": "Stage 0: Binary Patterns — detect cycles in 0/1 streams",
+        "same_different": "Stage 1: Same/Different — compare two values",
+        "odd_one_out": "Stage 1: Odd One Out — find the outlier",
+        "sequence_completion": "Stage 2: Sequence Completion — predict next in pattern",
+        "pattern_period": "Stage 2: Pattern Period — identify cycle length",
+        "run_length_next": "Stage 2: Run Length — detect run-length patterns",
+        "mirror_detection": "Stage 3: Mirror Detection — palindrome (needs memory)",
+        "repeat_count": "Stage 3: Repeat Count — accumulate counts (needs registers)",
+        "arithmetic_next": "Stage 4: Arithmetic — detect and apply step",
+        "geometric_next": "Stage 4: Geometric — detect and apply ratio",
+        "alternating_next": "Stage 4: Alternating — two interleaved sequences",
+        "logic_gate": "Stage 5: Logic Gates — AND/OR/XOR/NOT",
+        "logic_chain": "Stage 5: Logic Chains — chained gate evaluation",
+        "modus_ponens": "Stage 5: Modus Ponens — propositional logic",
+    }
+    chart_titles = {}
+    for key in chart_keys:
+        chart_titles[key] = TASK_DESCRIPTIONS.get(key, key.replace("_", " ").title())
 
     all_datasets = {}
     for key in chart_keys:
@@ -173,7 +192,14 @@ def _write_html(exp_data, teacher_lines, learning_report, cycle, output_dir, all
   {teacher_html}
 </div>
 
-{f'<div class="bg-blue-50 p-4 rounded mb-4 font-mono text-sm"><pre>{learning_report}</pre></div>' if learning_report else ''}
+{f"""<h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Learning to Learn</h2>
+<div class="bg-blue-50 p-4 rounded mb-4 font-mono text-sm whitespace-pre-wrap">{learning_report}</div>""" if learning_report else ''}
+
+<h2 class="text-lg font-bold mb-2 border-b border-gray-200 pb-1">Curriculum Progress</h2>
+<div class="grid grid-cols-5 gap-2 mb-8">
+{''.join(f"""<div class="text-center p-2 rounded {'bg-green-100 border border-green-300' if '✓' in line else 'bg-gray-50 border border-gray-200' if '🔒' not in line else 'bg-gray-100 border border-gray-200 opacity-50'}">
+  <div class="text-xs font-mono">{line.strip()[:50]}</div>
+</div>""" for line in teacher_lines if line.strip())}</div>
 
 <script>
 const allData = {json.dumps(all_datasets)};
