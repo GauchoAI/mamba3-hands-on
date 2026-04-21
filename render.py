@@ -197,15 +197,55 @@ def render_html(reader: MetricsReader, output="index.html"):
                        f'{icon} <b>{e.get("exp_id","")}</b> '
                        f'{e.get("details","")}</div>\n')
 
-    # Teacher
-    teacher_html = "No teacher data yet"
+    # Best per task (from actual data, not just teacher state)
+    all_task_data = reader.get_all_task_latest()
+    best_per_task = {}
+    for t in all_task_data:
+        tt = t["task_type"]
+        if tt not in best_per_task or t["accuracy"] > best_per_task[tt][1]:
+            best_per_task[tt] = (t["exp_id"], t["accuracy"])
+
+    # Teacher + per-task summary
+    teacher_html = ""
+    # Show best scores per task first
+    all_tasks_ordered = ["parity", "binary_pattern_next", "same_different", "odd_one_out",
+                         "sequence_completion", "pattern_period", "run_length_next",
+                         "mirror_detection", "repeat_count", "arithmetic_next",
+                         "geometric_next", "alternating_next", "logic_gate",
+                         "logic_chain", "modus_ponens"]
+    for task in all_tasks_ordered:
+        best_acc = best_per_task.get(task, (None, 0))[1]
+        best_eid = best_per_task.get(task, ("—", 0))[0]
+        stage = STAGE_MAP.get(task, "?")
+        if best_acc >= 0.9:
+            icon, cls = "✅", "text-green-700"
+        elif best_acc > 0:
+            icon, cls = "🔄", "text-yellow-700"
+        else:
+            icon, cls = "🔒", "text-gray-400"
+        acc_str = f"{best_acc:.0%} ({best_eid})" if best_acc > 0 else "locked"
+        teacher_html += f'<div class="text-xs py-0.5 {cls}">{icon} S{stage} <b>{task}</b>: {acc_str}</div>'
+
+    # Learning to learn — from mastery events
+    mastery_events = reader.get_events("mastery", limit=20)
     learning_html = ""
+    if mastery_events:
+        learning_html = '<table class="text-xs w-full">'
+        learning_html += '<tr class="border-b font-bold"><td>Time</td><td>Experiment</td><td>Details</td></tr>'
+        for e in mastery_events:
+            ts = datetime.fromtimestamp(e["timestamp"]).strftime("%H:%M")
+            learning_html += (f'<tr class="border-b border-gray-100">'
+                             f'<td class="tabular-nums">{ts}</td>'
+                             f'<td class="font-mono">{e.get("exp_id","")}</td>'
+                             f'<td>{e.get("details","")}</td></tr>')
+        learning_html += '</table>'
+
     if teacher:
-        teacher_html = teacher.get("status_text", "").replace("\n", "<br>\n")
         ml = json.loads(teacher.get("mastery_log", "[]"))
         if ml:
+            learning_html += '<div class="mt-2 pt-2 border-t">'
             learning_html += '<table class="text-xs w-full">'
-            learning_html += '<tr class="border-b font-bold"><td>Task</td><td>Steps</td><td>Examples</td></tr>'
+            learning_html += '<tr class="font-bold"><td>Task</td><td>Steps</td><td>Examples</td></tr>'
             for entry in ml:
                 learning_html += (f'<tr class="border-b border-gray-100">'
                                  f'<td>{entry["task"]}</td>'
@@ -215,7 +255,10 @@ def render_html(reader: MetricsReader, output="index.html"):
                 ratio = ml[-1]["steps_to_master"] / max(ml[0]["steps_to_master"], 1)
                 trend = "🚀 accelerating" if ratio < 0.7 else ("📈 improving" if ratio < 1 else "→ stable")
                 learning_html += f'<tr><td colspan="3" class="pt-1 font-bold">Ratio: {ratio:.2f} {trend}</td></tr>'
-            learning_html += '</table>'
+            learning_html += '</table></div>'
+
+    if not learning_html:
+        learning_html = '<span class="text-xs text-gray-400">No mastery events yet</span>'
 
     # Curriculum progress bar
     all_tasks_ordered = ["parity", "binary_pattern_next", "same_different", "odd_one_out",
@@ -341,11 +384,11 @@ def render_html(reader: MetricsReader, output="index.html"):
 <!-- Teacher + Learning -->
 <div class="grid grid-cols-2 gap-3 mb-3">
   <div class="bg-white rounded-lg shadow-sm p-3">
-    <h2 class="text-xs font-bold text-gray-500 mb-2">Teacher Status</h2>
+    <h2 class="text-xs font-bold text-gray-500 mb-2">Curriculum Progress</h2>
     <div class="font-mono text-xs leading-relaxed max-h-48 overflow-y-auto">{teacher_html}</div>
   </div>
   <div class="bg-white rounded-lg shadow-sm p-3">
-    <h2 class="text-xs font-bold text-gray-500 mb-2">Learning to Learn</h2>
+    <h2 class="text-xs font-bold text-gray-500 mb-2">Mastery Events & Learning to Learn</h2>
     <div class="max-h-48 overflow-y-auto">{learning_html or '<span class="text-xs text-gray-400">No tasks mastered yet</span>'}</div>
   </div>
 </div>
@@ -405,14 +448,64 @@ def render_md(reader: MetricsReader, output="dashboard.md"):
     mem_pct = gpu_history[-1]["mem_pct"] if gpu_history else 0
     n_running = sum(1 for e in experiments if e["status"] == "running")
 
+    now = datetime.now().strftime('%H:%M:%S')
+    n_total = len(experiments)
+    n_paused = sum(1 for e in experiments if e["status"] == "paused")
+
+    # Best per task
+    all_task_data = reader.get_all_task_latest()
+    best_per_task = {}
+    for t in all_task_data:
+        tt = t["task_type"]
+        if tt not in best_per_task or t["accuracy"] > best_per_task[tt][1]:
+            best_per_task[tt] = (t["exp_id"], t["accuracy"])
+
+    # Winning config analysis
+    top3_configs = []
+    for e in experiments[:3]:
+        cfg = json.loads(e["config_json"]) if e.get("config_json") else {}
+        top3_configs.append(cfg)
+
     lines = [
         f"# Evolution Dashboard",
-        f"GPU {gpu_pct:.0f}% · VRAM {mem_pct:.0f}% · {n_running} workers · {datetime.now().strftime('%H:%M:%S')}",
+        f"GPU {gpu_pct:.0f}% · VRAM {mem_pct:.0f}% · {n_running} running · "
+        f"{n_paused} paused · {n_total} total · {now}",
+        "",
+        "## Summary",
+    ]
+
+    # Best fresh
+    if experiments:
+        best = experiments[0]
+        cfg = json.loads(best["config_json"]) if best.get("config_json") else {}
+        peak = best.get("peak_fresh", 0) or 0
+        lines.append(f"- **Best overall**: {best['exp_id']} at **{peak:.1%}** fresh "
+                    f"(d={cfg.get('d_model','?')}, L={cfg.get('n_kernel_layers','?')}, "
+                    f"wd={cfg.get('weight_decay','?')})")
+
+    # Best per task summary
+    for task in sorted(best_per_task, key=lambda t: STAGE_MAP.get(t, 99)):
+        eid, acc = best_per_task[task]
+        if acc > 0:
+            stage = STAGE_MAP.get(task, "?")
+            desc = TASK_DESC.get(task, task)
+            marker = "✓" if acc >= 0.9 else ("→" if acc >= 0.5 else "·")
+            lines.append(f"- {marker} **{task}**: {acc:.0%} ({eid}) — {desc}")
+
+    # Winning method
+    wd_wins = sum(1 for e in experiments[:5] if (json.loads(e.get("config_json","{}")) or {}).get("weight_decay",0) > 0)
+    if wd_wins >= 3:
+        lines.append(f"- **Grokking (weight decay) dominates top 5** ({wd_wins}/5)")
+    perp_wins = 5 - wd_wins
+    if perp_wins >= 3:
+        lines.append(f"- **PerpGrad dominates top 5** ({perp_wins}/5)")
+
+    lines.extend([
         "",
         "## Leaderboard",
         "| # | ID | Params | Arch | Method | Fresh | Cycles | Status |",
         "|---|-----|--------|------|--------|-------|--------|--------|",
-    ]
+    ])
     for i, exp in enumerate(experiments[:15]):
         cfg = json.loads(exp["config_json"]) if exp.get("config_json") else {}
         wd = cfg.get("weight_decay", 0)
@@ -427,31 +520,57 @@ def render_md(reader: MetricsReader, output="dashboard.md"):
                     f"d={exp.get('d_model','')}L={exp.get('n_kernel_layers','')} | "
                     f"{method} | {peak:.1%} | {cycles:,} | {exp['status']} |")
 
-    if active_tasks:
-        lines.extend(["", "## Active Tasks"])
-        for task in sorted(active_tasks, key=lambda t: STAGE_MAP.get(t, 99)):
-            stage = STAGE_MAP.get(task, "?")
-            desc = TASK_DESC.get(task, task)
-            lines.append(f"- Stage {stage}: {desc}")
+    # Curriculum progress
+    all_tasks_ordered = ["parity", "binary_pattern_next", "same_different", "odd_one_out",
+                         "sequence_completion", "pattern_period", "run_length_next",
+                         "mirror_detection", "repeat_count", "arithmetic_next",
+                         "geometric_next", "alternating_next", "logic_gate",
+                         "logic_chain", "modus_ponens"]
+    unlocked = json.loads(teacher.get("unlocked_tasks", "[]")) if teacher else []
+
+    lines.extend(["", "## Curriculum Progress"])
+    for task in all_tasks_ordered:
+        stage = STAGE_MAP.get(task, "?")
+        desc = TASK_DESC.get(task, task)
+        best_acc = best_per_task.get(task, (None, 0))[1]
+        best_eid = best_per_task.get(task, ("none", 0))[0]
+        if task in active_tasks and best_acc >= 0.9:
+            icon = "✅"
+        elif task in active_tasks:
+            icon = "🔄"
+        elif task in unlocked:
+            icon = "🔓"
+        else:
+            icon = "🔒"
+        acc_str = f" — best: {best_acc:.0%} ({best_eid})" if best_acc > 0 else ""
+        lines.append(f"- {icon} Stage {stage}: **{task}**{acc_str}")
 
     if teacher:
         lines.extend(["", "## Teacher", "```", teacher.get("status_text", ""), "```"])
         ml = json.loads(teacher.get("mastery_log", "[]"))
         if ml:
-            lines.extend(["", "## Learning-to-Learn"])
+            lines.extend(["", "## Learning-to-Learn",
+                          "| # | Task | Steps | Examples |",
+                          "|---|------|-------|----------|"])
             for entry in ml:
-                lines.append(f"- **{entry['task']}**: {entry['steps_to_master']:,} steps, "
-                           f"{entry['examples_to_master']:,} examples")
+                lines.append(f"| {entry['task_index']+1} | **{entry['task']}** | "
+                           f"{entry['steps_to_master']:,} | "
+                           f"{entry['examples_to_master']:,} |")
             if len(ml) >= 2:
                 ratio = ml[-1]["steps_to_master"] / max(ml[0]["steps_to_master"], 1)
-                lines.append(f"- Ratio (last/first): **{ratio:.2f}**")
+                trend = "🚀 accelerating" if ratio < 0.7 else ("📈 improving" if ratio < 1 else "→ stable")
+                lines.append(f"\nRatio (last/first): **{ratio:.2f}** {trend}")
 
     if events:
         lines.extend(["", "## Recent Events"])
         for e in events[-15:]:
             ts = datetime.fromtimestamp(e["timestamp"]).strftime("%H:%M:%S")
-            lines.append(f"- `{ts}` **{e['event_type']}** {e.get('exp_id','')} {e.get('details','')}")
+            icon = {"mastery": "★", "unlock": "🔓", "evolve": "🧬",
+                    "pause": "⏸", "error": "❌"}.get(e["event_type"], "·")
+            lines.append(f"- `{ts}` {icon} **{e['event_type']}** "
+                        f"{e.get('exp_id','')} {e.get('details','')}")
 
+    lines.append("")
     Path(output).write_text("\n".join(lines))
 
 
