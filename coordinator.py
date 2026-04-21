@@ -240,17 +240,41 @@ def write_dashboard(results, generation, runs_dir):
 
 # ── Main coordinator loop ───────────────────────────────────────────
 
+def get_gpu_usage():
+    """Get GPU utilization % and memory usage %."""
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
+             "--format=csv,noheader,nounits"],
+            text=True
+        ).strip()
+        gpu_pct, mem_used, mem_total = [float(x) for x in out.split(",")]
+        mem_pct = mem_used / mem_total * 100
+        return gpu_pct, mem_pct
+    except Exception:
+        return 0.0, 0.0
+
+
 def run_coordinator(args):
     print(f"{'='*60}", flush=True)
     print(f"COORDINATOR — Evolutionary Model Shopping", flush=True)
-    print(f"  max_workers={args.max_workers}", flush=True)
+    print(f"  max_workers={'auto (fill to 95%)' if args.max_workers == 0 else args.max_workers}", flush=True)
     print(f"  generation_every={args.generation_every}s", flush=True)
     print(f"{'='*60}\n", flush=True)
 
     mgr = WorkerManager(runs_dir=args.runs_dir)
 
+    # Auto-detect max workers if not set
+    max_workers = args.max_workers
+    if max_workers == 0:
+        # Start with seed configs, scale up based on GPU
+        max_workers = len(SEED_CONFIGS)
+        print(f"  Auto: starting with {max_workers} workers, will scale based on GPU usage",
+              flush=True)
+
     # Spawn initial population from seed configs
-    for cfg in SEED_CONFIGS[:args.max_workers]:
+    for cfg in SEED_CONFIGS[:max_workers]:
         mgr.spawn(cfg)
 
     generation = 0
@@ -298,8 +322,22 @@ def run_coordinator(args):
         if len(running_results) < 2:
             continue
 
-        # Check if we're at capacity
-        at_capacity = len(running) >= args.max_workers
+        # Check GPU usage and scale
+        gpu_pct, mem_pct = get_gpu_usage()
+        at_capacity = mem_pct > 90 or len(running) >= max_workers
+        has_headroom = mem_pct < 85 and gpu_pct < 90
+
+        print(f"  GPU: {gpu_pct:.0f}%  VRAM: {mem_pct:.0f}%  "
+              f"{'at capacity' if at_capacity else f'headroom ({100-mem_pct:.0f}% VRAM free)'}",
+              flush=True)
+
+        # Auto-scale: spawn more workers if GPU has headroom
+        if has_headroom and not at_capacity and running_results:
+            parent = random.choice(running_results[:max(1, len(running_results) // 2)])
+            child_cfg = mutate_config(parent.get("config", SEED_CONFIGS[0]))
+            mgr.spawn(child_cfg)
+            max_workers = len(running) + 1  # raise the cap
+            print(f"  📈 Auto-scaled to {max_workers} workers (GPU has headroom)", flush=True)
 
         if at_capacity and generation % args.evolve_every == 0:
             # EVOLVE: pause worst running, spawn child of best
@@ -353,8 +391,8 @@ def run_coordinator(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--max-workers", type=int, default=6,
-                        help="Max parallel worker processes")
+    parser.add_argument("--max-workers", type=int, default=0,
+                        help="Max parallel workers (0 = auto, fill GPU to 95%%)")
     parser.add_argument("--generation-every", type=int, default=60,
                         help="Seconds between evolution checks")
     parser.add_argument("--evolve-every", type=int, default=3,
