@@ -254,8 +254,11 @@ def train_with_teacher(model, name, dataset, device, args, ckpt_prefix,
                 for t, exs in sorted(by_type.items()):
                     type_accs[t] = evaluate_on_examples(model, exs, device, len(exs))
                     print(f"    {t}: {type_accs[t]:.0%}", flush=True)
+                teacher.set_step(global_step)
                 teacher.observe(type_accs)
                 print(f"  [{name}] teacher:\n{teacher.get_status()}", flush=True)
+                if teacher.mastery_log:
+                    print(teacher.get_learning_report(), flush=True)
 
     # Save history
     with open(ckpt_dir / f"{ckpt_prefix}_history.json", "w") as f:
