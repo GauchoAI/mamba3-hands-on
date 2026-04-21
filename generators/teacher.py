@@ -111,6 +111,8 @@ MASTERY_THRESHOLD = 0.90   # must hit this on FRESH to advance
 ADVANCE_RATE = 0.05        # how much difficulty increases per mastery
 RETREAT_RATE = 0.02        # how much to back off if struggling
 STRUGGLING_THRESHOLD = 0.40
+REPLAY_FLOOR = 0.8         # mastered tasks never go below this weight
+                           # ensures ~10-15% of batch is replay per mastered task
 
 # Tasks unlock in this order. Each builds on capabilities from the previous.
 # The curriculum is designed so each task teaches a skill the next one needs.
@@ -259,7 +261,10 @@ class AdaptiveTeacher:
             if acc >= MASTERY_THRESHOLD:
                 old_diff = cfg.difficulty
                 cfg.difficulty = min(cfg.difficulty + ADVANCE_RATE, 1.0)
-                cfg.weight = max(cfg.weight * 0.7 + 0.7 * 0.3, 0.5)  # reduce weight
+                # Reduce weight but never below REPLAY_FLOOR
+                # This ensures mastered tasks always get ~10-15% of batch
+                # preventing catastrophic forgetting
+                cfg.weight = max(cfg.weight * 0.7 + REPLAY_FLOOR * 0.3, REPLAY_FLOOR)
                 cfg.stagnant_count = 0
 
                 # Record first mastery
@@ -281,6 +286,14 @@ class AdaptiveTeacher:
                 if cfg.difficulty > old_diff:
                     print(f"  ↑ {task_type}: difficulty {old_diff:.2f}→{cfg.difficulty:.2f} "
                           f"(mastered at {acc:.0%})", flush=True)
+
+            # ALERT: mastered task regressed — boost weight immediately
+            elif cfg.mastered and acc < MASTERY_THRESHOLD:
+                cfg.weight = max(cfg.weight, 1.5)  # emergency boost
+                if acc < 0.7:
+                    cfg.weight = 2.0  # heavy replay
+                    print(f"  ⚠ {task_type}: REGRESSED to {acc:.0%} — heavy replay (w=2.0)",
+                          flush=True)
 
             # Back off if struggling
             elif acc < STRUGGLING_THRESHOLD:
