@@ -55,14 +55,19 @@ class ExperimentConfig:
 
 # Default search space
 SEARCH_CONFIGS = [
-    ExperimentConfig(d_model=32,  d_state=16, headdim=16, n_kernel_layers=1, batch_size=1024),
-    ExperimentConfig(d_model=64,  d_state=16, headdim=16, n_kernel_layers=1, batch_size=1024),
-    ExperimentConfig(d_model=64,  d_state=16, headdim=16, n_kernel_layers=2, batch_size=1024),
-    ExperimentConfig(d_model=128, d_state=16, headdim=16, n_kernel_layers=1, batch_size=512),
-    ExperimentConfig(d_model=32,  d_state=8,  headdim=8,  n_kernel_layers=2, batch_size=2048),
-    ExperimentConfig(d_model=64,  d_state=8,  headdim=8,  n_kernel_layers=1, batch_size=2048),
+    ExperimentConfig(d_model=32,  d_state=16, headdim=16, n_kernel_layers=1, batch_size=4096),
+    ExperimentConfig(d_model=64,  d_state=16, headdim=16, n_kernel_layers=1, batch_size=4096),
+    ExperimentConfig(d_model=64,  d_state=16, headdim=16, n_kernel_layers=2, batch_size=4096),
+    ExperimentConfig(d_model=128, d_state=16, headdim=16, n_kernel_layers=1, batch_size=2048),
+    ExperimentConfig(d_model=32,  d_state=8,  headdim=8,  n_kernel_layers=2, batch_size=8192),
+    ExperimentConfig(d_model=64,  d_state=8,  headdim=8,  n_kernel_layers=1, batch_size=8192),
     # Grokking experiment: high weight decay + no PerpGrad, classic grokking recipe
+    # Smaller batch intentionally — more gradient steps per data point
     ExperimentConfig(d_model=64,  d_state=16, headdim=16, n_kernel_layers=1, batch_size=128, lr=1e-3, weight_decay=0.1),
+    # Grokking + bigger model
+    ExperimentConfig(d_model=128, d_state=16, headdim=16, n_kernel_layers=1, batch_size=128, lr=1e-3, weight_decay=0.1),
+    # Grokking + deeper
+    ExperimentConfig(d_model=64,  d_state=16, headdim=16, n_kernel_layers=2, batch_size=128, lr=1e-3, weight_decay=0.1),
 ]
 
 
@@ -383,11 +388,24 @@ def run_tuner(args):
         # Refresh cache if needed (teacher state may change)
         cache.get_data()
 
-        # Train all alive experiments
-        for exp in exps:
-            if not exp.alive:
-                continue
-            loss = exp.train_cycle(cache, steps=args.steps_per_cycle)
+        # Train all alive experiments — use CUDA streams for parallelism
+        if device == "cuda":
+            streams = []
+            for exp in exps:
+                if not exp.alive:
+                    continue
+                s = torch.cuda.Stream()
+                streams.append((exp, s))
+                with torch.cuda.stream(s):
+                    exp.train_cycle(cache, steps=args.steps_per_cycle)
+            # Wait for all streams
+            for exp, s in streams:
+                s.synchronize()
+        else:
+            for exp in exps:
+                if not exp.alive:
+                    continue
+                exp.train_cycle(cache, steps=args.steps_per_cycle)
 
         # Evaluate all
         results = []
