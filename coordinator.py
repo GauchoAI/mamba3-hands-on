@@ -66,6 +66,10 @@ def mutate_config(parent_config, mutation_strength=0.3):
     if random.random() < 0.15:
         child["d_state"] = random.choice([8, 16, 32])
 
+    # Small chance to flip backend (pytorch ↔ tinygrad)
+    if random.random() < 0.1:
+        child["backend"] = "tinygrad" if child.get("backend") != "tinygrad" else "pytorch"
+
     return child
 
 
@@ -84,6 +88,10 @@ SEED_CONFIGS = [
      "batch_size": 512, "lr": 1e-3, "weight_decay": 0.0, "steps_per_cycle": 200},
     {"d_model": 48,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
      "batch_size": 256, "lr": 2e-3, "weight_decay": 0.05, "steps_per_cycle": 200},
+    # tinygrad experiment — same config as best grokking, different backend
+    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
+     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200,
+     "backend": "tinygrad"},
 ]
 
 
@@ -112,8 +120,12 @@ class WorkerManager:
         with open(config_path, "w") as f:
             json.dump(config, f, indent=2)
 
+        # Choose worker script based on backend
+        backend = config.get("backend", "pytorch")
+        worker_script = "worker_tinygrad.py" if backend == "tinygrad" else "worker.py"
+
         proc = subprocess.Popen(
-            [sys.executable, "-u", "worker.py",
+            [sys.executable, "-u", worker_script,
              "--run-dir", str(run_dir),
              "--config", str(config_path)],
             stdout=open(run_dir / "stdout.log", "w"),
