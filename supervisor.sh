@@ -46,7 +46,7 @@ start_renderer() {
 start_http() {
     .venv/bin/python serve.py >> /dev/null 2>&1 &
     HTTP_PID=$!
-    echo "[$(date)] HTTP server started (PID $HTTP_PID, port 9090)"
+    echo "[$(date)] HTTP server started (PID $HTTP_PID, port 6006 → public)"
 }
 
 # Initial start
