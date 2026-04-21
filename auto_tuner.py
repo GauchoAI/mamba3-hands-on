@@ -185,6 +185,18 @@ class Experiment:
         self.history = []  # (cycle, fresh_acc, loss)
         self.alive = True
 
+        # Per-experiment log file
+        log_path = Path(f"logs/tuner_{cfg.name()}.log")
+        log_path.parent.mkdir(exist_ok=True)
+        self.log = open(log_path, "w")
+        self.log.write(f"Experiment: {cfg.name()}\n")
+        self.log.write(f"Params: {self.n_params:,}\n")
+        self.log.write(f"Config: d_model={cfg.d_model} d_state={cfg.d_state} "
+                       f"layers={cfg.n_kernel_layers} batch={cfg.batch_size} "
+                       f"lr={cfg.lr} wd={cfg.weight_decay}\n")
+        self.log.write(f"{'='*60}\n")
+        self.log.flush()
+
     def train_cycle(self, cache: TeacherCache, steps=500):
         """Train for one cycle using shared cache."""
         self.model.train()
@@ -218,6 +230,10 @@ class Experiment:
             last_loss = loss.item()
 
         self.cycle += 1
+        lr = self.opt.param_groups[0]["lr"]
+        self.log.write(f"[Cycle {self.cycle}] loss={last_loss:.4f}  lr={lr:.1e}  "
+                       f"wd={self.cfg.weight_decay}  perp={'ON' if self.use_perp else 'OFF'}\n")
+        self.log.flush()
         return last_loss
 
     def evaluate(self, cache: TeacherCache):
@@ -259,6 +275,14 @@ class Experiment:
         fresh = sum(type_accs.values()) / max(len(type_accs), 1)
         self.best_acc = max(self.best_acc, fresh)
         self.history.append((self.cycle, fresh, type_accs))
+
+        # Log detailed results
+        self.log.write(f"  EVAL fresh={fresh:.1%}  best={self.best_acc:.1%}\n")
+        for t, a in sorted(type_accs.items()):
+            if a > 0:
+                self.log.write(f"    {t}: {a:.0%}\n")
+        self.log.flush()
+
         return fresh, type_accs
 
 
