@@ -1005,21 +1005,160 @@ have seamless continuation.
 
 ---
 
+## Entry 16 — The evolutionary tournament
+
+### From one experiment to a civilization
+
+What started as a single model training on parity became something
+bigger. By the end of this session, the H100 is running an
+**evolutionary tournament**: 76+ experiments competing, breeding,
+and dying on the same GPU simultaneously.
+
+### The infrastructure
+
+```
+Workers (35 running)     → SQLite metrics.db ← Coordinator
+    ↓ train independently        ↓ evolves population
+    ↓ write per-cycle metrics    ↓ pauses losers
+    ↓ write checkpoints          ↓ spawns mutant children
+    ↓                            ↓ inherits parent weights
+    ↓                            ↓ manages 50GB disk budget
+    └──────────────── GPU 100% ──┘
+                                 ↓
+                            Renderer → index.html + dashboard.md
+                                 ↓
+                         http://localhost:9090 (SSH tunnel)
+```
+
+**Map-Reduce architecture:** Workers are the map (train independently),
+coordinator is the reduce (read metrics, evolve, prune). Filesystem
+is the message bus. Workers survive coordinator restarts. Watchdog
+auto-restarts the coordinator on crash.
+
+**Genetic evolution:** Winners reproduce — their config gets mutated
+(tweak lr, batch_size, d_model, weight_decay, loss_fn, optimizer,
+backend). Children inherit parent weights when architecturally
+compatible (same d_model, d_state, headdim, n_layers). Losers get
+paused (not killed) — they can be resumed if resources free up.
+200-cycle grace period protects new experiments from premature death.
+
+**Auto-scaling:** The coordinator monitors GPU utilization and spawns
+more workers until the GPU hits 90%. Started at 6 workers, scaled
+to 35. From 11% GPU to 100%.
+
+### The DAME bug
+
+The model learned parity at 89% per-byte accuracy but only 57%
+exact match. Every "SAME" prediction came out as "DAME" — the model
+always output 'D' as the first byte because DIFF was easier to
+learn and the first byte got stuck in a local minimum.
+
+**Root cause:** Multi-byte outputs ("SAME" = 4 bytes) where one byte
+carries all the information and the other 3 are deterministic. The
+gradient signal to flip from D→S was too weak relative to the signal
+for the remaining bytes.
+
+**Fix:** Single-byte outputs — "S" instead of "SAME", "D" instead of
+"DIFF". The kernel doesn't need to spell out words. One byte = one
+decision. The cortex will later learn to translate S→"SAME"→"igual".
+
+### Five new training strategies
+
+The tournament started with two strategies: grokking (weight decay)
+and PerpGrad. We added five more, all competing in the same
+evolutionary pool:
+
+1. **SAM** (Sharpness-Aware Minimization) — seeks wide flat valleys
+   in the loss landscape. Wide = robust = generalizes.
+
+2. **Label smoothing** — trains on "90% S, 10% everything else"
+   instead of "100% S". Prevents overconfidence. Directly targets
+   the DAME bug pattern.
+
+3. **Lion optimizer** — Google's optimizer using sign of momentum.
+   50% less memory than Adam, often faster on small models.
+
+4. **Warm restarts** — periodically reset learning rate to high.
+   Lets the model escape wherever it's stuck.
+
+5. **Noise injection** — add random perturbation to weights every
+   cycle. Forces robust solutions, escapes local minima.
+
+Each strategy can combine with any other via mutation. Evolution
+can discover that Lion + label smoothing + warm restarts beats
+AdamW + grokking. Or it won't. The data decides, not us.
+
+### Current state of the tournament
+
+```
+76+ experiments, 35 running, 100% GPU
+Best fresh: 11.6% (exp_059, d=96, wd=0.1)
+Parity best: 82% (exp_065)
+Same_different: 82% (transfer, never trained directly)
+Arithmetic_next: 4% (transfer to Stage 4!)
+Fastest parity mastery: 5,600 steps (exp_108)
+
+Grokking dominates top 5 (weight decay = 0.05-0.1)
+PerpGrad competitive at #7 (exp_095, d=48, 29K params)
+Evolution discovered d=96 beats d=64 (exp_059)
+Evolution trying 3-layer models (exp_076, d=96, 214K params)
+```
+
+They're competing against 70+ existing grokking experiments right
+now. Evolution will cross-breed the winners. The genetic tournament
+just got a lot more interesting.
+
+### The progressive model
+
+The architecture grew too:
+
+- **Byte-level tokenizer** (260 vocab) — universal, no vocabulary wall
+- **Progressive growing** — start with 1 layer (45K params), add more
+  as needed. The model earns its complexity.
+- **Kernel/cortex split** — kernel layers for reasoning, cortex layers
+  for language. Shared embedding bridges both.
+- **Near-identity layer init** — new layers start invisible (scale=0.01)
+  and gradually learn to contribute.
+
+### What we learned
+
+1. **The training signal matters more than model size.** 405K params
+   on an H100 memorized but didn't generalize. 45K params with the
+   right curriculum + grokking + byte-level tokenization does better.
+
+2. **Multi-byte outputs are a trap.** The DAME bug wasted hours of
+   compute. Single-byte outputs eliminate an entire class of local
+   minima.
+
+3. **Evolution works.** Let 76 experiments compete instead of hand-
+   tuning one. The genetic algorithm discovered d=96 > d=64, found
+   that wd=0.05 is competitive with wd=0.1, and is now exploring
+   Lion, focal loss, and warm restarts without human intervention.
+
+4. **Transfer is real.** same_different at 82% without any direct
+   training. The model learned comparison from parity training alone.
+
+5. **GPU utilization requires multi-process parallelism.** A tiny
+   model on a huge GPU can't saturate it. Multiple independent
+   processes on the same GPU solve this (11% → 100%).
+
+6. **The cortex and kernel should evolve separately.** Two different
+   specializations, shared embedding. Like left brain, right brain.
+
+---
+
 ## Open threads
 
-- **Overnight run in progress.** 600K steps, ~10 hours. Resumed from
-  100K plain checkpoint. Monitoring every 20 minutes.
-- **same_different breakthrough.** Needs to crack 90%. The grokking
-  transition for numeric comparison hasn't happened yet.
-- **Samples-to-mastery.** Task 1: 30K examples. Task 2: 13K examples.
-  Watch if task 3 (same_different) continues the acceleration.
-- **Augmented model.** Failed at 100K steps. Needs architectural
-  rethink — activate registers only for Stage 3+ tasks, or interleave
-  with the scan.
-- **Few-shot eval.** After curriculum, test on novel task types with
-  2-3 in-context examples.
-- **Language transition.** Switch to byte-level LM, train on reasoning
-  traces. The curriculum checkpoint becomes the foundation.
-- **Formal math.** SymPy-generated algebraic traces (BOOTSTRAP.md L5).
-- **The compilation problem.** How Brain 1 (language) learns to program
-  Brain 2 (step function). The hardest open question.
+- **Tournament running.** 76+ experiments on H100, 100% GPU, auto-
+  evolving. Five new strategies (SAM, label smoothing, Lion, warm
+  restarts, noise) just entered the competition.
+- **Single-byte outputs deploying.** New workers use "S"/"D" instead
+  of "SAME"/"DIFF". Should break the parity/same_different ceiling.
+- **Parity ceiling at 82%.** Per-byte accuracy is higher (~89%). The
+  exact-match eval and single-byte outputs should resolve this.
+- **Cortex development.** Language training not started yet. The
+  progressive model is ready (add_cortex_layer). Tatoeba data proven.
+- **Few-shot eval.** Test generalization on completely novel task types.
+- **Formal math.** SymPy-generated traces for Level 5.
+- **The compilation problem.** How the cortex learns to invoke the
+  kernel. The bridge between language and reasoning.
