@@ -61,6 +61,18 @@
   </div>
 </div>
 
+<!-- Timeseries charts -->
+<div class="grid grid-cols-2 gap-3 mb-3">
+  <div class="bg-white rounded-lg shadow-sm p-3">
+    <h2 class="text-xs font-bold text-gray-500 mb-1">Fresh Accuracy Over Time (%)</h2>
+    <div style="height:220px"><canvas id="freshHistChart"></canvas></div>
+  </div>
+  <div class="bg-white rounded-lg shadow-sm p-3">
+    <h2 class="text-xs font-bold text-gray-500 mb-1">Task Accuracy Over Time (%)</h2>
+    <div style="height:220px"><canvas id="taskHistChart"></canvas></div>
+  </div>
+</div>
+
 <!-- Leaderboard + Events -->
 <div class="grid grid-cols-3 gap-3 mb-3">
   <div class="col-span-2 bg-white rounded-lg shadow-sm p-3 max-h-[420px] overflow-y-auto">
@@ -263,6 +275,47 @@ function updMini(id,data,color,bg,max){const cv=document.getElementById(id);
     options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false}},scales:{y:{min:0,max:max,ticks:{color:'#bbb',font:{size:8}},grid:{color:'#f5f5f5'}},x:{display:false}}}});}
   else{miniCharts[id].data.labels=data.map((_,i)=>i);miniCharts[id].data.datasets[0].data=data;miniCharts[id].update();}
 }
+
+// Fresh history line chart
+let freshHistChart;
+db.ref('mamba3/fresh_history').on('value', s=>{
+  const d=s.val(); if(!d) return;
+  const entries=Object.entries(d).sort((a,b)=>parseInt(a[0])-parseInt(b[0]));
+  const labels=entries.map(([k])=>parseInt(k));
+  const data=entries.map(([,v])=>(v.best||0)*100);
+  const cv=document.getElementById('freshHistChart');
+  if(freshHistChart)freshHistChart.destroy();
+  freshHistChart=new Chart(cv,{type:'line',data:{labels,datasets:[{label:'Best Fresh %',data,
+    borderColor:'#e67e22',backgroundColor:'rgba(230,126,34,0.1)',fill:true,pointRadius:0,tension:0.3,borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{position:'bottom',labels:{font:{size:9}}}},
+      scales:{x:{title:{display:true,text:'Generation',font:{size:9}},ticks:{font:{size:8}},grid:{color:'#f5f5f5'}},
+              y:{min:0,max:100,title:{display:true,text:'%',font:{size:9}},ticks:{font:{size:8}},grid:{color:'#f5f5f5'}}}}});
+});
+
+// Task history line charts
+let taskHistChart;
+db.ref('mamba3/task_history').on('value', s=>{
+  const d=s.val(); if(!d) return;
+  const entries=Object.entries(d).sort((a,b)=>parseInt(a[0])-parseInt(b[0]));
+  const labels=entries.map(([k])=>parseInt(k));
+  // Find all tasks that ever had non-zero
+  const allT=new Set();
+  entries.forEach(([,v])=>Object.keys(v).forEach(t=>allT.add(t)));
+  const datasets=[...allT].sort((a,b)=>STAGE[a]-STAGE[b]).map(task=>({
+    label:task.replace(/_/g,' '),
+    data:entries.map(([,v])=>(v[task]||0)*100),
+    borderColor:TC[task]||'#888',backgroundColor:'transparent',
+    pointRadius:0,tension:0.3,borderWidth:1.5,
+  }));
+  const cv=document.getElementById('taskHistChart');
+  if(taskHistChart)taskHistChart.destroy();
+  taskHistChart=new Chart(cv,{type:'line',data:{labels,datasets},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{position:'bottom',labels:{font:{size:8},boxWidth:10,padding:4}}},
+      scales:{x:{title:{display:true,text:'Generation',font:{size:9}},ticks:{font:{size:8}},grid:{color:'#f5f5f5'}},
+              y:{min:0,max:100,title:{display:true,text:'%',font:{size:9}},ticks:{font:{size:8}},grid:{color:'#f5f5f5'}}}}});
+});
 
 // Family tree
 function drawTree(lb,lineage){const svg=document.getElementById('familyTree');const W=svg.clientWidth||400;const H=260;svg.innerHTML='';svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
