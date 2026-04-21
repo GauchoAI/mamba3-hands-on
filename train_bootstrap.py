@@ -287,8 +287,11 @@ def train(args):
     ckpt_dir = Path("checkpoints")
     ckpt_dir.mkdir(exist_ok=True)
 
-    # Track best fresh accuracy for checkpoint selection
+    # Track best fresh accuracy — carry forward from checkpoint if resuming
     best_fresh = 0.0
+    if args.resume:
+        best_fresh = ckpt.get("best_fresh", ckpt.get("fresh_acc", 0.0))
+        print(f"Carrying forward best_fresh={best_fresh:.1%}", flush=True)
     current_lr = base_lr
     global_step = 0
 
@@ -369,26 +372,25 @@ def train(args):
                         for param_group in opt.param_groups:
                             param_group["lr"] = current_lr
 
-                # Save checkpoint (always keep latest + best)
-                torch.save({
+                # Save immutable checkpoint (never overwritten)
+                ckpt_data = {
                     "model": model.state_dict(),
                     "cfg": cfg,
                     "level": args.level,
                     "step": global_step,
                     "train_acc": train_acc,
                     "fresh_acc": fresh_acc,
-                }, ckpt_dir / f"level{args.level}.pt")
+                    "best_fresh": best_fresh,
+                }
+                torch.save(ckpt_data, ckpt_dir / f"level{args.level}_step{global_step}.pt")
+
+                # Also save as "latest" pointer
+                torch.save(ckpt_data, ckpt_dir / f"level{args.level}_latest.pt")
 
                 if fresh_acc > best_fresh:
                     best_fresh = fresh_acc
-                    torch.save({
-                        "model": model.state_dict(),
-                        "cfg": cfg,
-                        "level": args.level,
-                        "step": global_step,
-                        "train_acc": train_acc,
-                        "fresh_acc": fresh_acc,
-                    }, ckpt_dir / f"level{args.level}_best.pt")
+                    ckpt_data["best_fresh"] = best_fresh
+                    torch.save(ckpt_data, ckpt_dir / f"level{args.level}_best.pt")
                     print(f"  ★ new best fresh={fresh_acc:.1%}", flush=True)
 
                 if global_step % (args.eval_every * 4) == 0:

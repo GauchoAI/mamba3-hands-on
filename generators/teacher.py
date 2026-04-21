@@ -98,9 +98,10 @@ class AdaptiveTeacher:
             cfg.accuracy = acc
             cfg.history.append(acc)
 
-            # Adjust weights
+            # Adjust weights GRADUALLY — avoid distribution shock
+            target_weight = cfg.weight
             if acc >= MASTERED_THRESHOLD:
-                cfg.weight = 0.5   # less drilling
+                target_weight = 0.7   # less drilling, but not drastic
                 # Progress difficulty if consistently mastered
                 if len(cfg.history) >= 3 and all(a >= MASTERED_THRESHOLD for a in cfg.history[-3:]):
                     max_diff = len(DIFFICULTY_PRESETS.get(task_type, [])) - 1
@@ -111,9 +112,12 @@ class AdaptiveTeacher:
                         print(f"  📈 {task_type}: difficulty {cfg.difficulty_level-1}→{cfg.difficulty_level}",
                               flush=True)
             elif acc >= LEARNING_THRESHOLD:
-                cfg.weight = 1.0   # normal
+                target_weight = 1.0   # normal
             else:
-                cfg.weight = 2.0   # more practice
+                target_weight = 1.5   # more practice, but not overwhelming
+
+            # Smooth transition — move 30% toward target each observation
+            cfg.weight = cfg.weight * 0.7 + target_weight * 0.3
                 # Regress difficulty if struggling
                 if len(cfg.history) >= 3 and all(a < STRUGGLING_THRESHOLD for a in cfg.history[-3:]):
                     if cfg.difficulty_level > 0:
