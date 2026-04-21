@@ -223,12 +223,15 @@ class Experiment:
             return loss
         return _fwd_loss
 
-    def train_cycle(self, cache: TeacherCache, steps=500):
-        """Train for one cycle using gradient accumulation.
+    def train_cycle(self, cache: TeacherCache, steps=500, accum_steps=10):
+        """Train for one cycle with gradient accumulation.
 
-        Accumulates gradients over all `steps` micro-batches, then does
-        ONE optimizer step. The GPU stays busy doing forward/backward
-        without waiting for Python to call step() between each.
+        Does `steps` forward/backward passes, but only calls optimizer.step()
+        every `accum_steps`. This keeps the GPU busy while reducing Python
+        overhead from per-step optimizer calls.
+
+        Effective batch per update = batch_size * accum_steps.
+        Number of updates per cycle = steps / accum_steps.
         """
         self.model.train()
         last_loss = 0.0
@@ -245,15 +248,17 @@ class Experiment:
             sep_tensor = torch.tensor(sep_pos, device=self.device, dtype=torch.long)
 
             loss = self._train_fn(self.model, tokens, sep_tensor, VOCAB_SIZE)
-            # Scale loss by accumulation steps so gradient magnitude stays the same
-            (loss / steps).backward()
+            (loss / accum_steps).backward()
             accum_loss += loss.item()
 
-        # One optimizer step for the entire cycle
-        if self.perp:
-            self.perp.project()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-        self.opt.step()
+            # Step every accum_steps
+            if (i + 1) % accum_steps == 0:
+                if self.perp:
+                    self.perp.project()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                self.opt.step()
+                self.opt.zero_grad(set_to_none=True)
+
         last_loss = accum_loss / steps
 
         self.cycle += 1
