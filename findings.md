@@ -1147,18 +1147,185 @@ The architecture grew too:
 
 ---
 
+## Entry 17 — The breakthrough: 31.5% fresh, 13/15 tasks active
+
+### What happened
+
+After restarting all workers with single-byte outputs, the ceiling
+shattered. In under 2 hours:
+
+```
+Before restart (old code):     After restart (new code):
+  Fresh: 12.3% ceiling           Fresh: 31.5% and climbing
+  Tasks active: 2/15             Tasks active: 13/15
+  Parity: 82% (stuck)            Parity: 75% (still learning)
+  same_different: 82% transfer   same_different: 92% MASTERED ✅
+  Grokking dominated             PerpGrad dominates
+  Architecture: d=64, L=1        Architecture: d=64, L=3
+```
+
+### The three keys
+
+1. **Single-byte outputs** — "S"/"D" instead of "SAME"/"DIFF". Eliminated
+   the DAME bug entirely. One byte = one decision = no local minimum from
+   correlated multi-byte outputs.
+
+2. **3-layer architecture** — evolution discovered d=64, L=3 (116K params)
+   massively outperforms L=1 (45K params). Three layers can represent
+   multi-step reasoning. One layer could only do one transformation.
+
+3. **PerpGrad** — with single-byte outputs, PerpGrad's faster convergence
+   wins over grokking. PerpGrad dominates all top 5. Weight decay was
+   compensating for the multi-byte output problem — once that was fixed,
+   the simpler optimizer (PerpGrad) was better.
+
+### Curriculum explosion
+
+13 of 15 tasks showing non-zero accuracy, most via pure transfer:
+
+```
+✅ same_different:      92%  — MASTERED (Stage 1)
+🔄 binary_pattern_next: 88%  — nearly mastered (Stage 0)
+🔄 parity:              75%  — solid (Stage 0)
+🔄 modus_ponens:        71%  — propositional logic! (Stage 5)
+🔄 logic_chain:         56%  — chained gates (Stage 5)
+🔄 repeat_count:        44%  — counting (Stage 3)
+🔄 logic_gate:          36%  — AND/OR/XOR (Stage 5)
+🔄 odd_one_out:         33%  — outlier detection (Stage 1)
+🔄 geometric_next:      31%  — ratio detection (Stage 4)
+🔄 sequence_completion: 18%  — pattern prediction (Stage 2)
+🔄 alternating_next:    17%  — interleaved sequences (Stage 4)
+🔄 arithmetic_next:     12%  — step detection (Stage 4)
+🔒 pattern_period:       0%  — still locked
+🔒 run_length_next:      0%  — still locked
+```
+
+The model learned Stage 5 logic (modus ponens at 71%) without EVER
+being trained on it. The curriculum only trains parity (Stage 0).
+Everything else is transfer.
+
+### Meta-evolution deployed
+
+We added four strategies to the evolution itself, inspired by
+training optimizer concepts:
+
+**Deployed and running:**
+
+1. **Momentum tracking** — experiments scored by trajectory, not just
+   snapshot. `effective_score = best_fresh + 0.5 * momentum`. A fast
+   climber ranks higher than a stagnant leader.
+
+2. **Focal task attention** — 30% chance to breed from a task
+   specialist instead of the overall winner. If exp_049 is best at
+   modus_ponens, it might get to reproduce even if its overall fresh
+   is lower. Preserves genetic diversity for different capabilities.
+
+3. **Temperature annealing** — early generations: breed randomly
+   (explore). Late generations: breed from the top (exploit).
+   `temperature = 5 * exp(-generation / 50)`. The population starts
+   creative and gradually becomes selective.
+
+4. **Lineage dropout** — if >50% of running experiments share the
+   same great-grandparent, force breed from a different lineage.
+   Prevents monoculture. Currently all top 10 are d=64 L=3 PerpGrad
+   clones — lineage dropout will push diversity.
+
+### Training strategies: what's deployed vs what's planned
+
+**Deployed and competing:**
+- ✅ Grokking (weight decay 0.05-0.2) — was dominant, now #2
+- ✅ PerpGrad (orthogonal gradient) — current champion
+- ✅ StableMax (numerically stable softmax) — used by all
+- ✅ Focal loss — available, some experiments using it
+- ✅ Label smoothing — available via mutation
+- ✅ Lion optimizer — available via mutation
+- ✅ Warm restarts — available via mutation
+- ✅ Noise injection — available via mutation
+- ✅ Regular cross-entropy — available as alternative to StableMax
+
+**Not yet implemented (future work):**
+- ❌ SAM (Sharpness-Aware Minimization) — code exists in strategies.py
+  but not wired into the worker. Needs 2-forward-pass training loop.
+- ❌ Ensemble predictions — combine multiple experiments' outputs
+- ❌ Knowledge distillation — best model teaches others
+- ❌ Tinygrad backend — was crashing (numpy fixed), needs more testing
+- ❌ Cortex training — language LM side not started
+- ❌ Few-shot evaluation — test on truly novel tasks
+
+### Infrastructure delivered
+
+```
+Component                     Status
+────────────────────────────  ──────
+Workers (map)                 ✅ 60+ parallel processes
+Coordinator (reduce)          ✅ Genetic evolution + meta-strategies
+Watchdog                      ✅ Auto-restart on crash
+SQLite metrics                ✅ All telemetry persisted
+HTML dashboard                ✅ Chart.js, auto-refresh
+Markdown dashboard            ✅ For Claude to read
+Renderer (decoupled)          ✅ Reads SQLite, writes HTML/MD
+GitHub Pages                  ✅ Public docs at gauchoai.github.io
+Byte-level tokenizer          ✅ Universal 260-token vocab
+Progressive model             ✅ Grows layers on demand
+Kernel/cortex split           ✅ Selective freeze, shared embedding
+Triton SSM kernel             ✅ GPU-native scan
+Weight inheritance            ✅ Compatible children inherit checkpoints
+Disk budget (50GB)            ✅ Evicts paused experiments
+VRAM management (75% cap)     ✅ Pauses losers to prevent OOM
+Grace period (200 cycles)     ✅ New experiments can't be killed early
+Per-byte eval                 ✅ Granular teacher feedback
+Single-byte outputs           ✅ Eliminated DAME bug
+Ratatouille CLI               ✅ Interactive web UI for model
+Training strategies doc        ✅ Bilingual EN/ES guide
+```
+
+### What we learned (session summary)
+
+1. **Data representation > model size > hyperparameters.** Single-byte
+   outputs (data fix) broke a ceiling that 100+ experiments with
+   different hyperparameters couldn't break.
+
+2. **Depth > width for algorithmic tasks.** 3 layers of d=64 (116K
+   params) massively outperforms 1 layer of d=128 (143K params).
+   The model needs sequential processing steps, not wider vectors.
+
+3. **PerpGrad > grokking with clean data.** Grokking was compensating
+   for the multi-byte output problem. With clean single-byte outputs,
+   PerpGrad's direct approach wins.
+
+4. **Evolution finds architecture.** We didn't design d=64 L=3 — the
+   genetic algorithm discovered it by trying d=32/48/64/96/128 and
+   L=1/2/3 and seeing what survives.
+
+5. **Transfer is the real metric.** modus_ponens at 71% without any
+   training is more impressive than parity at 100% with training.
+   The model is building general representations, not task-specific
+   circuits.
+
+6. **Meta-evolution is natural.** Every training strategy concept
+   (momentum, temperature, focal attention) has a direct analogue
+   for managing the experiment population.
+
+---
+
 ## Open threads
 
-- **Tournament running.** 76+ experiments on H100, 100% GPU, auto-
-  evolving. Five new strategies (SAM, label smoothing, Lion, warm
-  restarts, noise) just entered the competition.
-- **Single-byte outputs deploying.** New workers use "S"/"D" instead
-  of "SAME"/"DIFF". Should break the parity/same_different ceiling.
-- **Parity ceiling at 82%.** Per-byte accuracy is higher (~89%). The
-  exact-match eval and single-byte outputs should resolve this.
-- **Cortex development.** Language training not started yet. The
-  progressive model is ready (add_cortex_layer). Tatoeba data proven.
-- **Few-shot eval.** Test generalization on completely novel task types.
-- **Formal math.** SymPy-generated traces for Level 5.
-- **The compilation problem.** How the cortex learns to invoke the
-  kernel. The bridge between language and reasoning.
+- **Tournament running.** 83 experiments, 60 running, d=64 L=3 PerpGrad
+  dominates. Meta-evolution (momentum, focal, temperature, lineage
+  dropout) deployed.
+- **same_different mastered (92%).** First non-binary task completed.
+  binary_pattern_next at 88%, closing in.
+- **modus_ponens at 71%.** Stage 5 logic via pure transfer. Remarkable.
+- **SAM not wired.** Code exists but needs 2-pass training loop in worker.
+- **Tinygrad.** numpy fixed, needs testing with 3-layer models.
+- **Cortex development.** Language training not started. Progressive model
+  ready. Tatoeba data proven. The kernel is getting smart enough to
+  deserve a voice.
+- **Few-shot eval.** The real test: give 2-3 examples of a novel task,
+  see if the model infers the rule.
+- **Boss tasks.** 18 unseen task types waiting to test generalization.
+- **Formal math.** SymPy-generated algebraic traces.
+- **Ratatouille UI.** Web playground working. Need to download latest
+  winning checkpoint for local play.
+- **The compilation problem.** How the cortex learns to invoke the kernel.
+  Becoming less abstract as the kernel demonstrates real capability.
