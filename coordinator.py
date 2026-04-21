@@ -460,7 +460,8 @@ def run_coordinator(args):
                   f"d={cfg.get('d_model', '?')}  [{method}]  "
                   f"[{r['status']}]", flush=True)
 
-        # Update dashboard
+        # Check GPU usage + update dashboard
+        gpu_pct, mem_pct = get_gpu_usage()
         write_dashboard(results, generation, gpu_pct, mem_pct)
 
         # ── Genetic evolution ──
@@ -470,9 +471,6 @@ def run_coordinator(args):
         running_results = [r for r in results if r["status"] == "running"]
         if len(running_results) < 2:
             continue
-
-        # Check GPU usage and scale
-        gpu_pct, mem_pct = get_gpu_usage()
         at_capacity = mem_pct > 90 or len(running) >= max_workers
         has_headroom = mem_pct < 85 and gpu_pct < 90
 
