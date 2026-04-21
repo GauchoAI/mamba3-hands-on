@@ -9,300 +9,392 @@
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <style>
-  body { font-family: 'Inter', system-ui, sans-serif; font-size: 14px; }
+  body { font-family: 'Inter', system-ui, sans-serif; font-size: 13px; }
   .tabular-nums { font-variant-numeric: tabular-nums; }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
-  .live-dot { animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .live-dot { animation: pulse 1.5s infinite; }
+  .tree-line { stroke: #444; stroke-width: 1; }
+  .tree-node { cursor: pointer; transition: all 0.15s; }
+  .tree-node:hover { transform: scale(1.15); }
+  #detail-panel { transition: transform 0.2s; }
+  #detail-panel.hidden { transform: translateX(100%); }
 </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
 
-<div class="max-w-7xl mx-auto px-4 py-4">
+<div class="max-w-[1400px] mx-auto px-4 py-3">
 
 <!-- Header -->
-<div class="flex justify-between items-center mb-4">
+<div class="flex justify-between items-center mb-3">
   <div>
-    <h1 class="text-2xl font-bold">🐀 Mamba-3 Evolution</h1>
-    <p class="text-gray-500 text-xs">
-      <span class="live-dot text-green-400">●</span> Live from H100 ·
-      <span id="last-update" class="text-gray-400">connecting...</span> ·
-      <span id="freshness" class="text-gray-400"></span>
+    <h1 class="text-xl font-bold">🐀 Mamba-3 Evolution <span class="text-sm font-normal text-gray-500">Live Dashboard</span></h1>
+    <p class="text-xs">
+      <span class="live-dot text-green-400" id="live-indicator">●</span>
+      <span id="last-update" class="text-gray-500">connecting...</span>
+      <span id="freshness" class="text-gray-500 ml-1"></span>
     </p>
   </div>
-  <div class="flex gap-4 text-sm">
-    <div class="text-center">
-      <div id="gpu-pct" class="text-2xl font-bold text-blue-400 tabular-nums">—</div>
-      <div class="text-xs text-gray-500">GPU</div>
-    </div>
-    <div class="text-center">
-      <div id="mem-pct" class="text-2xl font-bold text-orange-400 tabular-nums">—</div>
-      <div class="text-xs text-gray-500">VRAM</div>
-    </div>
-    <div class="text-center">
-      <div id="n-running" class="text-2xl font-bold text-green-400 tabular-nums">—</div>
-      <div class="text-xs text-gray-500">Workers</div>
-    </div>
-    <div class="text-center">
-      <div id="best-fresh" class="text-2xl font-bold text-yellow-400 tabular-nums">—</div>
-      <div class="text-xs text-gray-500">Best Fresh</div>
-    </div>
+  <div class="flex gap-5">
+    <div class="text-center"><div id="gpu-pct" class="text-xl font-bold text-blue-400 tabular-nums">—</div><div class="text-[10px] text-gray-600">GPU</div></div>
+    <div class="text-center"><div id="mem-pct" class="text-xl font-bold text-orange-400 tabular-nums">—</div><div class="text-[10px] text-gray-600">VRAM</div></div>
+    <div class="text-center"><div id="n-running" class="text-xl font-bold text-green-400 tabular-nums">—</div><div class="text-[10px] text-gray-600">Workers</div></div>
+    <div class="text-center"><div id="n-total" class="text-xl font-bold text-gray-500 tabular-nums">—</div><div class="text-[10px] text-gray-600">Total</div></div>
+    <div class="text-center"><div id="best-fresh" class="text-xl font-bold text-yellow-400 tabular-nums">—</div><div class="text-[10px] text-gray-600">Best</div></div>
+    <div class="text-center"><div id="generation" class="text-xl font-bold text-purple-400 tabular-nums">—</div><div class="text-[10px] text-gray-600">Gen</div></div>
   </div>
 </div>
 
 <!-- Plateau banner -->
-<div id="plateau-banner" class="hidden bg-red-900/50 border border-red-700 rounded-lg p-3 mb-4">
-  <span class="text-red-300 font-bold">🔥 PLATEAU MODE</span>
-  <span id="plateau-details" class="text-red-400 text-sm ml-2"></span>
+<div id="plateau-banner" class="hidden bg-red-950 border border-red-800 rounded-lg px-3 py-2 mb-3 text-sm">
+  🔥 <span class="text-red-300 font-bold">PLATEAU</span>
+  <span id="plateau-details" class="text-red-400 ml-1"></span>
 </div>
 
-<!-- Charts row -->
-<div class="grid grid-cols-3 gap-3 mb-4">
+<!-- Curriculum bar -->
+<div id="curriculum" class="flex flex-wrap gap-1 mb-3"></div>
+
+<!-- Main grid -->
+<div class="grid grid-cols-4 gap-3 mb-3">
+  <!-- Task bar chart -->
   <div class="col-span-2 bg-gray-900 rounded-lg p-3">
-    <h2 class="text-xs font-bold text-gray-500 mb-1">Task Accuracy (%)</h2>
-    <div style="height:250px"><canvas id="taskChart"></canvas></div>
+    <h2 class="text-[10px] font-bold text-gray-600 mb-1">TASK ACCURACY</h2>
+    <div style="height:220px"><canvas id="taskChart"></canvas></div>
   </div>
+  <!-- GPU + Workers history -->
   <div class="bg-gray-900 rounded-lg p-3">
-    <h2 class="text-xs font-bold text-gray-500 mb-1">GPU Utilization</h2>
-    <div style="height:110px"><canvas id="gpuChart"></canvas></div>
-    <h2 class="text-xs font-bold text-gray-500 mb-1 mt-2">Workers</h2>
-    <div style="height:100px"><canvas id="workersChart"></canvas></div>
+    <h2 class="text-[10px] font-bold text-gray-600 mb-1">GPU HISTORY</h2>
+    <div style="height:100px"><canvas id="gpuChart"></canvas></div>
+    <h2 class="text-[10px] font-bold text-gray-600 mb-1 mt-1">WORKERS</h2>
+    <div style="height:90px"><canvas id="workersChart"></canvas></div>
+  </div>
+  <!-- Family tree -->
+  <div class="bg-gray-900 rounded-lg p-3 overflow-auto">
+    <h2 class="text-[10px] font-bold text-gray-600 mb-1">FAMILY TREE <span class="text-gray-700 font-normal">(click experiment)</span></h2>
+    <svg id="familyTree" width="100%" height="200"></svg>
   </div>
 </div>
 
-<!-- Leaderboard + Events -->
-<div class="grid grid-cols-3 gap-3 mb-4">
-  <div class="col-span-2 bg-gray-900 rounded-lg p-3">
-    <h2 class="text-xs font-bold text-gray-500 mb-2">Leaderboard</h2>
-    <table class="w-full text-sm">
-      <thead><tr class="text-gray-500 text-xs border-b border-gray-800">
-        <th class="py-1 text-left">#</th>
-        <th class="py-1 text-left">ID</th>
-        <th class="py-1 text-right">Fresh</th>
-        <th class="py-1 text-right">Parity</th>
-        <th class="py-1 text-left">Arch</th>
-        <th class="py-1 text-left">Method</th>
-        <th class="py-1 text-right">Cycles</th>
+<!-- Leaderboard + Events + Detail panel -->
+<div class="grid grid-cols-4 gap-3">
+  <!-- Leaderboard -->
+  <div class="col-span-2 bg-gray-900 rounded-lg p-3 max-h-[400px] overflow-y-auto">
+    <h2 class="text-[10px] font-bold text-gray-600 mb-1">LEADERBOARD</h2>
+    <table class="w-full">
+      <thead><tr class="text-[10px] text-gray-600 border-b border-gray-800">
+        <th class="py-1 text-left">#</th><th class="text-left">ID</th>
+        <th class="text-right">Fresh</th><th class="text-right">Eff</th>
+        <th class="text-left">Arch</th><th class="text-left">Strategy</th>
+        <th class="text-right">Cyc</th><th>St</th>
       </tr></thead>
       <tbody id="leaderboard"></tbody>
     </table>
   </div>
-  <div class="bg-gray-900 rounded-lg p-3">
-    <h2 class="text-xs font-bold text-gray-500 mb-2">Live Events</h2>
-    <div id="events" class="space-y-1 max-h-72 overflow-y-auto text-xs font-mono"></div>
-  </div>
-</div>
 
-<!-- Task progress -->
-<div class="bg-gray-900 rounded-lg p-3 mb-4">
-  <h2 class="text-xs font-bold text-gray-500 mb-2">Curriculum Progress</h2>
-  <div id="curriculum" class="flex flex-wrap gap-1"></div>
+  <!-- Events -->
+  <div class="bg-gray-900 rounded-lg p-3 max-h-[400px] overflow-y-auto">
+    <h2 class="text-[10px] font-bold text-gray-600 mb-1">LIVE EVENTS</h2>
+    <div id="events" class="space-y-0.5"></div>
+  </div>
+
+  <!-- Detail panel -->
+  <div id="detail-panel" class="bg-gray-900 rounded-lg p-3 max-h-[400px] overflow-y-auto">
+    <h2 class="text-[10px] font-bold text-gray-600 mb-1">EXPERIMENT DETAIL</h2>
+    <div id="detail-content" class="text-xs text-gray-500">Click any experiment to inspect</div>
+    <div style="height:150px" class="mt-2"><canvas id="detailChart"></canvas></div>
+  </div>
 </div>
 
 </div>
 
 <script>
-// Firebase config
 firebase.initializeApp({
   databaseURL: "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app"
 });
 const db = firebase.database();
 
-// State
-let gpuHistory = [];
-let workerHistory = [];
-let taskChart = null;
-let gpuChart = null;
-let workersChart = null;
+let gpuHist = [], memHist = [], workerHist = [];
+let taskChart, gpuChart, workersChart, detailChart;
 let lastTimestamp = 0;
+let allExperiments = {};
 
-// Colors
 const TASK_COLORS = {
-  parity: '#3b82f6', binary_pattern_next: '#6366f1',
-  same_different: '#22c55e', odd_one_out: '#84cc16',
-  sequence_completion: '#eab308', pattern_period: '#f59e0b',
-  run_length_next: '#f97316', mirror_detection: '#ef4444',
-  repeat_count: '#ec4899', arithmetic_next: '#a855f7',
-  geometric_next: '#8b5cf6', alternating_next: '#6366f1',
-  logic_gate: '#14b8a6', logic_chain: '#06b6d4', modus_ponens: '#0ea5e9',
+  parity:'#3b82f6', binary_pattern_next:'#6366f1', same_different:'#22c55e',
+  odd_one_out:'#84cc16', sequence_completion:'#eab308', pattern_period:'#f59e0b',
+  run_length_next:'#f97316', mirror_detection:'#ef4444', repeat_count:'#ec4899',
+  arithmetic_next:'#a855f7', geometric_next:'#8b5cf6', alternating_next:'#6366f1',
+  logic_gate:'#14b8a6', logic_chain:'#06b6d4', modus_ponens:'#0ea5e9',
 };
 
-// ── Freshness indicator ──
+// Freshness
 setInterval(() => {
-  if (lastTimestamp > 0) {
-    const ago = Math.round((Date.now()/1000 - lastTimestamp));
-    const el = document.getElementById('freshness');
-    if (ago < 120) {
-      el.textContent = `${ago}s ago`;
-      el.className = 'text-green-400';
-    } else {
-      el.textContent = `${Math.round(ago/60)}min ago ⚠`;
-      el.className = 'text-red-400';
-    }
+  if (!lastTimestamp) return;
+  const ago = Math.round(Date.now()/1000 - lastTimestamp);
+  const el = document.getElementById('freshness');
+  const dot = document.getElementById('live-indicator');
+  if (ago < 90) {
+    el.textContent = `${ago}s ago`;
+    el.className = 'text-green-500 ml-1';
+    dot.className = 'live-dot text-green-400';
+  } else if (ago < 300) {
+    el.textContent = `${Math.round(ago/60)}m ago`;
+    el.className = 'text-yellow-500 ml-1';
+    dot.className = 'text-yellow-400';
+  } else {
+    el.textContent = `${Math.round(ago/60)}m ago ⚠ STALE`;
+    el.className = 'text-red-500 ml-1 font-bold';
+    dot.className = 'text-red-500';
   }
 }, 1000);
 
-// ── Snapshot listener ──
+// ── Snapshot ──
 db.ref('mamba3/snapshot').on('value', snap => {
   const d = snap.val();
   if (!d) return;
-
   lastTimestamp = d.timestamp || 0;
-  const time = new Date(d.timestamp * 1000).toLocaleTimeString();
-  document.getElementById('last-update').textContent = time;
-  document.getElementById('gpu-pct').textContent = (d.gpu_pct || 0).toFixed(0) + '%';
-  document.getElementById('mem-pct').textContent = (d.mem_pct || 0).toFixed(0) + '%';
-  document.getElementById('n-running').textContent = d.n_running || 0;
-  document.getElementById('best-fresh').textContent = ((d.best_fresh || 0) * 100).toFixed(1) + '%';
+
+  document.getElementById('last-update').textContent = new Date(d.timestamp*1000).toLocaleTimeString();
+  document.getElementById('gpu-pct').textContent = (d.gpu_pct||0).toFixed(0)+'%';
+  document.getElementById('mem-pct').textContent = (d.mem_pct||0).toFixed(0)+'%';
+  document.getElementById('n-running').textContent = d.n_running||0;
+  document.getElementById('n-total').textContent = d.n_total||0;
+  document.getElementById('best-fresh').textContent = ((d.best_fresh||0)*100).toFixed(1)+'%';
+  document.getElementById('generation').textContent = d.generation||0;
 
   // Plateau
   const pb = document.getElementById('plateau-banner');
-  if (d.plateau && d.plateau.active) {
+  if (d.plateau?.active) {
     pb.classList.remove('hidden');
     document.getElementById('plateau-details').textContent =
-      `Severity ${d.plateau.severity} · Stuck ${d.plateau.stuck_gens} gens at ${(d.plateau.best_ever*100).toFixed(1)}% · Mutation ${(1+d.plateau.severity).toFixed(1)}x`;
-  } else {
-    pb.classList.add('hidden');
-  }
+      `Severity ${d.plateau.severity} · Stuck ${d.plateau.stuck_gens} gens · Mutation ${(1+d.plateau.severity).toFixed(1)}x`;
+  } else pb.classList.add('hidden');
+
+  // Store experiments
+  (d.leaderboard||[]).forEach(e => { allExperiments[e.exp_id] = e; });
 
   // Leaderboard
   const lb = document.getElementById('leaderboard');
   lb.innerHTML = '';
-  (d.leaderboard || []).forEach((exp, i) => {
-    const star = i === 0 ? '★ ' : '';
-    const freshPct = (exp.fresh * 100).toFixed(1);
-    const parityPct = (exp.parity * 100).toFixed(0);
-    const mom = exp.momentum > 0.001 ? '↑' : exp.momentum < -0.001 ? '↓' : '';
-    const spec = (exp.specialist || []).join(',');
-    lb.innerHTML += `<tr class="border-b border-gray-800/50 hover:bg-gray-800/50">
-      <td class="py-1 text-gray-500">${i+1}</td>
-      <td class="py-1 font-mono text-xs">${star}${exp.exp_id} ${mom}</td>
-      <td class="py-1 text-right font-bold tabular-nums text-yellow-400">${freshPct}%</td>
-      <td class="py-1 text-right tabular-nums">${parityPct}%</td>
-      <td class="py-1 text-xs text-gray-400">d=${exp.d_model} L=${exp.n_layers}</td>
-      <td class="py-1 text-xs">${exp.method}${spec ? ' 🎯'+spec : ''}</td>
-      <td class="py-1 text-right tabular-nums text-gray-500">${exp.cycle}</td>
+  (d.leaderboard||[]).forEach((e, i) => {
+    const star = i===0?'★ ':'';
+    const mom = e.momentum>0.001?'<span class="text-green-500">↑</span>':e.momentum<-0.001?'<span class="text-red-500">↓</span>':'';
+    const stColor = e.status==='running'?'text-green-500':'text-yellow-600';
+    const spec = (e.specialist||[]).length ? `<span class="text-purple-400 text-[9px]">🎯</span>`:'';
+    const strategy = [e.method, e.optimizer!=='adamw'?e.optimizer:'', e.loss_fn!=='stable_ce'?e.loss_fn:'', e.warm_restarts?'WR':'', e.noise_scale?'noise':''].filter(Boolean).join(' ');
+    lb.innerHTML += `<tr class="border-b border-gray-800/30 hover:bg-gray-800/50 cursor-pointer" onclick="showDetail('${e.exp_id}')">
+      <td class="py-0.5 text-gray-600">${i+1}</td>
+      <td class="py-0.5 font-mono text-[11px]">${star}${e.exp_id} ${mom}${spec}</td>
+      <td class="py-0.5 text-right font-bold tabular-nums text-yellow-400">${(e.fresh*100).toFixed(1)}%</td>
+      <td class="py-0.5 text-right tabular-nums text-gray-500">${(e.effective_score*100).toFixed(1)}%</td>
+      <td class="py-0.5 text-[10px] text-gray-400">d=${e.d_model} L=${e.n_layers}</td>
+      <td class="py-0.5 text-[10px] text-gray-500">${strategy}</td>
+      <td class="py-0.5 text-right tabular-nums text-gray-600">${e.cycle}</td>
+      <td class="py-0.5 ${stColor} text-center text-[10px]">${e.status==='running'?'●':'⏸'}</td>
     </tr>`;
   });
 
   // Curriculum
-  const cur = document.getElementById('curriculum');
   const ALL_TASKS = ['parity','binary_pattern_next','same_different','odd_one_out',
     'sequence_completion','pattern_period','run_length_next','mirror_detection',
     'repeat_count','arithmetic_next','geometric_next','alternating_next',
     'logic_gate','logic_chain','modus_ponens'];
+  const cur = document.getElementById('curriculum');
   cur.innerHTML = '';
   ALL_TASKS.forEach(task => {
-    const info = (d.tasks || {})[task];
-    const acc = info ? info.acc : 0;
-    let cls, label;
-    if (acc >= 0.9) { cls = 'bg-green-600 text-white'; label = `✅ ${(acc*100).toFixed(0)}%`; }
-    else if (acc > 0) { cls = 'bg-yellow-700 text-yellow-100'; label = `${(acc*100).toFixed(0)}%`; }
-    else { cls = 'bg-gray-800 text-gray-600'; label = '🔒'; }
-    const short = task.replace(/_/g,' ').replace('next','→');
-    cur.innerHTML += `<span class="px-2 py-1 rounded text-xs ${cls}" title="${task}: ${(acc*100).toFixed(1)}%">${short} ${label}</span>`;
+    const acc = d.tasks?.[task]?.acc || 0;
+    const exp = d.tasks?.[task]?.exp || '';
+    let cls;
+    if (acc >= 0.9) cls = 'bg-green-600 text-white';
+    else if (acc > 0.5) cls = 'bg-yellow-700 text-yellow-100';
+    else if (acc > 0) cls = 'bg-gray-800 text-gray-300';
+    else cls = 'bg-gray-900 text-gray-700';
+    const label = acc > 0 ? `${(acc*100).toFixed(0)}%` : '🔒';
+    const short = task.replace(/_/g,' ').replace('next','→').substring(0,14);
+    cur.innerHTML += `<span class="px-1.5 py-0.5 rounded text-[10px] ${cls}" title="${task}: ${(acc*100).toFixed(1)}% (${exp})">${short} ${label}</span>`;
   });
 
-  // Task accuracy bar chart
+  // Task chart
   updateTaskChart(d.tasks || {});
 
-  // GPU history
-  gpuHistory.push(d.gpu_pct || 0);
-  if (gpuHistory.length > 60) gpuHistory.shift();
-  workerHistory.push(d.n_running || 0);
-  if (workerHistory.length > 60) workerHistory.shift();
-  updateGpuChart();
-  updateWorkersChart();
+  // History
+  gpuHist.push(d.gpu_pct||0); if(gpuHist.length>100) gpuHist.shift();
+  memHist.push(d.mem_pct||0); if(memHist.length>100) memHist.shift();
+  workerHist.push(d.n_running||0); if(workerHist.length>100) workerHist.shift();
+  updateMiniChart('gpuChart', gpuHist, '#3b82f6', 'rgba(59,130,246,0.1)', 100);
+  updateMiniChart('workersChart', workerHist, '#22c55e', 'rgba(34,197,94,0.1)', null);
+
+  // Family tree
+  if (d.lineage) drawFamilyTree(d.leaderboard || [], d.lineage);
 });
 
-// ── Events listener ──
-db.ref('mamba3/events').orderByChild('timestamp').limitToLast(30).on('child_added', snap => {
+// ── Events ──
+db.ref('mamba3/events').orderByChild('timestamp').limitToLast(50).on('child_added', snap => {
   const e = snap.val();
   if (!e) return;
-  const time = new Date(e.timestamp * 1000).toLocaleTimeString();
-  const icons = {mastery:'★',evolve:'🧬',pause:'⏸',unlock:'🔓',error:'❌',test:'🔧'};
-  const icon = icons[e.type] || '·';
-  const color = e.type === 'mastery' ? 'text-yellow-400' :
-                e.type === 'error' ? 'text-red-400' : 'text-gray-400';
+  const time = new Date(e.timestamp*1000).toLocaleTimeString();
+  const icons = {mastery:'★',evolve:'🧬',pause:'⏸',unlock:'🔓',error:'❌'};
+  const colors = {mastery:'text-yellow-400',evolve:'text-cyan-400',error:'text-red-400'};
   const div = document.getElementById('events');
-  div.innerHTML = `<div class="${color}"><span class="text-gray-600">${time}</span> ${icon} <b>${e.exp_id||''}</b> ${e.details||''}</div>` + div.innerHTML;
-  // Keep max 30
-  while (div.children.length > 30) div.removeChild(div.lastChild);
+  div.innerHTML = `<div class="${colors[e.type]||'text-gray-500'} text-[11px]">
+    <span class="text-gray-700">${time}</span> ${icons[e.type]||'·'} <b>${e.exp_id||''}</b> ${e.details||''}
+  </div>` + div.innerHTML;
+  while (div.children.length > 50) div.removeChild(div.lastChild);
 });
 
-// ── Charts ──
+// ── Detail panel ──
+function showDetail(expId) {
+  const e = allExperiments[expId];
+  if (!e) return;
+  const dc = document.getElementById('detail-content');
+  const tasks = Object.entries(e.type_accs||{}).sort((a,b)=>b[1]-a[1]);
+  const taskRows = tasks.map(([t,a]) =>
+    `<div class="flex justify-between"><span class="text-gray-500">${t}</span><span class="font-bold" style="color:${TASK_COLORS[t]||'#888'}">${(a*100).toFixed(0)}%</span></div>`
+  ).join('');
+
+  dc.innerHTML = `
+    <div class="font-mono text-sm font-bold text-yellow-400 mb-2">${expId}</div>
+    <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] mb-3">
+      <div><span class="text-gray-600">Fresh:</span> <b class="text-yellow-400">${(e.fresh*100).toFixed(1)}%</b></div>
+      <div><span class="text-gray-600">Effective:</span> <b>${(e.effective_score*100).toFixed(1)}%</b></div>
+      <div><span class="text-gray-600">Arch:</span> d=${e.d_model} L=${e.n_layers}</div>
+      <div><span class="text-gray-600">Params:</span> ${(e.n_params||0).toLocaleString()}</div>
+      <div><span class="text-gray-600">Optimizer:</span> ${e.optimizer||'adamw'}</div>
+      <div><span class="text-gray-600">Loss:</span> ${e.loss_fn||'stable_ce'}</div>
+      <div><span class="text-gray-600">Weight decay:</span> ${e.weight_decay}</div>
+      <div><span class="text-gray-600">LR:</span> ${e.lr?.toExponential(1)}</div>
+      <div><span class="text-gray-600">Batch:</span> ${e.batch_size}</div>
+      <div><span class="text-gray-600">Cycles:</span> ${e.cycle}</div>
+      <div><span class="text-gray-600">Status:</span> <span class="${e.status==='running'?'text-green-400':'text-yellow-500'}">${e.status}</span></div>
+      <div><span class="text-gray-600">Parent:</span> ${e.parent_id||'seed'}</div>
+      <div><span class="text-gray-600">Momentum:</span> ${e.momentum>0?'↑':'↓'}${Math.abs(e.momentum||0).toFixed(3)}</div>
+      <div><span class="text-gray-600">Warm restart:</span> ${e.warm_restarts?'✓':'✗'}</div>
+      <div><span class="text-gray-600">Noise:</span> ${e.noise_scale||0}</div>
+      <div><span class="text-gray-600">Backend:</span> ${e.backend||'pytorch'}</div>
+    </div>
+    <div class="text-[10px] font-bold text-gray-600 mb-1">PER-TASK ACCURACY</div>
+    <div class="space-y-0.5 text-[11px]">${taskRows || '<span class="text-gray-700">no data</span>'}</div>
+  `;
+
+  // Per-task bar for this experiment
+  updateDetailChart(e.type_accs || {});
+}
+
+function updateDetailChart(typeAccs) {
+  const labels = Object.keys(typeAccs).sort();
+  const data = labels.map(t => (typeAccs[t]||0)*100);
+  const colors = labels.map(t => TASK_COLORS[t]||'#666');
+  const canvas = document.getElementById('detailChart');
+  if (detailChart) detailChart.destroy();
+  detailChart = new Chart(canvas, {
+    type:'bar', data:{labels:labels.map(l=>l.replace(/_/g,' ').substring(0,10)), datasets:[{data,backgroundColor:colors}]},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{display:false}},
+      scales:{y:{min:0,max:100,ticks:{color:'#555',font:{size:8}}},x:{ticks:{color:'#666',font:{size:7},maxRotation:45}}}}
+  });
+}
+
+// ── Task chart ──
 function updateTaskChart(tasks) {
   const labels = Object.keys(tasks).sort();
-  const data = labels.map(t => (tasks[t].acc || 0) * 100);
-  const colors = labels.map(t => TASK_COLORS[t] || '#666');
-
+  const data = labels.map(t => (tasks[t]?.acc||0)*100);
+  const colors = labels.map(t => TASK_COLORS[t]||'#666');
+  const canvas = document.getElementById('taskChart');
   if (!taskChart) {
-    taskChart = new Chart(document.getElementById('taskChart'), {
-      type: 'bar',
-      data: {
-        labels: labels.map(l => l.replace(/_/g,' ')),
-        datasets: [{ data, backgroundColor: colors, borderWidth: 0 }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false, animation: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: { min: 0, max: 100, ticks: { color: '#666', font: {size:9} } },
-          x: { ticks: { color: '#888', font: {size:8}, maxRotation: 45 } }
-        }
-      }
+    taskChart = new Chart(canvas, {
+      type:'bar', data:{labels:labels.map(l=>l.replace(/_/g,' ')), datasets:[{data,backgroundColor:colors,borderWidth:0}]},
+      options:{responsive:true,maintainAspectRatio:false,animation:false,
+        plugins:{legend:{display:false}},
+        scales:{y:{min:0,max:100,ticks:{color:'#555',font:{size:8}},grid:{color:'#222'}},
+                x:{ticks:{color:'#777',font:{size:8},maxRotation:45},grid:{display:false}}}}
     });
   } else {
-    taskChart.data.labels = labels.map(l => l.replace(/_/g,' '));
+    taskChart.data.labels = labels.map(l=>l.replace(/_/g,' '));
     taskChart.data.datasets[0].data = data;
     taskChart.data.datasets[0].backgroundColor = colors;
     taskChart.update();
   }
 }
 
-function updateGpuChart() {
-  if (!gpuChart) {
-    gpuChart = new Chart(document.getElementById('gpuChart'), {
-      type: 'line',
-      data: { labels: gpuHistory.map((_,i) => i), datasets: [{
-        data: gpuHistory, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)',
-        fill: true, pointRadius: 0, tension: 0.3, borderWidth: 1.5
-      }]},
-      options: {
-        responsive: true, maintainAspectRatio: false, animation: false,
-        plugins: { legend: { display: false } },
-        scales: { y: { min: 0, max: 100, ticks: { color: '#666', font: {size:8} } },
-                  x: { display: false } }
-      }
+// ── Mini charts ──
+const miniCharts = {};
+function updateMiniChart(id, data, color, bg, max) {
+  const canvas = document.getElementById(id);
+  if (!miniCharts[id]) {
+    miniCharts[id] = new Chart(canvas, {
+      type:'line', data:{labels:data.map((_,i)=>i), datasets:[{data,borderColor:color,backgroundColor:bg,fill:true,pointRadius:0,tension:0.3,borderWidth:1.5}]},
+      options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false}},
+        scales:{y:{min:0,max:max,ticks:{color:'#444',font:{size:7}},grid:{color:'#1a1a1a'}},x:{display:false}}}
     });
   } else {
-    gpuChart.data.labels = gpuHistory.map((_,i) => i);
-    gpuChart.data.datasets[0].data = gpuHistory;
-    gpuChart.update();
+    miniCharts[id].data.labels = data.map((_,i)=>i);
+    miniCharts[id].data.datasets[0].data = data;
+    miniCharts[id].update();
   }
 }
 
-function updateWorkersChart() {
-  if (!workersChart) {
-    workersChart = new Chart(document.getElementById('workersChart'), {
-      type: 'line',
-      data: { labels: workerHistory.map((_,i) => i), datasets: [{
-        data: workerHistory, borderColor: '#22c55e', backgroundColor: 'rgba(34,197,94,0.1)',
-        fill: true, pointRadius: 0, tension: 0.3, borderWidth: 1.5
-      }]},
-      options: {
-        responsive: true, maintainAspectRatio: false, animation: false,
-        plugins: { legend: { display: false } },
-        scales: { y: { min: 0, ticks: { color: '#666', font: {size:8} } },
-                  x: { display: false } }
-      }
-    });
-  } else {
-    workersChart.data.labels = workerHistory.map((_,i) => i);
-    workersChart.data.datasets[0].data = workerHistory;
-    workersChart.update();
-  }
+// ── Family tree ──
+function drawFamilyTree(leaderboard, lineage) {
+  const svg = document.getElementById('familyTree');
+  const W = svg.clientWidth || 300;
+  const H = 200;
+  svg.innerHTML = '';
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+
+  // Build tree from top 15 experiments
+  const exps = leaderboard.slice(0, 15);
+  const positions = {};
+  const nodeR = 4;
+  const cols = Math.min(exps.length, 8);
+  const rows = Math.ceil(exps.length / cols);
+
+  exps.forEach((e, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = 20 + col * ((W-40) / (cols-1 || 1));
+    const y = 20 + row * ((H-40) / (rows-1 || 1));
+    positions[e.exp_id] = {x, y, exp: e};
+  });
+
+  // Draw lines (parent → child)
+  exps.forEach(e => {
+    const pid = e.parent_id || lineage?.[e.exp_id]?.parent;
+    if (pid && positions[pid] && positions[e.exp_id]) {
+      const p = positions[pid];
+      const c = positions[e.exp_id];
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', p.x); line.setAttribute('y1', p.y);
+      line.setAttribute('x2', c.x); line.setAttribute('y2', c.y);
+      line.setAttribute('class', 'tree-line');
+      svg.appendChild(line);
+    }
+  });
+
+  // Draw nodes
+  exps.forEach((e, i) => {
+    const pos = positions[e.exp_id];
+    if (!pos) return;
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('class', 'tree-node');
+    g.setAttribute('onclick', `showDetail('${e.exp_id}')`);
+
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', pos.x); circle.setAttribute('cy', pos.y);
+    const r = 3 + (e.fresh || 0) * 20;
+    circle.setAttribute('r', r);
+    const color = e.status === 'running' ? (i===0?'#eab308':'#22c55e') : '#666';
+    circle.setAttribute('fill', color);
+    circle.setAttribute('opacity', '0.8');
+    g.appendChild(circle);
+
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', pos.x); label.setAttribute('y', pos.y + r + 10);
+    label.setAttribute('text-anchor', 'middle');
+    label.setAttribute('fill', '#888'); label.setAttribute('font-size', '8');
+    label.textContent = e.exp_id.replace('exp_','');
+    g.appendChild(label);
+
+    svg.appendChild(g);
+  });
 }
 </script>
-
 </body>
 </html>
