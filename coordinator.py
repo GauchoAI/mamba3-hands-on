@@ -104,9 +104,10 @@ class EvolutionState:
             row = db.execute("SELECT MAX(best_fresh) FROM cycles").fetchone()
             if row and row[0]:
                 self.best_ever = row[0]
-                self.best_ever_gen = max(0, self.generation - 20)  # assume it's been stuck
+                self.best_ever_gen = -20  # far in the past → immediately triggers plateau
+                self.plateau_mode = True  # activate right now
                 print(f"  📊 Bootstrapped from DB: best_ever={self.best_ever:.1%}, "
-                      f"treating as stagnant", flush=True)
+                      f"PLATEAU MODE ACTIVE immediately", flush=True)
             db.close()
         except Exception as e:
             print(f"  ⚠ DB bootstrap failed: {e}", flush=True)
