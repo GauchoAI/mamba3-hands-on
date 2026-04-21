@@ -368,16 +368,105 @@ See `ARCHITECTURE.md` for the full FPGA analogy and experimental plan.
 
 ---
 
+## Entry 10 — Bootstrap Level 0: the adaptive teacher
+
+**Commit:** `train: bootstrap Level 0 with adaptive teacher`
+
+### The bootstrap hypothesis
+
+Human cognition builds in layers: pattern recognition → comparison →
+accumulation → composition → recursion → symbolic → language. Each level
+bootstraps from the one below. A baby doesn't learn sorting from 10,000
+sorted lists — it learns to see patterns, then to compare, then to order.
+
+We designed a 6-level bootstrap curriculum (see `BOOTSTRAP.md`) and built
+Level 0: pattern recognition, the substrate for everything above.
+
+### Training evolution
+
+**v1 (baseline):** 10K fixed examples, eval on training data. Reached 77%
+but was measuring memorization, not generalization.
+
+**v2 (cycles + fresh data):** Learn→digest cycles with fresh data
+regenerated each cycle. Dual eval showing train accuracy, fresh accuracy,
+and the gap between them.
+
+| Version | Fresh acc | Gap | Key insight |
+|---|---|---|---|
+| v1 | 77% (train data) | unknown | Was memorizing |
+| v2 step 500 | 40% | +2.4% | Genuine learning |
+| v2 step 4750 | **80%** | -1.0% | Best — cycles work |
+| v2 step 9000 | 78% | +0.4% | Holding steady |
+
+The learn→digest cycle was the breakthrough. High LR to absorb new
+patterns, low LR to consolidate. Fresh data each cycle prevents
+memorization. The gap staying small (<5%) confirms generalization.
+
+### The adaptive teacher
+
+Built a teacher that observes per-type accuracy and adjusts:
+- **Task weights:** struggling tasks get more practice (gradually)
+- **Difficulty levels:** 3 presets per task, auto-promote when mastered
+- **Smooth transitions:** weights move 30% toward target per observation
+  to avoid distribution shock
+
+First version was too aggressive (instant weight changes from 1.0 to 2.0),
+which caused the model to catastrophically forget — fresh dropped from
+80% to 50%. Fixed with smooth transitions.
+
+### Per-type results at best checkpoint (80% overall, fresh data)
+
+| Task | Accuracy | Status |
+|---|---|---|
+| same_different | 98-100% | ✓ Mastered |
+| geometric_next | 94-98% | ✓ Mastered |
+| odd_one_out | 83-88% | ✓ Strong |
+| mirror_detection | 76-84% | ✓ Good |
+| arithmetic_next | 68-80% | ✓ Improving |
+| sequence_completion | 72-86% | ✓ Good |
+| pattern_period | 44-59% | … Struggling |
+| repeat_count | 33-57% | … Struggling (needs Level 2) |
+
+### Lessons learned
+
+1. **Eval must be on fresh data.** Eval on training data hides memorization.
+   The train/fresh/gap triple is essential.
+2. **Checkpoints must be immutable.** We lost our best 80% checkpoint when
+   a bad run overwrote it. Now saved as `level0_step{N}.pt`.
+3. **Resume must carry forward best_fresh.** Otherwise the new run thinks
+   0% is the baseline and "improves" to 60%.
+4. **Teacher adjustments must be gradual.** Instant weight changes cause
+   distribution shock. Smooth 30% transitions per observation.
+5. **The student is the bottleneck, not the teacher.** The adaptive teacher
+   would be capable of teaching a human. One Mamba-3 block at 169K params
+   hits its ceiling around 80%. Scaling to more layers and more state
+   dimensions is needed.
+
+### What we built
+
+```
+generators/
+├── level0_patterns.py    # 8 task types, parameterized difficulty
+├── teacher.py            # adaptive teacher with smooth weight/difficulty control
+train_bootstrap.py        # cycle training, dual eval, immutable checkpoints
+BOOTSTRAP.md              # 6-level curriculum plan
+ARCHITECTURE.md           # two-brain problem, FPGA analogy, Von Neumann insight
+CURRICULUM.md             # language + reasoning curriculum
+```
+
+---
+
 ## Open threads
 
-- **Von Neumann training data.** Design and implement code generators for
-  micro-operation execution traces. Start with comparison-based sorting
-  (not counting sort) and stack operations.
-- **Symbolic math traces.** Use SymPy to generate algebraic manipulation
-  traces. Teach DISTRIBUTE, FACTOR, SUBSTITUTE as learnable operations.
-- **Scaling test.** Re-run sorting with vocab=100+ to distinguish genuine
-  comparison sorting from counting sort / lookup table memorization.
-- **The compilation problem.** How does Brain 1 learn to emit programs
-  that Brain 2 executes? This is the hardest open question.
-- **Length generalization.** Still unsolved from Entry 3.
-- **MIMO.** Still not implemented.
+- **Scale the student.** 2-4 layers, d_state=32-64, d_model=128. Same
+  teacher, same curriculum. Does 80% become 95%?
+- **Level 1 (comparison).** Build generator, train from Level 0 checkpoint.
+  Test with unseen value ranges to prove generalization.
+- **Von Neumann training data.** Micro-operation execution traces for
+  Level 3 composition.
+- **Symbolic math traces.** SymPy-generated algebraic manipulation for
+  Level 5.
+- **H100 deployment.** Move the bootstrap framework to GPU with official
+  Mamba-3 CUDA kernels (chunked parallel scan).
+- **The compilation problem.** How Brain 1 (language) learns to program
+  Brain 2 (step function). The hardest open question.
