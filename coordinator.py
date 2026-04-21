@@ -38,11 +38,14 @@ from datetime import datetime
 # ── Evolution state ─────────────────────────────────────────────────
 
 class EvolutionState:
-    """Tracks momentum, lineage, and generation for meta-evolution."""
+    """Tracks momentum, lineage, plateau detection, and generation."""
     def __init__(self):
         self.history = {}      # exp_id → [(cycle, best_fresh), ...]
         self.lineage = {}      # exp_id → {"parent": exp_id, "grandparent": exp_id}
         self.generation = 0
+        self.best_ever = 0.0   # population best for plateau detection
+        self.best_ever_gen = 0 # generation when best was set
+        self.plateau_mode = False
 
     def record(self, exp_id, cycle, best_fresh):
         if exp_id not in self.history:
@@ -74,6 +77,31 @@ class EvolutionState:
                 return current
             current = parent
         return current
+
+    def check_plateau(self, current_best, patience=10):
+        """Detect if the population is stuck. Returns True if no improvement for `patience` generations."""
+        if current_best > self.best_ever + 0.005:  # 0.5% improvement threshold
+            self.best_ever = current_best
+            self.best_ever_gen = self.generation
+            self.plateau_mode = False
+            return False
+
+        stuck_gens = self.generation - self.best_ever_gen
+        was_plateau = self.plateau_mode
+        self.plateau_mode = stuck_gens >= patience
+
+        if self.plateau_mode and not was_plateau:
+            print(f"\n  🔥 PLATEAU DETECTED — no improvement for {stuck_gens} generations!"
+                  f"\n  🔥 Activating aggressive exploration mode.\n", flush=True)
+
+        return self.plateau_mode
+
+    def get_plateau_severity(self):
+        """How stuck are we? 0 = not stuck, 1+ = very stuck."""
+        if not self.plateau_mode:
+            return 0.0
+        stuck = self.generation - self.best_ever_gen
+        return min(stuck / 10.0, 3.0)  # caps at 3.0
 
 
 # ── Scoring: momentum + task specialists ────────────────────────────
@@ -160,63 +188,82 @@ def select_parent(running_results, evo_state, generation,
 
 # ── Genetic config mutation ─────────────────────────────────────────
 
-def mutate_config(parent_config, mutation_strength=0.3):
-    """Create a child config by mutating a parent."""
+def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0):
+    """Create a child config by mutating a parent.
+
+    When plateau_severity > 0, mutations become more aggressive:
+    - Higher probability of changing every parameter
+    - Wider ranges for numerical mutations
+    - Re-introduces discarded strategies (Lion, focal, SAM, etc.)
+    """
     child = parent_config.copy()
     # Ensure all keys exist with defaults
     child.setdefault("loss_fn", "stable_ce")
     child.setdefault("backend", "pytorch")
     child.setdefault("steps_per_cycle", 200)
 
+    # Plateau amplifier: multiply mutation probabilities
+    amp = 1.0 + plateau_severity  # 1.0 normal, 2.0-4.0 when stuck
+
     # Mutate learning rate (log-scale)
-    if random.random() < 0.5:
-        factor = 2 ** (random.gauss(0, mutation_strength))
+    if random.random() < min(0.5 * amp, 0.95):
+        spread = mutation_strength * amp
+        factor = 2 ** (random.gauss(0, spread))
         child["lr"] = max(1e-5, min(1e-2, child["lr"] * factor))
 
-    # Mutate batch size (powers of 2)
-    if random.random() < 0.3:
+    # Mutate batch size
+    if random.random() < min(0.3 * amp, 0.9):
         child["batch_size"] = random.choice([64, 128, 256, 512, 1024])
 
     # Mutate d_model
-    if random.random() < 0.2:
+    if random.random() < min(0.2 * amp, 0.8):
         child["d_model"] = random.choice([32, 48, 64, 96, 128])
         child["headdim"] = min(child["headdim"], child["d_model"])
 
     # Mutate layers
-    if random.random() < 0.2:
-        child["n_kernel_layers"] = random.choice([1, 2, 3])
+    if random.random() < min(0.2 * amp, 0.8):
+        child["n_kernel_layers"] = random.choice([1, 2, 3, 4])
 
-    # Mutate weight decay (toggle between grokking and PerpGrad)
-    if random.random() < 0.2:
-        child["weight_decay"] = random.choice([0.0, 0.05, 0.1, 0.2])
+    # Mutate weight decay
+    if random.random() < min(0.2 * amp, 0.8):
+        child["weight_decay"] = random.choice([0.0, 0.01, 0.05, 0.1, 0.2, 0.5])
 
     # Mutate d_state
-    if random.random() < 0.15:
+    if random.random() < min(0.15 * amp, 0.7):
         child["d_state"] = random.choice([8, 16, 32])
 
-    # Small chance to flip backend (pytorch ↔ tinygrad)
-    if random.random() < 0.1:
+    # Flip backend
+    if random.random() < min(0.1 * amp, 0.5):
         child["backend"] = "tinygrad" if child.get("backend") != "tinygrad" else "pytorch"
 
-    # Mutate loss function
-    if random.random() < 0.15:
+    # Mutate loss function — when stuck, try everything
+    if random.random() < min(0.15 * amp, 0.8):
         child["loss_fn"] = random.choice(["stable_ce", "ce", "focal", "label_smooth"])
 
-    # Mutate optimizer
-    if random.random() < 0.1:
+    # Mutate optimizer — when stuck, try Lion
+    if random.random() < min(0.1 * amp, 0.6):
         child["optimizer"] = random.choice(["adamw", "lion"])
 
-    # Mutate warm restarts
-    if random.random() < 0.1:
+    # Mutate warm restarts — when stuck, shake things up
+    if random.random() < min(0.1 * amp, 0.5):
         child["warm_restarts"] = not child.get("warm_restarts", False)
 
-    # Mutate noise injection
-    if random.random() < 0.1:
-        child["noise_scale"] = random.choice([0.0, 0.0005, 0.001, 0.002])
+    # Mutate noise injection — when stuck, add noise
+    if random.random() < min(0.1 * amp, 0.5):
+        child["noise_scale"] = random.choice([0.0, 0.0005, 0.001, 0.002, 0.005])
 
-    # Mutate PerpGrad (independent of weight decay)
-    if random.random() < 0.1:
+    # Mutate PerpGrad
+    if random.random() < min(0.1 * amp, 0.5):
         child["use_perp"] = not child.get("use_perp", child.get("weight_decay", 0) == 0)
+
+    # When severely stuck: radical mutation — completely random config
+    if plateau_severity >= 2.0 and random.random() < 0.3:
+        child = random.choice(SEED_CONFIGS).copy()
+        child["n_kernel_layers"] = random.choice([1, 2, 3, 4])
+        child["loss_fn"] = random.choice(["stable_ce", "ce", "focal", "label_smooth"])
+        child["optimizer"] = random.choice(["adamw", "lion"])
+        child["warm_restarts"] = random.choice([True, False])
+        child["noise_scale"] = random.choice([0.0, 0.001, 0.005])
 
     return child
 
@@ -758,17 +805,24 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
     if len(running_results) < 2:
         return
 
+    # Plateau detection
+    current_best = results[0].get("best_fresh", 0) if results else 0
+    is_plateau = evo_state.check_plateau(current_best)
+    severity = evo_state.get_plateau_severity()
+
     at_capacity = mem_pct > 75 or len(running) >= max_workers
     has_headroom = mem_pct < 65 and gpu_pct < 90
 
+    plateau_str = f"  🔥 PLATEAU severity={severity:.1f}" if is_plateau else ""
     print(f"  GPU: {gpu_pct:.0f}%  VRAM: {mem_pct:.0f}%  "
-          f"{'at capacity' if at_capacity else f'headroom ({100-mem_pct:.0f}% VRAM free)'}",
-          flush=True)
+          f"{'at capacity' if at_capacity else f'headroom ({100-mem_pct:.0f}% VRAM free)'}"
+          f"{plateau_str}", flush=True)
 
     # Auto-scale: spawn more workers if GPU has headroom
     if has_headroom and not at_capacity and running_results:
         parent, reason = select_parent(running_results, evo_state, generation)
-        child_cfg = mutate_config(parent.get("config", SEED_CONFIGS[0]))
+        child_cfg = mutate_config(parent.get("config", SEED_CONFIGS[0]),
+                                  plateau_severity=severity)
         child_id = mgr.spawn(child_cfg, parent_id=parent["exp_id"])
         evo_state.register_lineage(child_id, parent["exp_id"])
         print(f"  📈 Auto-scaled from {parent['exp_id']} ({reason})", flush=True)
@@ -791,7 +845,7 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
             mgr.pause(worst["exp_id"])
 
             parent_cfg = best.get("config", SEED_CONFIGS[0])
-            child_cfg = mutate_config(parent_cfg)
+            child_cfg = mutate_config(parent_cfg, plateau_severity=severity)
             child_id = mgr.spawn(child_cfg, parent_id=best["exp_id"])
             evo_state.register_lineage(child_id, best["exp_id"])
 
