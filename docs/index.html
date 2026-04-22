@@ -297,16 +297,40 @@ db.ref('mamba3/snapshot').on('value', s=>{
   updMini('gpuChart',gpuH,'#1a5276','rgba(26,82,118,0.1)',100);
   updMini('workersChart',wkH,'#27ae60','rgba(39,174,96,0.1)',null);
   // Tree
-  // Mutation timeline from lineage
+  // Mutation timeline — file-tree style, grouped by task
   const mt=document.getElementById('mutationTimeline');
   if(mt && d.lineage){
-    const nodes=Object.entries(d.lineage).sort((a,b)=>a[0].localeCompare(b[0]));
-    mt.innerHTML=nodes.slice(-30).map(([id,info])=>{
-      const task=id.replace(/_r\d+$/,'').replace(/_/g,' ');
-      const round=id.match(/_r(\d+)$/)?.[1]||'?';
-      const hasParent=info.parent?'🧬':'🆕';
-      return `<div class="py-0.5 text-gray-600">${hasParent} <b>${task}</b> R${round}</div>`;
-    }).join('');
+    const byTask={};
+    Object.entries(d.lineage).forEach(([id,info])=>{
+      const t=info.task||id.split('_r')[0];
+      if(!byTask[t])byTask[t]=[];
+      const round=id.match(/_r(\d+)/)?.[1]||'0';
+      byTask[t].push({round:parseInt(round),acc:info.acc||0,role:info.role||'champion',mutation:info.mutation});
+    });
+    let html='';
+    const isTeacher=t=>d.three_pop?.teachers?.[t];
+    Object.keys(byTask).sort((a,b)=>{
+      const ba=Math.max(...byTask[a].map(e=>e.acc));
+      const bb=Math.max(...byTask[b].map(e=>e.acc));
+      return bb-ba;
+    }).forEach(task=>{
+      const entries=byTask[task].sort((a,b)=>a.round-b.round);
+      const best=Math.max(...entries.map(e=>e.acc));
+      const icon=isTeacher(task)?'🎓':best>=0.85?'🔥':best>=0.5?'🔄':'⏳';
+      const bestPct=(best*100).toFixed(0);
+      const taskName=task.replace(/_/g,' ');
+      html+=`<div class="mt-1"><div class="font-semibold text-gray-700">${icon} ${taskName} <span class="font-normal text-gray-400">${bestPct}%</span></div>`;
+      entries.forEach((e,i)=>{
+        const last=i===entries.length-1;
+        const branch=last?'└─':'├─';
+        const pct=(e.acc*100).toFixed(0);
+        const bar='█'.repeat(Math.round(e.acc*10))+'░'.repeat(10-Math.round(e.acc*10));
+        const roleTag=e.role==='challenger'?'<span class="text-purple-500">challenger</span>':'';
+        html+=`<div class="text-gray-500 ml-2"><span class="text-gray-300">${branch}</span> r${e.round} <span class="tabular-nums">${bar}</span> ${pct}% ${roleTag}</div>`;
+      });
+      html+=`</div>`;
+    });
+    mt.innerHTML=html;
   }
 });
 
