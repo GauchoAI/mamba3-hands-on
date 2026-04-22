@@ -111,7 +111,7 @@ class WorkerThread(threading.Thread):
         self.last_loss = 0.0
         self.graduated = False
         self.error = None
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
 
     def run(self):
         try:
@@ -132,7 +132,7 @@ class WorkerThread(threading.Thread):
                           f"lr={cfg.get('lr', 1e-3):.0e} opt={cfg.get('optimizer', 'adamw')} "
                           f"loss={cfg.get('loss_fn', 'ce')} ({n_params:,} params)")
 
-            while not self._stop.is_set():
+            while not self._stop_event.is_set():
                 self.cycle += 1
                 acc, loss, elapsed = run_single_cycle(
                     self.model, self.opt, gen_fn, tok, cfg, self.device,
@@ -179,7 +179,7 @@ class WorkerThread(threading.Thread):
         self.pool._log(f"  Saved {self.task} teacher ({len(teacher_data)} cached examples)")
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
 
 
 # ── Student thread ─────────────────────────────────────────────────
@@ -199,7 +199,7 @@ class StudentThread(threading.Thread):
         self.last_fresh = 0.0
         self.last_loss = 0.0
         self.type_accs = {}
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
 
     def add_teacher(self, task, ckpt_path, config):
         """Hot-add a new teacher. Thread-safe."""
@@ -246,7 +246,7 @@ class StudentThread(threading.Thread):
             self.pool._log(f"  📚 Student started: d={cfg.get('d_model')} "
                           f"L={cfg.get('n_kernel_layers')} ({n_params:,} params)")
 
-            while not self._stop.is_set():
+            while not self._stop_event.is_set():
                 self.cycle += 1
 
                 # Snapshot current teachers
@@ -381,7 +381,7 @@ class StudentThread(threading.Thread):
             self.pool._log(f"  ERROR [student]: {e}\n{traceback.format_exc()}")
 
     def stop(self):
-        self._stop.set()
+        self._stop_event.set()
 
 
 # ── Resource-aware pool with GA ────────────────────────────────────
@@ -422,7 +422,7 @@ class ResourceAwarePool:
         self.student = None
 
         # Shutdown
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
 
     def _log(self, msg):
         print(msg, flush=True)
@@ -455,7 +455,7 @@ class ResourceAwarePool:
         last_evolve = time.time()
         evolve_interval = 30  # seconds between GA generations
 
-        while self.tasks_remaining and not self._stop.is_set():
+        while self.tasks_remaining and not self._stop_event.is_set():
             # Admit pending workers if resources allow
             self._admit_pending()
 
@@ -480,7 +480,7 @@ class ResourceAwarePool:
         # Wait for student to finish a few more cycles
         if self.student and self.student.is_alive():
             self._log("Letting student finish...")
-            self.student._stop.wait(timeout=60)
+            self.student._stop_event.wait(timeout=60)
 
         self._log("Pool shutdown complete.")
 
@@ -723,7 +723,7 @@ class ResourceAwarePool:
 
     def shutdown(self):
         """Graceful shutdown."""
-        self._stop.set()
+        self._stop_event.set()
         with self.worker_lock:
             for w in self.workers.values():
                 w.stop()
