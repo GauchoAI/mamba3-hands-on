@@ -329,8 +329,14 @@ def run_tournament(args):
     t_start = time.time()
     next_idx = len(contestants)
 
-    # ── PHASE 1: Quick shootout (2 cycles each — ~30 seconds) ──────
-    print(f"  PHASE 1: Shootout — {len(contestants)} configs × 2 cycles\n", flush=True)
+    # ── PHASE 1: Quick shootout (2 cycles, 50 steps each — fast ranking) ──
+    print(f"  PHASE 1: Shootout — {len(contestants)} configs × 2 cycles (50 steps)\n", flush=True)
+
+    # Temporarily reduce steps for fast shootout
+    saved_steps = {}
+    for c in contestants:
+        saved_steps[c.idx] = c.steps_per_cycle
+        c.steps_per_cycle = 50  # just enough to rank configs
 
     for shootout_cycle in range(2):
         examples = []
@@ -353,6 +359,10 @@ def run_tournament(args):
         print(f"    [{c.idx:2d}] acc={c.last_acc:5.0%} loss={c.last_loss:.3f} | {c.tag()}", flush=True)
 
     # Pick winner
+    # Restore full steps for sprint
+    for c in contestants:
+        c.steps_per_cycle = saved_steps.get(c.idx, 500)
+
     winner_cfg = contestants[0]
     print(f"\n  Winner: [{winner_cfg.idx}] {winner_cfg.tag()} at {winner_cfg.last_acc:.0%}", flush=True)
 
