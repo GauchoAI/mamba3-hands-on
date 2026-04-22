@@ -349,9 +349,11 @@ def run(args):
                 cfg = task_config[task]
                 ckpt_path = Path("checkpoints/specialists") / f"{task}.pt"
                 acc = 0.0
+                cycle = 0
                 if ckpt_path.exists():
                     try:
                         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+                        cycle = ckpt.get("cycles", 0)
                         acc = ckpt.get("accuracy", 0.0)
                     except Exception:
                         pass
@@ -384,6 +386,12 @@ def run(args):
                         fb.evt_mastery(exp_id, task, 0, 0, 0)
                     except Exception:
                         pass
+
+                # Push to Firebase after each task
+                try:
+                    on_cycle(task, cycle, acc, task_best.get(task, 0), 0)
+                except Exception:
+                    pass
 
                 # Plateau? Run challenger (sequential — one at a time for challengers)
                 rounds_stuck = round_num - task_best_round.get(task, 0)
