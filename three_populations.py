@@ -254,6 +254,8 @@ def run(args):
                         leaderboard.append({"task": t, "acc": task_accs[t]["acc"],
                                            "best": task_accs[t]["best"],
                                            "cycle": task_accs[t]["cycle"],
+                                           "exp_id": t,
+                                           "fresh": task_accs[t]["acc"],
                                            "status": "training"})
                     else:
                         leaderboard.append({"task": t, "acc": 0, "status": "waiting"})
