@@ -27,8 +27,9 @@ import torch
 import torch.nn.functional as F
 
 from progressive_model import ProgressiveModel, ByteTokenizer, VOCAB_SIZE, PAD
+import specialist_trainer
 from specialist_trainer import (
-    load_generators, GENERATORS, create_model_and_optimizer,
+    load_generators, create_model_and_optimizer,
     run_single_cycle, precompute_teacher_cache, get_loss_fn,
 )
 from coordinator import (
@@ -115,7 +116,7 @@ class WorkerThread(threading.Thread):
 
     def run(self):
         try:
-            gen_fn = GENERATORS.get(self.task)
+            gen_fn = specialist_trainer.GENERATORS.get(self.task)
             if not gen_fn:
                 self.error = f"Unknown task: {self.task}"
                 return
@@ -260,7 +261,7 @@ class StudentThread(threading.Thread):
                 # Generate data for each teacher's task
                 by_task = {}
                 for task in teachers:
-                    gen_fn = GENERATORS.get(task)
+                    gen_fn = specialist_trainer.GENERATORS.get(task)
                     if gen_fn:
                         examples = []
                         for _ in range(500):
@@ -335,7 +336,7 @@ class StudentThread(threading.Thread):
                 type_accs = {}
                 with torch.no_grad():
                     for task in teachers:
-                        gen_fn = GENERATORS.get(task)
+                        gen_fn = specialist_trainer.GENERATORS.get(task)
                         if not gen_fn:
                             continue
                         correct = total = 0
