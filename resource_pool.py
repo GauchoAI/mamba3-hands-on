@@ -146,8 +146,8 @@ class ResourceAwarePool:
             now = time.time()
 
             # Admit pending workers if under max and resources allow
-            n_alive = sum(1 for p in self.processes.values() if p.poll() is None)
-            if self.pending_configs and n_alive < self.max_workers and self.monitor.can_admit():
+            n_active = len(self.processes)
+            if self.pending_configs and n_active < self.max_workers and self.monitor.can_admit():
                 self._admit_one()
 
             # Check worker results periodically
