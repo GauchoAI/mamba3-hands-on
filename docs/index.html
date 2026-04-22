@@ -211,11 +211,11 @@ setInterval(()=>{if(!lastTs)return;const a=Math.round(Date.now()/1000-lastTs);co
   else{e.textContent=Math.round(a/60)+'m ago ⚠ STALE';e.className='text-red-600 font-bold';d.className='text-red-500';}
 },1000);
 
-// Snapshot
-db.ref('mamba3/snapshot').on('value', s=>{
-  const d=s.val(); if(!d) return;
+// ── updateUI: THE one function that updates everything ──
+function updateUI(d) {
+  if (!d) return;
   lastTs=d.timestamp||0;
-  document.getElementById('last-update').textContent=new Date(d.timestamp*1000).toLocaleTimeString();
+  document.getElementById('last-update').textContent=new Date((d.timestamp||0)*1000).toLocaleTimeString();
   document.getElementById('gpu-pct').textContent=(d.gpu_pct||0).toFixed(0)+'%';
   document.getElementById('mem-pct').textContent=(d.mem_pct||0).toFixed(0)+'%';
   document.getElementById('n-running').textContent=d.n_running||0;
@@ -223,7 +223,6 @@ db.ref('mamba3/snapshot').on('value', s=>{
   document.getElementById('best-fresh').textContent=((d.best_fresh||0)*100).toFixed(1)+'%';
   document.getElementById('gen-counter').textContent='Generation '+(d.generation||0);
 
-  // Three populations — also read from snapshot.three_pop
   const tp = d.three_pop || threePopData;
   if(tp){
     document.getElementById('tp-workers').textContent = tp.n_workers||0;
@@ -233,13 +232,8 @@ db.ref('mamba3/snapshot').on('value', s=>{
     const remaining=tp.tasks_remaining||[];
     document.getElementById('three-pop-status').textContent =
       `Gen ${tp.generation||'?'} · ${remaining.length} tasks remaining`;
-
-    // Teacher list with badges
     const tl=document.getElementById('tp-teachers-list');
-    const ALL=['parity','binary_pattern_next','same_different','odd_one_out','sequence_completion',
-      'pattern_period','run_length_next','mirror_detection','repeat_count','arithmetic_next',
-      'geometric_next','alternating_next','logic_gate','logic_chain','modus_ponens'];
-    tl.innerHTML=ALL.map(t=>{
+    tl.innerHTML=TASKS.map(t=>{
       const graduated=teachers[t];
       if(graduated) return `<span class="inline-block px-1.5 py-0.5 rounded bg-green-100 text-green-700 border border-green-200 mr-1 mb-1">🎓 ${t.replace(/_/g,' ')}</span>`;
       const isWorking=!remaining.includes(t) && !graduated;
@@ -248,13 +242,12 @@ db.ref('mamba3/snapshot').on('value', s=>{
     }).join('');
   }
 
-  // Plateau
   const pb=document.getElementById('plateau-banner');
   if(d.plateau?.active){pb.classList.remove('hidden');document.getElementById('plateau-details').textContent=
-    `Severity ${d.plateau.severity} · Stuck ${d.plateau.stuck_gens} gens at ${(d.plateau.best_ever*100).toFixed(1)}% · Mutation ${(1+d.plateau.severity).toFixed(1)}x`;}
+    `Severity ${d.plateau.severity} · Stuck ${d.plateau.stuck_gens} gens · Mutation ${(1+d.plateau.severity).toFixed(1)}x`;}
   else pb.classList.add('hidden');
 
-  (d.leaderboard||[]).forEach(e=>{allExp[e.exp_id]=e;});
+  (d.leaderboard||[]).forEach(e=>{if(e.exp_id)allExp[e.exp_id]=e;});
 
   // Curriculum bar
   const cur=document.getElementById('curriculum');cur.innerHTML='';
@@ -264,23 +257,21 @@ db.ref('mamba3/snapshot').on('value', s=>{
     else if(a>0)c='bg-gray-100 text-gray-600 border border-gray-200';
     else c='bg-gray-50 text-gray-300 border border-gray-100';
     const l=a>0?`${(a*100).toFixed(0)}%`:'🔒';
-    const sh=t.replace(/_/g,' ').substring(0,12);
-    cur.innerHTML+=`<span class="inline-block px-1.5 py-0.5 rounded text-xs mr-1 mb-1 ${c}" title="${t}: ${(a*100).toFixed(1)}%">${sh} ${l}</span>`;
+    cur.innerHTML+=`<span class="inline-block px-1.5 py-0.5 rounded text-xs mr-1 mb-1 ${c}" title="${t}: ${(a*100).toFixed(1)}%">${t.replace(/_/g,' ').substring(0,12)} ${l}</span>`;
   });
 
   // Curriculum detail
   const cd=document.getElementById('curriculum-detail');cd.innerHTML='';
   TASKS.forEach(t=>{const a=d.tasks?.[t]?.acc||0;const e=d.tasks?.[t]?.exp||'';const st=STAGE[t];
     let icon,cls;if(a>=0.9){icon='✅';cls='text-green-700';}else if(a>0){icon='🔄';cls='text-gray-700';}else{icon='🔒';cls='text-gray-400';}
-    cd.innerHTML+=`<div class="flex justify-between items-center py-0.5 text-xs ${cls}"><span>${icon} Stage ${st}: <b>${t.replace(/_/g,' ')}</b></span><span class="tabular-nums">${a>0?(a*100).toFixed(0)+'% ('+e+')':'locked'}</span></div>`;
+    cd.innerHTML+=`<div class="flex justify-between items-center py-0.5 text-xs ${cls}"><span>${icon} S${st}: <b>${t.replace(/_/g,' ')}</b></span><span class="tabular-nums">${a>0?(a*100).toFixed(0)+'%':'—'}</span></div>`;
   });
 
-  // Three leaderboards
+  // Workers table
   const allEntries = d.leaderboard || [];
   const workers = allEntries.filter(e => e.status === 'training');
   const teacherEntries = (d.teacher_leaderboard || []).concat(allEntries.filter(e => e.status === 'teacher'));
 
-  // Workers table
   const wt = document.getElementById('workers-table'); wt.innerHTML = '';
   workers.forEach(e => {
     const pct = ((e.acc||0)*100).toFixed(0);
@@ -316,22 +307,22 @@ db.ref('mamba3/snapshot').on('value', s=>{
   if (tp2 && tp2.n_students > 0) {
     sc.innerHTML = `<span class="text-purple-600 font-semibold">${tp2.n_students} students distilling</span>`;
   } else if (teacherEntries.length > 0) {
-    sc.innerHTML = `<span class="text-purple-400">Teachers ready — student will spawn when all tasks mastered</span>`;
+    sc.innerHTML = `<span class="text-purple-400">Teachers ready — student spawns when all tasks mastered</span>`;
   } else {
     sc.innerHTML = `<span class="text-gray-400">Waiting for first teacher...</span>`;
   }
 
-  // Task chart
+  // Charts
   updTask(d.tasks||{});
-  // History
   gpuH.push(d.gpu_pct||0);if(gpuH.length>100)gpuH.shift();
-  memH.push(d.mem_pct||0);if(memH.length>100)memH.shift();
   wkH.push(d.n_running||0);if(wkH.length>100)wkH.shift();
   updMini('gpuChart',gpuH,'#1a5276','rgba(26,82,118,0.1)',100);
   updMini('workersChart',wkH,'#27ae60','rgba(39,174,96,0.1)',null);
-  // Tree
   if(d.lineage)drawTree(d.leaderboard||[],d.lineage);
-});
+}
+
+// Live mode: Firebase → updateUI
+db.ref('mamba3/snapshot').on('value', s => updateUI(s.val()));
 
 // Events
 db.ref('mamba3/events').orderByChild('timestamp').limitToLast(50).on('child_added',s=>{
@@ -701,33 +692,39 @@ if (isReplay) {
       if (rtd) rtd.textContent = eventTime;
 
       if (item.type === 'snapshot') {
-        // Build a fake snapshot from history data
         const h = item.data;
-        const fakeSnapshot = {
+        const teacherList = h.teachers || [];
+        const teacherObj = {};
+        teacherList.forEach(t => { teacherObj[t] = 'graduated'; });
+
+        const leaderboard = Object.entries(h.worker_best || {}).map(([task, acc]) => ({
+          task, acc, best: acc, cycle: 0,
+          status: teacherList.includes(task) ? 'teacher' : 'training'
+        })).concat(
+          teacherList.filter(t => !(h.worker_best||{})[t]).map(t => ({
+            task: t, acc: 1.0, best: 1.0, cycle: 0, status: 'teacher'
+          }))
+        ).sort((a,b) => b.acc - a.acc);
+
+        updateUI({
           timestamp: item.time,
-          tasks: h.tasks || {},
-          leaderboard: (h.top3 || []).map(e => ({...e, status: 'training'})),
           gpu_pct: h.gpu_pct || 0,
           mem_pct: h.mem_pct || 0,
-          n_running: h.n_workers || h.n_running || 0,
+          n_running: h.n_workers || 0,
           n_total: (h.n_workers||0) + (h.n_teachers||0) + (h.n_students||0),
           best_fresh: h.best_fresh || 0,
+          tasks: h.tasks || {},
+          leaderboard: leaderboard,
+          teacher_leaderboard: teacherList.map(t => ({ task: t, acc: 1.0, status: 'teaching' })),
           three_pop: {
             n_workers: h.n_workers || 0,
             n_teachers: h.n_teachers || 0,
             n_students: h.n_students || 0,
-            teachers: {},
+            teachers: teacherObj,
+            tasks_remaining: TASKS.filter(t => !teacherList.includes(t)),
+            generation: 0,
           },
-        };
-        // Trigger the snapshot handler manually
-        lastTs = item.time;
-        document.getElementById('last-update').textContent = new Date(item.time*1000).toLocaleTimeString();
-        document.getElementById('gpu-pct').textContent = (fakeSnapshot.gpu_pct||0).toFixed(0)+'%';
-        document.getElementById('mem-pct').textContent = (fakeSnapshot.mem_pct||0).toFixed(0)+'%';
-        document.getElementById('n-running').textContent = fakeSnapshot.n_running||0;
-        document.getElementById('n-total').textContent = fakeSnapshot.n_total||0;
-        document.getElementById('best-fresh').textContent = ((fakeSnapshot.best_fresh||0)*100).toFixed(1)+'%';
-        updTask(fakeSnapshot.tasks || {});
+        });
       }
 
       if (item.type === 'event') {
