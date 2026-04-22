@@ -82,7 +82,7 @@ def spawn_worker(task, config, runs_dir, worker_id):
          "--target-acc", "0.95"],
         stdout=open(run_dir / "stdout.log", "w"),
         stderr=subprocess.STDOUT,
-        cwd=str(runs_dir.parent),
+        cwd=str(Path(__file__).parent),
     )
 
     return exp_id, proc
@@ -114,7 +114,7 @@ def spawn_student(student_id, config, runs_dir, teacher_dir):
          "--pcgrad"],
         stdout=open(run_dir / "stdout.log", "w"),
         stderr=subprocess.STDOUT,
-        cwd=str(runs_dir.parent),
+        cwd=str(Path(__file__).parent),
     )
 
     return exp_id, proc
