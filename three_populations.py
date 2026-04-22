@@ -285,6 +285,14 @@ def run(args):
 
                 # Track best
                 mutation_desc = None
+                n_params = 0
+                if ckpt_path.exists():
+                    try:
+                        n_params = torch.load(ckpt_path, map_location="cpu",
+                                             weights_only=False).get("n_params", 0)
+                    except Exception:
+                        pass
+
                 if acc > task_best.get(task, 0):
                     task_best[task] = acc
                     task_best_round[task] = round_num
@@ -296,21 +304,26 @@ def run(args):
                 except Exception:
                     pass
 
-                # Log lineage to DB (sacred, append-only)
+                # Log to DB (all sacred, append-only)
                 db.log_lineage(
-                    task=task,
-                    round_num=round_num,
-                    accuracy=acc,
-                    best_accuracy=task_best.get(task, 0),
-                    config=cfg,
+                    task=task, round_num=round_num, accuracy=acc,
+                    best_accuracy=task_best.get(task, 0), config=cfg,
                     mutation=mutation_desc,
                     checkpoint_path=str(ckpt_path) if ckpt_path.exists() else None,
                 )
+                db.log_experiment(
+                    task=task, round_num=round_num, accuracy=acc,
+                    best_accuracy=task_best.get(task, 0), config=cfg,
+                    exp_id=f"{task}_r{round_num}", n_params=n_params,
+                    cycles=cycle, role="champion",
+                    checkpoint_path=str(ckpt_path) if ckpt_path.exists() else None,
+                )
 
-                # Export lineage markdown (redundant but readable)
+                # Export lineage markdown + checkpoint metadata
                 lineage_dir = base_dir / "lineage"
                 lineage_dir.mkdir(parents=True, exist_ok=True)
                 db.export_lineage_markdown(task, lineage_dir / f"{task}.md")
+                db.export_checkpoint_metadata(task, "checkpoints/specialists")
 
                 # Check graduation
                 if acc >= target_acc:
@@ -379,12 +392,22 @@ def run(args):
                         on_cycle=on_cycle,
                     )
 
-                    # Log challenger lineage too
+                    # Log challenger to DB (sacred)
                     db.log_lineage(
                         task=task, round_num=round_num,
                         accuracy=challenger_acc or 0,
                         best_accuracy=max(best, challenger_acc or 0),
                         config=challenger_cfg, mutation=mutation_desc,
+                        role="challenger",
+                    )
+                    db.log_experiment(
+                        task=task, round_num=round_num,
+                        accuracy=challenger_acc or 0,
+                        best_accuracy=max(best, challenger_acc or 0),
+                        config=challenger_cfg,
+                        exp_id=f"{task}_r{round_num}_challenger",
+                        role="challenger", mutation=mutation_desc,
+                        parent_exp=f"{task}_r{round_num}",
                     )
 
                     if challenger_acc and challenger_acc > best:
@@ -401,6 +424,9 @@ def run(args):
                         task_config[task] = base_cfg
 
                     db.export_lineage_markdown(task, lineage_dir / f"{task}.md")
+
+        # Sync state to Firebase (redundancy)
+        db.sync_to_firebase()
 
         # Round summary
         gpu_pct, mem_pct = get_gpu_usage()
