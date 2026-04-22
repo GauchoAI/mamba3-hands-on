@@ -145,7 +145,13 @@ def run(args):
     print(f"  Runtime config: {db.get_all_config()}\n", flush=True)
 
     # ── Firebase push callback ──────────────────────────────────────
+    # Pre-populate with best known values so tasks don't disappear between batches
     task_accs = {}
+    for t in ALL_TASKS:
+        best_cfg, best_acc = db.get_best_config(t)
+        if best_acc > 0:
+            task_accs[t] = {"acc": round(best_acc, 3), "best": round(best_acc, 3),
+                           "cycle": 0, "loss": 0}
 
     def on_cycle(task_name, cycle, acc, best, loss):
         task_accs[task_name] = {"acc": round(acc, 3), "best": round(best, 3),
