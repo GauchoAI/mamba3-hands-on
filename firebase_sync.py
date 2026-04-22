@@ -114,6 +114,21 @@ def sync_once(reader):
 
     fb._put("mamba3/snapshot", snapshot)
 
+    # APPEND to history — never overwrite. This is the replayable event store.
+    # Every snapshot is preserved with a timestamp key.
+    ts_key = str(int(time.time()))
+    fb._put(f"mamba3/history/{ts_key}", {
+        "best_fresh": snapshot["best_fresh"],
+        "gpu_pct": snapshot["gpu_pct"],
+        "mem_pct": snapshot["mem_pct"],
+        "n_running": snapshot["n_running"],
+        "n_total": snapshot["n_total"],
+        "n_workers": snapshot.get("n_workers", 0),
+        "tasks": snapshot["tasks"],
+        "top3": [{k: v for k, v in e.items() if k in ("exp_id","fresh","method","d_model","n_layers")}
+                 for e in snapshot["leaderboard"][:3]],
+    })
+
     # ── Per-experiment timeseries (top 8) ──
     for exp in experiments[:8]:
         eid = exp["exp_id"]
