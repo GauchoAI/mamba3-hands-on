@@ -166,7 +166,13 @@ def run(args):
         worker_procs[exp_id] = (proc, task, cfg)
         worker_counter += 1
         print(f"  + Worker {exp_id} (VRAM: {mem_pct:.0f}%)", flush=True)
-        time.sleep(10)  # let CUDA fully initialize before spawning next
+        # Wait for the worker to actually start training (first forward pass allocates VRAM)
+        log_path = workers_dir / exp_id / "stdout.log"
+        for _ in range(30):  # wait up to 30 seconds
+            time.sleep(1)
+            if log_path.exists() and log_path.stat().st_size > 100:
+                break
+        time.sleep(3)  # extra buffer after first output
 
     print(f"\n{len(worker_procs)} workers spawned.\n", flush=True)
 
