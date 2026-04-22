@@ -1,15 +1,7 @@
 """
-Firebase sync — reads from SQLite, pushes to Firebase with debouncing.
+Firebase sync — reads three_pop state + SQLite, pushes clean data.
 
-Like Debezium: captures changes from the local DB and syncs them.
-One process, controlled rate, no flooding.
-
-Workers write to SQLite (fast, local).
-This script reads SQLite and pushes snapshots to Firebase (debounced).
-
-Usage:
-    python firebase_sync.py                    # one-shot sync
-    python firebase_sync.py --watch --interval 30  # continuous sync
+Only pushes three_pop experiments, not old multi-task ones.
 """
 import os
 import sys
@@ -18,199 +10,146 @@ sys.path.insert(0, os.path.dirname(__file__))
 import json
 import time
 import argparse
+import urllib.request
 from datetime import datetime
+from pathlib import Path
 
-from metrics_db import MetricsReader
 import firebase_push as fb
 
+FIREBASE_URL = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app"
 
-def sync_once(reader):
-    """Read SQLite + three_pop state, push to Firebase."""
+
+def read_three_pop():
+    """Read three_pop state from Firebase."""
+    try:
+        resp = urllib.request.urlopen(f"{FIREBASE_URL}/mamba3/three_pop.json", timeout=5)
+        return json.loads(resp.read())
+    except Exception:
+        return None
+
+
+def read_specialist_logs(base_dir="three_pop/workers"):
+    """Read latest accuracy from specialist worker logs."""
+    workers = {}
+    base = Path(base_dir)
+    if not base.exists():
+        return workers
+
+    for d in sorted(base.iterdir()):
+        if not d.is_dir():
+            continue
+        log = d / "stdout.log"
+        if not log.exists():
+            continue
+        # Parse task from dir name: w_parity_000 → parity
+        parts = d.name.split("_")
+        if len(parts) >= 3:
+            task = "_".join(parts[1:-1])
+        else:
+            continue
+
+        # Find last acc= line
+        try:
+            content = log.read_text()
+            acc_lines = [l for l in content.split("\n") if "acc=" in l]
+            if acc_lines:
+                last = acc_lines[-1]
+                # Parse: [parity] cycle  10  loss=0.350  acc=53%
+                acc_str = last.split("acc=")[1].split("%")[0]
+                acc = int(acc_str) / 100
+                cycle_str = last.split("cycle")[1].strip().split()[0]
+                cycle = int(cycle_str)
+                workers.setdefault(task, []).append({
+                    "exp_id": d.name, "acc": acc, "cycle": cycle,
+                })
+        except Exception:
+            continue
+
+    return workers
+
+
+def sync_once():
     t0 = time.time()
 
-    experiments = reader.get_experiments()
-    active_tasks = reader.get_active_tasks()
-    gpu_history = reader.get_gpu_history(limit=1)
-    events = reader.get_events(limit=20)
-    teacher = reader.get_latest_teacher()
+    tp = read_three_pop()
+    workers_data = read_specialist_logs()
 
-    # Read three_pop state from Firebase (it's the orchestrator's source of truth)
-    try:
-        import urllib.request
-        resp = urllib.request.urlopen(
-            "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app/mamba3/three_pop.json",
-            timeout=5)
-        three_pop = json.loads(resp.read())
-    except Exception:
-        three_pop = None
+    if not tp:
+        print(f"  no three_pop data yet", flush=True)
+        return
 
-    gpu_pct = gpu_history[-1]["gpu_pct"] if gpu_history else 0
-    mem_pct = gpu_history[-1]["mem_pct"] if gpu_history else 0
-    n_workers = gpu_history[-1]["n_workers"] if gpu_history else 0
+    teachers = tp.get("teachers", {})
+    remaining = tp.get("tasks_remaining", [])
 
-    # ── Build per-experiment type_accs from latest task data ──
-    all_task_rows = reader.get_all_task_latest()
-    exp_type_accs = {}  # exp_id → {task: acc}
-    for t in all_task_rows:
-        eid = t["exp_id"]
-        if eid not in exp_type_accs:
-            exp_type_accs[eid] = {}
-        exp_type_accs[eid][t["task_type"]] = round(t["accuracy"], 3)
+    # Build worker leaderboard (per-task best)
+    worker_leaderboard = []
+    for task, exps in sorted(workers_data.items()):
+        best = max(exps, key=lambda x: x["acc"])
+        worker_leaderboard.append({
+            "exp_id": best["exp_id"],
+            "task": task,
+            "acc": best["acc"],
+            "cycle": best["cycle"],
+            "status": "graduated" if task in teachers else "training",
+            "n_variants": len(exps),
+        })
+    worker_leaderboard.sort(key=lambda x: -x["acc"])
 
-    # ── Snapshot ──
-    leaderboard = []
-    for exp in experiments[:30]:
-        cfg = json.loads(exp["config_json"]) if exp.get("config_json") else {}
-        eid = exp["exp_id"]
-        leaderboard.append({
-            "exp_id": eid,
-            "fresh": round(exp.get("peak_fresh", 0) or 0, 4),
-            "cycle": exp.get("max_cycle", 0) or 0,
-            "d_model": exp.get("d_model"),
-            "d_state": exp.get("d_state"),
-            "n_layers": exp.get("n_kernel_layers"),
-            "n_params": exp.get("n_params", 0),
-            "weight_decay": cfg.get("weight_decay", 0),
-            "optimizer": cfg.get("optimizer", "adamw"),
-            "loss_fn": cfg.get("loss_fn", "stable_ce"),
-            "warm_restarts": cfg.get("warm_restarts", False),
-            "noise_scale": cfg.get("noise_scale", 0),
-            "backend": cfg.get("backend", "pytorch"),
-            "method": f"wd={cfg.get('weight_decay')}" if cfg.get("weight_decay", 0) > 0 else "PerpGrad",
-            "status": exp["status"],
-            "parent_id": cfg.get("_parent_id"),
-            "lr": cfg.get("lr"),
-            "batch_size": cfg.get("batch_size"),
-            "type_accs": exp_type_accs.get(eid, {}),
+    # Build teacher leaderboard
+    teacher_leaderboard = []
+    for task, exp_id in teachers.items():
+        teacher_leaderboard.append({
+            "exp_id": exp_id,
+            "task": task,
+            "acc": 1.0,
+            "status": "teaching",
         })
 
-    # Best per task
-    all_task_data = reader.get_all_task_latest()
-    task_best = {}
-    for t in all_task_data:
-        tt = t["task_type"]
-        if tt not in task_best or t["accuracy"] > task_best[tt]["acc"]:
-            task_best[tt] = {"acc": round(t["accuracy"], 3), "exp": t["exp_id"]}
-
+    # Push clean snapshot
     snapshot = {
         "timestamp": time.time(),
-        "gpu_pct": round(gpu_pct, 1),
-        "mem_pct": round(mem_pct, 1),
-        "n_running": sum(1 for e in experiments if e["status"] == "running"),
-        "n_paused": sum(1 for e in experiments if e["status"] == "paused"),
-        "n_total": len(experiments),
-        "n_workers": n_workers,
-        "best_fresh": round(experiments[0].get("peak_fresh", 0) or 0, 4) if experiments else 0,
-        "leaderboard": leaderboard,
-        "tasks": task_best,
+        "mode": "three_populations",
+        "gpu_pct": tp.get("gpu_pct", 0),
+        "mem_pct": tp.get("mem_pct", 0),
+        "n_running": tp.get("n_workers", 0),
+        "n_total": tp.get("n_workers", 0) + tp.get("n_teachers", 0) + tp.get("n_students", 0),
+        "best_fresh": 0,  # student's fresh, once available
+        "three_pop": tp,
+        "leaderboard": worker_leaderboard,
+        "teacher_leaderboard": teacher_leaderboard,
+        "tasks": {
+            t: {"acc": 1.0, "exp": teachers[t]} for t in teachers
+        },
     }
 
-    # Teacher
-    if teacher:
-        snapshot["teacher"] = {
-            "status": teacher.get("status_text", ""),
-            "unlocked": json.loads(teacher.get("unlocked_tasks", "[]")),
-            "mastery_log": json.loads(teacher.get("mastery_log", "[]")),
-        }
-
-    # Build lineage from experiment configs
-    lineage = {}
-    for exp in experiments[:30]:
-        cfg = json.loads(exp["config_json"]) if exp.get("config_json") else {}
-        pid = cfg.get("_parent_id")
-        if pid:
-            lineage[exp["exp_id"]] = {"parent": pid}
-    snapshot["lineage"] = lineage
-
-    # Merge three_pop data into snapshot
-    if three_pop:
-        snapshot["three_pop"] = three_pop
-        snapshot["n_workers"] = three_pop.get("n_workers", 0)
-        snapshot["n_teachers_graduated"] = three_pop.get("n_teachers", 0)
-        snapshot["teachers_graduated"] = three_pop.get("teachers", {})
-        snapshot["tasks_remaining"] = three_pop.get("tasks_remaining", [])
-        snapshot["n_students"] = three_pop.get("n_students", 0)
+    # Add task accs from workers
+    for w in worker_leaderboard:
+        if w["task"] not in snapshot["tasks"]:
+            snapshot["tasks"][w["task"]] = {"acc": round(w["acc"], 3), "exp": w["exp_id"]}
 
     fb._put("mamba3/snapshot", snapshot)
 
-    # APPEND to history — never overwrite. This is the replayable event store.
-    # Every snapshot is preserved with a timestamp key.
+    # History
     ts_key = str(int(time.time()))
     fb._put(f"mamba3/history/{ts_key}", {
-        "best_fresh": snapshot["best_fresh"],
-        "gpu_pct": snapshot["gpu_pct"],
-        "mem_pct": snapshot["mem_pct"],
-        "n_running": snapshot["n_running"],
-        "n_total": snapshot["n_total"],
-        "n_workers": snapshot.get("n_workers", 0),
-        "tasks": snapshot["tasks"],
-        "top3": [{k: v for k, v in e.items() if k in ("exp_id","fresh","method","d_model","n_layers")}
-                 for e in snapshot["leaderboard"][:3]],
+        "n_workers": tp.get("n_workers", 0),
+        "n_teachers": tp.get("n_teachers", 0),
+        "n_students": tp.get("n_students", 0),
+        "teachers": list(teachers.keys()),
+        "worker_best": {w["task"]: round(w["acc"], 2) for w in worker_leaderboard[:10]},
     })
-
-    # ── Per-experiment timeseries (top 8) ──
-    for exp in experiments[:8]:
-        eid = exp["exp_id"]
-        history = reader.get_cycle_history(eid)
-        if not history:
-            continue
-        # Push last 100 cycles max
-        cycles_data = {}
-        for h in history[-100:]:
-            cycles_data[str(h["cycle"])] = {
-                "fresh": round(h["fresh_acc"] or 0, 4),
-                "loss": round(h["loss"] or 0, 4),
-                "t": h.get("timestamp", 0),
-            }
-        cfg = json.loads(exp["config_json"]) if exp.get("config_json") else {}
-        fb._put(f"mamba3/experiments/{eid}", {
-            "config": cfg,
-            "status": exp["status"],
-            "cycle": exp.get("max_cycle", 0) or 0,
-            "best_fresh": round(exp.get("peak_fresh", 0) or 0, 4),
-            "n_params": exp.get("n_params", 0),
-            "cycles": cycles_data,
-        })
-
-    # ── Per-task timeseries from top experiment ──
-    if experiments:
-        best = experiments[0]
-        for task in active_tasks:
-            history = reader.get_task_history(best["exp_id"], task)
-            if history:
-                task_ts = {}
-                for h in history[-100:]:
-                    task_ts[str(h["cycle"])] = {
-                        "acc": round(h["accuracy"], 3),
-                        "diff": round(h.get("difficulty", 0), 3),
-                    }
-                fb._put(f"mamba3/task_series/{task}", task_ts)
-
-    # ── Events (last 20) ──
-    if events:
-        events_data = {}
-        for e in events[-20:]:
-            key = str(int(e["timestamp"] * 1000))
-            events_data[key] = {
-                "type": e["event_type"],
-                "exp_id": e.get("exp_id"),
-                "details": e.get("details"),
-                "timestamp": e["timestamp"],
-            }
-        fb._put("mamba3/events", events_data)
 
     elapsed = time.time() - t0
     print(f"  synced at {datetime.now().strftime('%H:%M:%S')} ({elapsed:.1f}s) "
-          f"— {len(leaderboard)} exps, {len(task_best)} tasks, {len(events)} events",
-          flush=True)
+          f"— {len(worker_leaderboard)} workers, {len(teachers)} teachers, "
+          f"mode=three_pop", flush=True)
 
 
-def watch(db_path="metrics.db", interval=30):
-    print(f"Firebase sync watching {db_path} every {interval}s...", flush=True)
-    reader = MetricsReader(db_path)
+def watch(interval=15):
+    print(f"Firebase sync (three_pop mode) every {interval}s...", flush=True)
     while True:
         try:
-            sync_once(reader)
+            sync_once()
         except Exception as e:
             import traceback
             print(f"  ❌ Sync error: {e}", flush=True)
@@ -220,14 +159,11 @@ def watch(db_path="metrics.db", interval=30):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db", default="metrics.db")
+    parser.add_argument("--db", default="metrics.db")  # kept for compat
     parser.add_argument("--watch", action="store_true")
-    parser.add_argument("--interval", type=int, default=30)
+    parser.add_argument("--interval", type=int, default=15)
     args = parser.parse_args()
-
     if args.watch:
-        watch(args.db, args.interval)
+        watch(args.interval)
     else:
-        reader = MetricsReader(args.db)
-        sync_once(reader)
-        print("Done.")
+        sync_once()
