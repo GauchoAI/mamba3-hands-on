@@ -113,6 +113,24 @@ def spawn_student(student_id, config, runs_dir, teacher_dir):
     return exp_id, proc
 
 
+# ── Lineage logger ─────────────────────────────────────────────────
+
+def _write_lineage(path, task, lineage):
+    """Write per-task lineage to markdown."""
+    with open(path, "w") as f:
+        f.write(f"# {task} — Training Lineage\n\n")
+        f.write(f"| Round | Acc | Best | d_model | Layers | LR | WD | Optimizer | Loss | Mutation |\n")
+        f.write(f"|-------|-----|------|---------|--------|----|----|-----------|------|-----------|\n")
+        for e in lineage:
+            c = e["config"]
+            mut = e.get("mutation") or "—"
+            f.write(f"| {e['round']} | {e['acc']:.0%} | {e['best']:.0%} "
+                   f"| {c.get('d_model', 64)} | {c.get('n_kernel_layers', 3)} "
+                   f"| {c.get('lr', 1e-3):.0e} | {c.get('weight_decay', 0.1)} "
+                   f"| {c.get('optimizer', 'adamw')} | {c.get('loss_fn', 'ce')} "
+                   f"| {mut} |\n")
+
+
 # ── Main orchestrator ───────────────────────────────────────────────
 
 def run(args):
@@ -164,8 +182,24 @@ def run(args):
     cycles_per_round = 10  # train each task for 10 cycles before rotating
     round_num = 0
 
-    # Per-task state: model + optimizer persist across rounds
-    task_state = {}  # task → {"model": model, "opt": opt, "cycle": N, "best_acc": N}
+    # Per-task tracking: config, plateau detection, lineage
+    task_config = {}      # task → current config dict
+    task_best = {}        # task → best_acc seen
+    task_best_round = {}  # task → round when best was set
+    task_lineage = {}     # task → list of {round, config, acc, mutation}
+
+    # Initialize all tasks with BASE_CONFIG
+    for t in ALL_TASKS:
+        task_config[t] = BASE_CONFIG.copy()
+        task_best[t] = 0.0
+        task_best_round[t] = 0
+        task_lineage[t] = []
+
+    # Lineage log directory
+    lineage_dir = base_dir / "lineage"
+    lineage_dir.mkdir(parents=True, exist_ok=True)
+
+    PLATEAU_THRESHOLD = 3  # rounds without improvement before mutating
 
     print(f"Training {len(tasks_remaining)} tasks, {cycles_per_round} cycles per round", flush=True)
     print(f"Round-robin: all tasks advance simultaneously\n", flush=True)
@@ -238,14 +272,61 @@ def run(args):
             if task in teacher_tasks:
                 continue
 
-            print(f"\n  Training {task}...", flush=True)
-            cfg = BASE_CONFIG.copy()
+            # Plateau detection: mutate config if stuck
+            rounds_stuck = round_num - task_best_round.get(task, 0)
+            cfg = task_config[task]
+            mutation_desc = None
+
+            if rounds_stuck >= PLATEAU_THRESHOLD and task_best.get(task, 0) > 0:
+                severity = min(3.0, rounds_stuck / 3)
+                old_cfg = cfg.copy()
+                cfg = mutate_config(old_cfg, plateau_severity=severity)
+                task_config[task] = cfg
+
+                # Describe what changed
+                changes = {k: cfg[k] for k in cfg
+                          if cfg.get(k) != old_cfg.get(k) and k != "steps_per_cycle"}
+                mutation_desc = f"severity={severity:.1f} changes={changes}"
+
+                # If architecture changed, delete checkpoint (can't resume)
+                arch_changed = any(cfg.get(k) != old_cfg.get(k)
+                                  for k in ["d_model", "d_state", "headdim", "n_kernel_layers"])
+                if arch_changed:
+                    ckpt = Path("checkpoints/specialists") / f"{task}.pt"
+                    if ckpt.exists():
+                        ckpt.unlink()
+                    print(f"  🧬 MUTATED {task} (arch change, fresh start): {changes}", flush=True)
+                else:
+                    print(f"  🧬 MUTATED {task}: {changes}", flush=True)
+
+            print(f"\n  Training {task}... (d={cfg.get('d_model')} L={cfg.get('n_kernel_layers')} "
+                  f"lr={cfg.get('lr', 1e-3):.0e} {cfg.get('optimizer', 'adamw')} "
+                  f"{cfg.get('loss_fn', 'ce')})", flush=True)
+
             acc = train_specialist(
                 task, cfg, device,
                 max_cycles=cycles_per_round,
                 target_acc=0.95,
                 on_cycle=on_cycle,
             )
+
+            # Track best for plateau detection
+            if acc and acc > task_best.get(task, 0):
+                task_best[task] = acc
+                task_best_round[task] = round_num
+
+            # Log lineage
+            entry = {
+                "round": round_num,
+                "config": {k: v for k, v in cfg.items() if k != "steps_per_cycle"},
+                "acc": round(acc, 3) if acc else 0,
+                "best": round(task_best.get(task, 0), 3),
+                "mutation": mutation_desc,
+            }
+            task_lineage[task].append(entry)
+
+            # Write lineage markdown
+            _write_lineage(lineage_dir / f"{task}.md", task, task_lineage[task])
 
             # Check graduation
             if acc and acc >= 0.95:
