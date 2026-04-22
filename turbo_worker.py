@@ -116,15 +116,13 @@ class Contestant:
         """One training cycle on pre-generated examples."""
         self.model.train()
         cycle_loss = 0.0
+        n_examples = len(examples)
 
         for step in range(self.steps_per_cycle):
-            indices = torch.randint(0, len(examples), (self.batch_size,))
-            max_len = 0
-            batch = []
-            for i in indices:
-                tokens, sep = examples[i.item()]
-                batch.append((tokens, sep))
-                max_len = max(max_len, len(tokens))
+            # Fast batch construction — avoid per-item CUDA sync
+            indices = torch.randint(0, n_examples, (self.batch_size,)).tolist()
+            batch = [examples[i] for i in indices]
+            max_len = max(len(t) for t, _ in batch)
 
             token_tensor = torch.full((self.batch_size, max_len), PAD,
                                      dtype=torch.long, device=device)
@@ -198,53 +196,53 @@ class Contestant:
 # ── Initial config pool ────────────────────────────────────────────
 
 TURBO_CONFIGS = [
-    # Grokking-style: small, fast, PerpGrad (use CE not stable_ce — stable_ce+perp=NaN)
+    # Grokking-style: PerpGrad, big batch for GPU saturation
     {"d_model": 32, "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
      "lr": 3e-3, "weight_decay": 0.0, "use_perp": True,
-     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 512,
-     "steps_per_cycle": 100},
+     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 4096,
+     "steps_per_cycle": 500},
 
-    # Proven default (graduated 5 tasks before)
+    # Proven default, big batch
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
      "lr": 1e-3, "weight_decay": 0.1, "use_perp": False,
-     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 256,
-     "steps_per_cycle": 100},
+     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 4096,
+     "steps_per_cycle": 500},
 
-    # Lion optimizer: sign-based, fast for small models
+    # Lion optimizer
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 2,
      "lr": 3e-4, "weight_decay": 0.1, "use_perp": False,
-     "optimizer": "lion", "loss_fn": "ce", "batch_size": 256,
-     "steps_per_cycle": 100},
+     "optimizer": "lion", "loss_fn": "ce", "batch_size": 4096,
+     "steps_per_cycle": 500},
 
-    # Big model: more capacity for harder tasks
+    # Big model
     {"d_model": 96, "d_state": 16, "headdim": 16, "n_kernel_layers": 4,
      "lr": 5e-4, "weight_decay": 0.1, "use_perp": False,
-     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 128,
-     "steps_per_cycle": 100},
+     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 2048,
+     "steps_per_cycle": 500},
 
-    # Focal loss: focus on hard examples
+    # Focal loss
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
      "lr": 1e-3, "weight_decay": 0.1, "use_perp": False,
-     "optimizer": "adamw", "loss_fn": "focal", "batch_size": 256,
-     "steps_per_cycle": 100},
+     "optimizer": "adamw", "loss_fn": "focal", "batch_size": 4096,
+     "steps_per_cycle": 500},
 
     # Small + aggressive LR
     {"d_model": 48, "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
      "lr": 5e-3, "weight_decay": 0.05, "use_perp": False,
-     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 512,
-     "steps_per_cycle": 100},
+     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 4096,
+     "steps_per_cycle": 500},
 
-    # Label smoothing: anti-overconfidence
+    # Label smoothing
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
      "lr": 1e-3, "weight_decay": 0.1, "use_perp": False,
-     "optimizer": "adamw", "loss_fn": "label_smooth", "batch_size": 256,
-     "steps_per_cycle": 100},
+     "optimizer": "adamw", "loss_fn": "label_smooth", "batch_size": 4096,
+     "steps_per_cycle": 500},
 
-    # Warm restarts: escape local minima
+    # Warm restarts
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 2,
      "lr": 2e-3, "weight_decay": 0.1, "use_perp": False,
-     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 256,
-     "steps_per_cycle": 100, "warm_restarts": True},
+     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 4096,
+     "steps_per_cycle": 500, "warm_restarts": True},
 ]
 
 
@@ -324,7 +322,7 @@ def run_tournament(args):
 
     for shootout_cycle in range(2):
         examples = []
-        for _ in range(2000):
+        for _ in range(10000):
             ex = gen_fn()
             tokens, sep = tok.encode_curriculum(ex)
             examples.append((tokens, sep))
@@ -367,7 +365,7 @@ def run_tournament(args):
 
     # Pre-generate data (reuse across cycles, refresh every 10 cycles)
     examples = []
-    for _ in range(5000):
+    for _ in range(10000):
         ex = gen_fn()
         tokens, sep = tok.encode_curriculum(ex)
         examples.append((tokens, sep))
@@ -404,7 +402,7 @@ def run_tournament(args):
         # Refresh data every 10 cycles
         if sprinter.cycle % 10 == 0:
             examples = []
-            for _ in range(5000):
+            for _ in range(10000):
                 ex = gen_fn()
                 tokens, sep = tok.encode_curriculum(ex)
                 examples.append((tokens, sep))
@@ -436,7 +434,7 @@ def run_tournament(args):
             # Quick shootout: 3 cycles
             for _ in range(3):
                 examples = []
-                for _ in range(2000):
+                for _ in range(10000):
                     ex = gen_fn()
                     tokens, sep = tok.encode_curriculum(ex)
                     examples.append((tokens, sep))
