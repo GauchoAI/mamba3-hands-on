@@ -97,28 +97,34 @@
   </div>
 </div>
 
-<!-- Leaderboard + Detail (side by side) -->
+<!-- Three leaderboard cards -->
 <div class="grid grid-cols-3 gap-3 mb-3">
-  <div class="col-span-2 bg-white rounded-lg shadow-sm p-3 max-h-[480px] overflow-y-auto">
-    <div class="flex gap-2 mb-2">
-      <button onclick="showLeaderboard('all')" id="lb_all" class="text-xs font-bold px-2 py-1 rounded bg-blue-100 text-blue-700">All</button>
-      <button onclick="showLeaderboard('workers')" id="lb_workers" class="text-xs font-bold px-2 py-1 rounded bg-gray-100 text-gray-500">🔧 Workers</button>
-      <button onclick="showLeaderboard('teachers')" id="lb_teachers" class="text-xs font-bold px-2 py-1 rounded bg-gray-100 text-gray-500">🎓 Teachers</button>
-      <button onclick="showLeaderboard('students')" id="lb_students" class="text-xs font-bold px-2 py-1 rounded bg-gray-100 text-gray-500">📚 Students</button>
-    </div>
-    <h2 class="text-xs font-bold text-gray-500 mb-2">Leaderboard <span class="font-normal text-gray-400">(click to inspect)</span></h2>
-    <table class="w-full">
-      <thead><tr class="border-b-2 border-gray-200 text-xs text-gray-400">
-        <th class="py-1 text-left pr-2">ID</th><th class="text-right pr-2">Params</th>
-        <th class="text-left pr-2">Arch</th><th class="text-left pr-2">Strategy</th>
-        <th class="text-right pr-2">Fresh</th><th class="text-right pr-2">Cycles</th><th>Status</th>
+  <!-- Workers -->
+  <div class="bg-white rounded-lg shadow-sm p-3 max-h-[400px] overflow-y-auto">
+    <h2 class="text-xs font-bold text-blue-600 mb-2">🔧 Workers <span class="font-normal text-gray-400">(training)</span></h2>
+    <table class="w-full text-sm">
+      <thead><tr class="border-b border-gray-200 text-[10px] text-gray-400">
+        <th class="py-1 text-left">Task</th><th class="text-right">Accuracy</th><th class="text-right">Best</th><th class="text-right">Cycle</th>
       </tr></thead>
-      <tbody id="leaderboard"></tbody>
+      <tbody id="workers-table"></tbody>
     </table>
   </div>
-  <div id="detail-panel" class="bg-white rounded-lg shadow-sm p-3 max-h-[480px] overflow-y-auto">
-    <h2 class="text-xs font-bold text-gray-500 mb-2">Experiment Detail</h2>
-    <div id="detail-content" class="text-sm text-gray-400">Click any experiment to inspect</div>
+  <!-- Teachers -->
+  <div class="bg-white rounded-lg shadow-sm p-3 max-h-[400px] overflow-y-auto">
+    <h2 class="text-xs font-bold text-green-600 mb-2">🎓 Teachers <span class="font-normal text-gray-400">(graduated, frozen)</span></h2>
+    <table class="w-full text-sm">
+      <thead><tr class="border-b border-gray-200 text-[10px] text-gray-400">
+        <th class="py-1 text-left">Task</th><th class="text-right">Accuracy</th><th class="text-left">ID</th>
+      </tr></thead>
+      <tbody id="teachers-table"></tbody>
+    </table>
+    <div id="no-teachers" class="text-xs text-gray-400 mt-2">No teachers yet — workers graduate at 95%</div>
+  </div>
+  <!-- Students -->
+  <div class="bg-white rounded-lg shadow-sm p-3 max-h-[400px] overflow-y-auto">
+    <h2 class="text-xs font-bold text-purple-600 mb-2">📚 Students <span class="font-normal text-gray-400">(distilling)</span></h2>
+    <div id="students-content" class="text-xs text-gray-400">Waiting for teachers to graduate...</div>
+    <div id="detail-content" class="mt-3 text-sm text-gray-400"></div>
     <div style="height:160px" class="mt-2"><canvas id="detailChart"></canvas></div>
   </div>
 </div>
@@ -269,22 +275,51 @@ db.ref('mamba3/snapshot').on('value', s=>{
     cd.innerHTML+=`<div class="flex justify-between items-center py-0.5 text-xs ${cls}"><span>${icon} Stage ${st}: <b>${t.replace(/_/g,' ')}</b></span><span class="tabular-nums">${a>0?(a*100).toFixed(0)+'% ('+e+')':'locked'}</span></div>`;
   });
 
-  // Leaderboard
-  const lb=document.getElementById('leaderboard');lb.innerHTML='';
-  (d.leaderboard||[]).forEach((e,i)=>{const star=i===0?'★ ':'';
-    const mom=e.momentum>0.001?'<span class="text-green-600">↑</span>':e.momentum<-0.001?'<span class="text-red-500">↓</span>':'';
-    const stC=e.status==='running'?'text-green-600 font-semibold':'text-yellow-600';
-    const spec=(e.specialist||[]).length?'<span class="text-purple-500 text-[9px]">🎯</span>':'';
-    const strat=[e.method,e.optimizer!=='adamw'?e.optimizer:'',e.loss_fn!=='stable_ce'?e.loss_fn:'',e.warm_restarts?'WR':'',e.noise_scale?'noise':''].filter(Boolean).join(' ');
-    lb.innerHTML+=`<tr class="border-b border-gray-100 hover:bg-blue-50 cursor-pointer text-sm" onclick="showDetail('${e.exp_id}')">
-      <td class="py-1.5 pr-2 font-mono text-xs">${star}${e.exp_id}${mom}${spec}</td>
-      <td class="py-1.5 pr-2 text-right tabular-nums text-gray-500">${(e.n_params||0).toLocaleString()}</td>
-      <td class="py-1.5 pr-2 font-mono text-xs text-gray-500">d=${e.d_model} L=${e.n_layers}</td>
-      <td class="py-1.5 pr-2 text-xs text-gray-500">${strat}</td>
-      <td class="py-1.5 pr-2 text-right font-bold tabular-nums">${(e.fresh*100).toFixed(1)}%</td>
-      <td class="py-1.5 pr-2 text-right tabular-nums text-gray-500">${e.cycle}</td>
-      <td class="py-1.5 ${stC} text-xs">${e.status}</td></tr>`;
+  // Three leaderboards
+  const allEntries = d.leaderboard || [];
+  const workers = allEntries.filter(e => e.status === 'training');
+  const teacherEntries = (d.teacher_leaderboard || []).concat(allEntries.filter(e => e.status === 'teacher'));
+
+  // Workers table
+  const wt = document.getElementById('workers-table'); wt.innerHTML = '';
+  workers.forEach(e => {
+    const pct = ((e.acc||0)*100).toFixed(0);
+    const bestPct = ((e.best||e.acc||0)*100).toFixed(0);
+    const barW = Math.round((e.acc||0)*100);
+    wt.innerHTML += `<tr class="border-b border-gray-50 hover:bg-blue-50">
+      <td class="py-1 text-xs">${(e.task||'?').replace(/_/g,' ')}</td>
+      <td class="py-1 text-right"><div class="flex items-center justify-end gap-1">
+        <div class="w-16 bg-gray-100 rounded-full h-1.5"><div class="h-1.5 rounded-full bg-blue-500" style="width:${barW}%"></div></div>
+        <span class="w-8 text-right tabular-nums text-xs">${pct}%</span></div></td>
+      <td class="py-1 text-right tabular-nums text-xs text-gray-400">${bestPct}%</td>
+      <td class="py-1 text-right tabular-nums text-xs text-gray-400">${e.cycle||0}</td>
+    </tr>`;
   });
+
+  // Teachers table
+  const tt = document.getElementById('teachers-table'); tt.innerHTML = '';
+  const noT = document.getElementById('no-teachers');
+  if (teacherEntries.length) {
+    noT.classList.add('hidden');
+    teacherEntries.forEach(e => {
+      tt.innerHTML += `<tr class="border-b border-gray-50">
+        <td class="py-1 text-xs font-semibold text-green-700">✅ ${(e.task||'?').replace(/_/g,' ')}</td>
+        <td class="py-1 text-right tabular-nums text-green-600 text-xs">100%</td>
+        <td class="py-1 text-xs text-gray-400">${e.exp_id||''}</td>
+      </tr>`;
+    });
+  } else { noT.classList.remove('hidden'); }
+
+  // Students
+  const sc = document.getElementById('students-content');
+  const tp2 = d.three_pop;
+  if (tp2 && tp2.n_students > 0) {
+    sc.innerHTML = `<span class="text-purple-600 font-semibold">${tp2.n_students} students distilling</span>`;
+  } else if (teacherEntries.length > 0) {
+    sc.innerHTML = `<span class="text-purple-400">Teachers ready — student will spawn when all tasks mastered</span>`;
+  } else {
+    sc.innerHTML = `<span class="text-gray-400">Waiting for first teacher...</span>`;
+  }
 
   // Task chart
   updTask(d.tasks||{});
