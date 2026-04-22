@@ -100,7 +100,7 @@ class ResourceAwarePool:
         # Plateau detection for GA probing
         self.worker_best_at = {}  # exp_id → (best_acc, cycle_when_best)
         self.plateau_threshold = 50  # cycles without improvement before probing
-        self.probe_cycles = 10       # cycles per probe
+        self.probe_cycles = 5        # cycles per probe (fast: ~9s each)
         self.n_probes = 3            # number of probes to try
 
         # Student
@@ -381,7 +381,7 @@ class ResourceAwarePool:
                  "--optimizer", str(probe_cfg.get("optimizer", "adamw")),
                  "--loss-fn", str(probe_cfg.get("loss_fn", "ce")),
                  "--batch-size", str(probe_cfg.get("batch_size", 256)),
-                 "--steps-per-cycle", str(probe_cfg.get("steps_per_cycle", 200)),
+                 "--steps-per-cycle", "100",
                  "--max-cycles", str(self.probe_cycles),
                  "--target-acc", str(self.target_acc)],
                 stdout=open(probe_dir / "stdout.log", "w"),
