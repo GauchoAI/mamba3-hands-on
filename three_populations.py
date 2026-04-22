@@ -296,42 +296,9 @@ def run(args):
             if task in teacher_tasks:
                 continue
 
-            # Plateau detection: mutate config if stuck
-            rounds_stuck = round_num - task_best_round.get(task, 0)
+            # Always train the champion first (current best config)
             cfg = task_config[task]
             mutation_desc = None
-            best = task_best.get(task, 0)
-
-            # Don't mutate if close to graduating (>= 85%) — give it more time
-            if rounds_stuck >= PLATEAU_THRESHOLD and best > 0 and best < 0.85:
-                severity = min(3.0, rounds_stuck / 3)
-
-                # Mutate from the BEST config, not the current (possibly bad) one
-                base = task_best_config[task].copy()
-                cfg = mutate_config(base, plateau_severity=severity)
-                task_config[task] = cfg
-
-                # Describe what changed
-                changes = {k: cfg[k] for k in cfg
-                          if cfg.get(k) != base.get(k) and k != "steps_per_cycle"}
-                mutation_desc = f"severity={severity:.1f} changes={changes}"
-
-                # If architecture changed, delete checkpoint (can't resume)
-                arch_changed = any(cfg.get(k) != base.get(k)
-                                  for k in ["d_model", "d_state", "headdim", "n_kernel_layers"])
-                if arch_changed:
-                    ckpt = Path("checkpoints/specialists") / f"{task}.pt"
-                    if ckpt.exists():
-                        ckpt.unlink()
-                    print(f"  🧬 MUTATED {task} (arch change, fresh start): {changes}", flush=True)
-                else:
-                    print(f"  🧬 MUTATED {task}: {changes}", flush=True)
-
-            elif rounds_stuck >= PLATEAU_THRESHOLD and best >= 0.85:
-                # Close to graduating — revert to best config, keep training
-                cfg = task_best_config[task].copy()
-                task_config[task] = cfg
-                print(f"  ⏳ {task} at {best:.0%} — keeping best config, needs more time", flush=True)
 
             print(f"\n  Training {task}... (d={cfg.get('d_model')} L={cfg.get('n_kernel_layers')} "
                   f"lr={cfg.get('lr', 1e-3):.0e} {cfg.get('optimizer', 'adamw')} "
@@ -349,6 +316,57 @@ def run(args):
                 task_best[task] = acc
                 task_best_round[task] = round_num
                 task_best_config[task] = cfg.copy()
+
+            # Plateau? Run a challenger with mutated config
+            rounds_stuck = round_num - task_best_round.get(task, 0)
+            best = task_best.get(task, 0)
+
+            if rounds_stuck >= PLATEAU_THRESHOLD and best > 0 and acc and acc < 0.95:
+                severity = min(3.0, rounds_stuck / 3)
+                base = task_best_config[task].copy()
+                challenger_cfg = mutate_config(base, plateau_severity=severity)
+
+                changes = {k: challenger_cfg[k] for k in challenger_cfg
+                          if challenger_cfg.get(k) != base.get(k) and k != "steps_per_cycle"}
+                mutation_desc = f"severity={severity:.1f} changes={changes}"
+
+                # If architecture changed, challenger starts fresh
+                arch_changed = any(challenger_cfg.get(k) != base.get(k)
+                                  for k in ["d_model", "d_state", "headdim", "n_kernel_layers"])
+
+                # Back up champion checkpoint
+                ckpt = Path("checkpoints/specialists") / f"{task}.pt"
+                champion_ckpt = Path("checkpoints/specialists") / f"{task}_champion.pt"
+                if ckpt.exists():
+                    import shutil
+                    shutil.copy2(ckpt, champion_ckpt)
+                    if arch_changed:
+                        ckpt.unlink()  # challenger can't use champion weights
+
+                print(f"  🧬 CHALLENGER for {task}: {changes}"
+                      f"{' (fresh start)' if arch_changed else ''}", flush=True)
+
+                challenger_acc = train_specialist(
+                    task, challenger_cfg, device,
+                    max_cycles=cycles_per_round,
+                    target_acc=0.95,
+                    on_cycle=on_cycle,
+                )
+
+                # Compare: challenger wins only if it beats champion's best
+                if challenger_acc and challenger_acc > best:
+                    print(f"  ✓ Challenger wins: {challenger_acc:.0%} > {best:.0%}", flush=True)
+                    task_config[task] = challenger_cfg
+                    task_best[task] = challenger_acc
+                    task_best_round[task] = round_num
+                    task_best_config[task] = challenger_cfg.copy()
+                    acc = challenger_acc  # for lineage
+                else:
+                    print(f"  ✗ Champion holds: {best:.0%} >= {challenger_acc:.0%}", flush=True)
+                    # Restore champion checkpoint
+                    if champion_ckpt.exists():
+                        shutil.copy2(champion_ckpt, ckpt)
+                    task_config[task] = task_best_config[task].copy()
 
             # Log lineage
             entry = {
