@@ -266,14 +266,21 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
             try:
                 ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
                 model.load_state_dict(ckpt["model"])
-                cycle_start = ckpt.get("cycle", 0)
-                best_acc = ckpt.get("best_acc", ckpt.get("accuracy", 0.0))
-                if "optimizer" in ckpt:
-                    try:
-                        opt.load_state_dict(ckpt["optimizer"])
-                    except Exception:
-                        pass
-                print(f"  Resumed from cycle {cycle_start}, best={best_acc:.0%}", flush=True)
+                # Only resume cycle/accuracy if same task (not cross-task weight inheritance)
+                ckpt_task = ckpt.get("task", None)
+                if ckpt_task == task:
+                    # Same task: resume everything
+                    cycle_start = ckpt.get("cycle", 0)
+                    best_acc = ckpt.get("best_acc", ckpt.get("accuracy", 0.0))
+                    if "optimizer" in ckpt:
+                        try:
+                            opt.load_state_dict(ckpt["optimizer"])
+                        except Exception:
+                            pass
+                    print(f"  Resumed {task} from cycle {cycle_start}, best={best_acc:.0%}", flush=True)
+                else:
+                    # Cross-task: inherit weights only, reset metrics + optimizer
+                    print(f"  Inherited weights from {ckpt_task} → {task} (fresh start, cycle 0)", flush=True)
             except Exception as e:
                 print(f"  Checkpoint load failed: {e} — starting fresh", flush=True)
 

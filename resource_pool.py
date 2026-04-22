@@ -68,7 +68,7 @@ class ResourceAwarePool:
 
     def __init__(self, tasks, seed_configs, device, on_cycle=None,
                  on_graduate=None, target_acc=0.95, teachers_dir=None,
-                 runs_dir="runs_three_pop"):
+                 runs_dir="runs_three_pop", max_workers=1):
         self.tasks = list(tasks)
         self.seed_configs = seed_configs
         self.device = device
@@ -80,6 +80,7 @@ class ResourceAwarePool:
         self.runs_dir.mkdir(parents=True, exist_ok=True)
 
         # Resource management
+        self.max_workers = max_workers
         self.monitor = ResourceMonitor()
 
         # GA state
@@ -137,8 +138,9 @@ class ResourceAwarePool:
         while self.tasks_remaining and not self._should_stop:
             now = time.time()
 
-            # Admit pending workers if resources allow
-            if self.pending_configs and self.monitor.can_admit():
+            # Admit pending workers if under max and resources allow
+            n_alive = sum(1 for p in self.processes.values() if p.poll() is None)
+            if self.pending_configs and n_alive < self.max_workers and self.monitor.can_admit():
                 self._admit_one()
 
             # Check worker results periodically
