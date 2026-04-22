@@ -43,9 +43,9 @@ ALL_TASKS = [
 
 BASE_CONFIG = {
     "d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
-    "batch_size": 256, "lr": 1e-3, "weight_decay": 0.0,
-    "steps_per_cycle": 200, "loss_fn": "stable_ce", "optimizer": "adamw",
-    "use_perp": True,
+    "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1,
+    "steps_per_cycle": 200, "loss_fn": "ce", "optimizer": "adamw",
+    "use_perp": False,
 }
 
 
