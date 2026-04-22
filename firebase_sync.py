@@ -25,7 +25,7 @@ import firebase_push as fb
 
 
 def sync_once(reader):
-    """Read SQLite, push snapshot + timeseries to Firebase."""
+    """Read SQLite + three_pop state, push to Firebase."""
     t0 = time.time()
 
     experiments = reader.get_experiments()
@@ -33,6 +33,16 @@ def sync_once(reader):
     gpu_history = reader.get_gpu_history(limit=1)
     events = reader.get_events(limit=20)
     teacher = reader.get_latest_teacher()
+
+    # Read three_pop state from Firebase (it's the orchestrator's source of truth)
+    try:
+        import urllib.request
+        resp = urllib.request.urlopen(
+            "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app/mamba3/three_pop.json",
+            timeout=5)
+        three_pop = json.loads(resp.read())
+    except Exception:
+        three_pop = None
 
     gpu_pct = gpu_history[-1]["gpu_pct"] if gpu_history else 0
     mem_pct = gpu_history[-1]["mem_pct"] if gpu_history else 0
@@ -111,6 +121,15 @@ def sync_once(reader):
         if pid:
             lineage[exp["exp_id"]] = {"parent": pid}
     snapshot["lineage"] = lineage
+
+    # Merge three_pop data into snapshot
+    if three_pop:
+        snapshot["three_pop"] = three_pop
+        snapshot["n_workers"] = three_pop.get("n_workers", 0)
+        snapshot["n_teachers_graduated"] = three_pop.get("n_teachers", 0)
+        snapshot["teachers_graduated"] = three_pop.get("teachers", {})
+        snapshot["tasks_remaining"] = three_pop.get("tasks_remaining", [])
+        snapshot["n_students"] = three_pop.get("n_students", 0)
 
     fb._put("mamba3/snapshot", snapshot)
 

@@ -44,9 +44,26 @@
 </div>
 
 <!-- Three populations status -->
-<div id="three-pop-banner" class="hidden bg-purple-50 border border-purple-200 rounded-lg px-4 py-2 mb-3 text-sm">
-  <span class="font-bold text-purple-700">Three Populations</span>
-  <span id="three-pop-status" class="text-purple-600 ml-2"></span>
+<div id="three-pop-banner" class="bg-purple-50 border border-purple-200 rounded-lg px-4 py-3 mb-3">
+  <div class="flex justify-between items-center">
+    <span class="font-bold text-purple-700 text-sm">Three Populations</span>
+    <span id="three-pop-status" class="text-purple-600 text-xs"></span>
+  </div>
+  <div class="grid grid-cols-3 gap-3 mt-2">
+    <div class="bg-white rounded p-2 text-center">
+      <div class="text-lg font-bold text-blue-600" id="tp-workers">0</div>
+      <div class="text-[10px] text-gray-500">🔧 Workers</div>
+    </div>
+    <div class="bg-white rounded p-2 text-center">
+      <div class="text-lg font-bold text-green-600" id="tp-teachers">0/15</div>
+      <div class="text-[10px] text-gray-500">🎓 Teachers</div>
+    </div>
+    <div class="bg-white rounded p-2 text-center">
+      <div class="text-lg font-bold text-purple-600" id="tp-students">0</div>
+      <div class="text-[10px] text-gray-500">📚 Students</div>
+    </div>
+  </div>
+  <div id="tp-teachers-list" class="mt-2 text-xs text-gray-600"></div>
 </div>
 
 <!-- Plateau banner -->
@@ -200,15 +217,29 @@ db.ref('mamba3/snapshot').on('value', s=>{
   document.getElementById('best-fresh').textContent=((d.best_fresh||0)*100).toFixed(1)+'%';
   document.getElementById('gen-counter').textContent='Generation '+(d.generation||0);
 
-  // Three populations banner
-  if(threePopData){
-    const tpb=document.getElementById('three-pop-banner');
-    tpb.classList.remove('hidden');
-    const tp=threePopData;
-    const teachers=Object.keys(tp.teachers||{});
+  // Three populations — also read from snapshot.three_pop
+  const tp = d.three_pop || threePopData;
+  if(tp){
+    document.getElementById('tp-workers').textContent = tp.n_workers||0;
+    document.getElementById('tp-teachers').textContent = `${tp.n_teachers||0}/15`;
+    document.getElementById('tp-students').textContent = tp.n_students||0;
+    const teachers=tp.teachers||{};
     const remaining=tp.tasks_remaining||[];
-    document.getElementById('three-pop-status').textContent=
-      `🔧 ${tp.n_workers||0} workers · 🎓 ${tp.n_teachers||0}/${15} teachers (${teachers.join(', ')||'none'}) · 📚 ${tp.n_students||0} students · ${remaining.length} tasks remaining`;
+    document.getElementById('three-pop-status').textContent =
+      `Gen ${tp.generation||'?'} · ${remaining.length} tasks remaining`;
+
+    // Teacher list with badges
+    const tl=document.getElementById('tp-teachers-list');
+    const ALL=['parity','binary_pattern_next','same_different','odd_one_out','sequence_completion',
+      'pattern_period','run_length_next','mirror_detection','repeat_count','arithmetic_next',
+      'geometric_next','alternating_next','logic_gate','logic_chain','modus_ponens'];
+    tl.innerHTML=ALL.map(t=>{
+      const graduated=teachers[t];
+      if(graduated) return `<span class="inline-block px-1.5 py-0.5 rounded bg-green-100 text-green-700 border border-green-200 mr-1 mb-1">🎓 ${t.replace(/_/g,' ')}</span>`;
+      const isWorking=!remaining.includes(t) && !graduated;
+      if(isWorking) return `<span class="inline-block px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-200 mr-1 mb-1">🔧 ${t.replace(/_/g,' ')}</span>`;
+      return `<span class="inline-block px-1.5 py-0.5 rounded bg-gray-50 text-gray-400 border border-gray-100 mr-1 mb-1">⏳ ${t.replace(/_/g,' ')}</span>`;
+    }).join('');
   }
 
   // Plateau
