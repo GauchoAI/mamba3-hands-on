@@ -237,6 +237,21 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
         if on_cycle:
             on_cycle(task, cycle, acc, best_acc, cycle_loss)
 
+        # Direct Firebase push (for subprocess workers without on_cycle)
+        if not on_cycle:
+            try:
+                import firebase_push as fb
+                fb._put(f"mamba3/task_series/{task}/{cycle}", {
+                    "acc": round(acc, 3), "diff": 0,
+                })
+                fb._put(f"mamba3/experiments/{task}/best_fresh", round(best_acc, 4))
+                fb._put(f"mamba3/experiments/{task}/cycle", cycle)
+                fb._put(f"mamba3/experiments/{task}/cycles/{cycle}", {
+                    "fresh": round(acc, 4), "loss": round(cycle_loss, 4), "t": time.time(),
+                })
+            except Exception:
+                pass
+
         # Mastered!
         if acc >= target_acc:
             print(f"  ★ [{task}] MASTERED at {acc:.0%} in {cycle} cycles!", flush=True)

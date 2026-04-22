@@ -264,6 +264,15 @@ def run(args):
                     tasks_data[entry["task"]] = {"acc": entry["acc"], "exp": entry.get("exp_id", "worker")}
 
                 gpu_pct, mem_pct = get_gpu_usage()
+
+                # Build lineage from task_lineage for family tree
+                lineage_data = {}
+                for t, entries in task_lineage.items():
+                    for i, e in enumerate(entries):
+                        node_id = f"{t}_r{e['round']}"
+                        parent_id = f"{t}_r{entries[i-1]['round']}" if i > 0 else None
+                        lineage_data[node_id] = {"parent": parent_id}
+
                 fb._put("mamba3/snapshot", {
                     "timestamp": time.time(),
                     "mode": "three_populations",
@@ -274,6 +283,7 @@ def run(args):
                     "best_fresh": 0,
                     "leaderboard": leaderboard,
                     "tasks": tasks_data,
+                    "lineage": lineage_data,
                     "three_pop": {
                         "n_workers": len(tasks_remaining),
                         "n_teachers": len(teacher_tasks),
@@ -283,9 +293,17 @@ def run(args):
                         "generation": round_num,
                     },
                 })
-                # Also push per-task timeseries
+                # Per-task timeseries
                 fb._put(f"mamba3/task_series/{task_name}/{cycle}", {
                     "acc": round(acc, 3), "diff": 0,
+                })
+                # Per-experiment data (for fresh accuracy chart)
+                fb._put(f"mamba3/experiments/{task_name}/best_fresh", round(best, 4))
+                fb._put(f"mamba3/experiments/{task_name}/status",
+                       "teacher" if task_name in teacher_tasks else "training")
+                fb._put(f"mamba3/experiments/{task_name}/cycle", cycle)
+                fb._put(f"mamba3/experiments/{task_name}/cycles/{cycle}", {
+                    "fresh": round(acc, 4), "loss": round(loss, 4), "t": time.time(),
                 })
             except Exception:
                 pass
