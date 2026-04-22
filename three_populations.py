@@ -177,6 +177,61 @@ def run(args):
               f"{len(teacher_tasks)} teachers", flush=True)
         print(f"{'='*60}", flush=True)
 
+        # Track per-task accuracy for this round
+        task_accs = {}
+
+        def on_cycle(task_name, cycle, acc, best, loss):
+            """Called after each training cycle — push to Firebase."""
+            task_accs[task_name] = {"acc": round(acc, 3), "best": round(best, 3),
+                                    "cycle": cycle, "loss": round(loss, 3)}
+            try:
+                import firebase_push as fb
+                # Update snapshot with current state
+                leaderboard = []
+                for t in ALL_TASKS:
+                    if t in teacher_tasks:
+                        leaderboard.append({"task": t, "acc": 1.0, "status": "teacher",
+                                           "exp_id": teacher_tasks[t]})
+                    elif t in task_accs:
+                        leaderboard.append({"task": t, "acc": task_accs[t]["acc"],
+                                           "best": task_accs[t]["best"],
+                                           "cycle": task_accs[t]["cycle"],
+                                           "status": "training"})
+                    else:
+                        leaderboard.append({"task": t, "acc": 0, "status": "waiting"})
+                leaderboard.sort(key=lambda x: -x["acc"])
+
+                tasks_data = {}
+                for entry in leaderboard:
+                    tasks_data[entry["task"]] = {"acc": entry["acc"], "exp": entry.get("exp_id", "worker")}
+
+                gpu_pct, mem_pct = get_gpu_usage()
+                fb._put("mamba3/snapshot", {
+                    "timestamp": time.time(),
+                    "mode": "three_populations",
+                    "gpu_pct": round(gpu_pct, 1),
+                    "mem_pct": round(mem_pct, 1),
+                    "n_running": len(tasks_remaining),
+                    "n_total": len(ALL_TASKS),
+                    "best_fresh": 0,
+                    "leaderboard": leaderboard,
+                    "tasks": tasks_data,
+                    "three_pop": {
+                        "n_workers": len(tasks_remaining),
+                        "n_teachers": len(teacher_tasks),
+                        "n_students": 0,
+                        "teachers": {t: eid for t, eid in teacher_tasks.items()},
+                        "tasks_remaining": tasks_remaining,
+                        "generation": round_num,
+                    },
+                })
+                # Also push per-task timeseries
+                fb._put(f"mamba3/task_series/{task_name}/{cycle}", {
+                    "acc": round(acc, 3), "diff": 0,
+                })
+            except Exception:
+                pass
+
         for task in list(tasks_remaining):
             if should_stop:
                 break
@@ -189,6 +244,7 @@ def run(args):
                 task, cfg, device,
                 max_cycles=cycles_per_round,
                 target_acc=0.95,
+                on_cycle=on_cycle,
             )
 
             # Check graduation

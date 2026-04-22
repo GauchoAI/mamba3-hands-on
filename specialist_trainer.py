@@ -77,7 +77,7 @@ def get_loss_fn(name):
         return stable_cross_entropy
 
 
-def train_specialist(task, config, device, max_cycles=500, target_acc=0.95):
+def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_cycle=None):
     """Train one specialist on one task. Returns when mastered or max cycles."""
     load_generators()
     gen_fn = GENERATORS.get(task)
@@ -208,6 +208,10 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95):
 
         print(f"  [{task}] cycle {cycle:3d}  loss={cycle_loss:.3f}  "
               f"acc={acc:.0%}  best={best_acc:.0%}  {elapsed:.1f}s", flush=True)
+
+        # Callback — push to Firebase / UI
+        if on_cycle:
+            on_cycle(task, cycle, acc, best_acc, cycle_loss)
 
         # Mastered!
         if acc >= target_acc:
