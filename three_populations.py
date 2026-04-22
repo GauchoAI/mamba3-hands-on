@@ -166,7 +166,7 @@ def run(args):
         worker_procs[exp_id] = (proc, task, cfg)
         worker_counter += 1
         print(f"  + Worker {exp_id} (VRAM: {mem_pct:.0f}%)", flush=True)
-        time.sleep(2)  # brief pause to let CUDA allocate before checking again
+        time.sleep(10)  # let CUDA fully initialize before spawning next
 
     print(f"\n{len(worker_procs)} workers spawned.\n", flush=True)
 
