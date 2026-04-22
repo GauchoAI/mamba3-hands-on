@@ -196,13 +196,25 @@ class Contestant:
 # ── Initial config pool ────────────────────────────────────────────
 
 TURBO_CONFIGS = [
-    # Grokking-style: PerpGrad, big batch for GPU saturation
-    {"d_model": 32, "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "lr": 3e-3, "weight_decay": 0.0, "use_perp": True,
+    # HISTORICAL WINNER: exp_1320 hit 91% parity in 16 cycles
+    {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
+     "lr": 1e-3, "weight_decay": 0.0, "use_perp": False,
+     "optimizer": "adamw", "loss_fn": "stable_ce", "batch_size": 4096,
+     "steps_per_cycle": 500},
+
+    # HISTORICAL WINNER: exp_1836 hit 100% parity in 344 cycles
+    {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
+     "lr": 1e-3, "weight_decay": 0.0, "use_perp": False,
      "optimizer": "adamw", "loss_fn": "ce", "batch_size": 4096,
      "steps_per_cycle": 500},
 
-    # Proven default, big batch
+    # Grokking-style: PerpGrad + no weight decay
+    {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
+     "lr": 1e-3, "weight_decay": 0.0, "use_perp": True,
+     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 4096,
+     "steps_per_cycle": 500},
+
+    # Proven default with weight decay (for comparison)
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
      "lr": 1e-3, "weight_decay": 0.1, "use_perp": False,
      "optimizer": "adamw", "loss_fn": "ce", "batch_size": 4096,
