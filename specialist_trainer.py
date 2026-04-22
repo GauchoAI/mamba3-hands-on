@@ -249,6 +249,12 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
                 fb._put(f"mamba3/experiments/{task}/cycles/{cycle}", {
                     "fresh": round(acc, 4), "loss": round(cycle_loss, 4), "t": time.time(),
                 })
+                # Push real-time GPU stats (during training, not between batches)
+                from coordinator import get_gpu_usage
+                gpu_pct, mem_pct = get_gpu_usage()
+                fb._put("mamba3/snapshot/gpu_pct", round(gpu_pct, 1))
+                fb._put("mamba3/snapshot/mem_pct", round(mem_pct, 1))
+                fb._put("mamba3/snapshot/timestamp", time.time())
             except Exception:
                 pass
 

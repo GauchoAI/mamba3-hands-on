@@ -172,6 +172,25 @@ def run(args):
                          for e in leaderboard}
 
             gpu_pct, mem_pct = get_gpu_usage()
+
+            # Build lineage from DB for mutation timeline
+            lineage_data = {}
+            try:
+                all_lin = db.get_all_lineage()
+                for t, entries in all_lin.items():
+                    for i, e in enumerate(entries):
+                        node_id = f"{t}_r{e['round']}_{e.get('role','c')[0]}"
+                        parent_id = f"{t}_r{entries[i-1]['round']}_{entries[i-1].get('role','c')[0]}" if i > 0 else None
+                        lineage_data[node_id] = {
+                            "parent": parent_id,
+                            "task": t,
+                            "acc": round(e["accuracy"], 2),
+                            "role": e.get("role", "champion"),
+                            "mutation": e.get("mutation"),
+                        }
+            except Exception:
+                pass
+
             fb._put("mamba3/snapshot", {
                 "timestamp": time.time(),
                 "mode": "three_populations",
@@ -182,6 +201,7 @@ def run(args):
                 "best_fresh": 0,
                 "leaderboard": leaderboard,
                 "tasks": tasks_data,
+                "lineage": lineage_data,
                 "three_pop": {
                     "n_workers": len(tasks_remaining),
                     "n_teachers": len(teacher_tasks),
