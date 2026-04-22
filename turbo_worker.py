@@ -244,7 +244,7 @@ TURBO_CONFIGS = [
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 2,
      "lr": 2e-3, "weight_decay": 0.1, "use_perp": False,
      "optimizer": "adamw", "loss_fn": "ce", "batch_size": 256,
-     "steps_per_cycle": 200, "warm_restarts": True},
+     "steps_per_cycle": 100, "warm_restarts": True},
 ]
 
 
@@ -364,39 +364,49 @@ def run_tournament(args):
     plateau_counter = 0
     last_best = sprinter.best_acc
 
-    while not should_stop:
-        # Generate fresh data
-        examples = []
-        for _ in range(2000):
-            ex = gen_fn()
-            tokens, sep = tok.encode_curriculum(ex)
-            examples.append((tokens, sep))
+    # Pre-generate data (reuse across cycles, refresh every 10 cycles)
+    examples = []
+    for _ in range(5000):
+        ex = gen_fn()
+        tokens, sep = tok.encode_curriculum(ex)
+        examples.append((tokens, sep))
 
-        # Train 1 cycle
+    while not should_stop:
+        # Train 1 cycle (fast — no data gen, no eval)
         t0 = time.time()
         sprinter.train_cycle(examples, tok, device)
         cycle_time = time.time() - t0
 
-        # Evaluate
-        acc = sprinter.evaluate(gen_fn, tok, device)
-        elapsed = time.time() - t_start
+        # Evaluate every 5 cycles (not every cycle)
+        if sprinter.cycle % 5 == 0:
+            acc = sprinter.evaluate(gen_fn, tok, device)
 
-        # Track plateau
-        if sprinter.best_acc > last_best:
-            last_best = sprinter.best_acc
-            plateau_counter = 0
+            # Track plateau
+            if sprinter.best_acc > last_best:
+                last_best = sprinter.best_acc
+                plateau_counter = 0
+            else:
+                plateau_counter += 5
+
+            elapsed = time.time() - t_start
+            print(f"  cycle {sprinter.cycle:4d}  acc={acc:.0%}  best={sprinter.best_acc:.0%}  "
+                  f"loss={sprinter.last_loss:.3f}  plateau={plateau_counter}  "
+                  f"{cycle_time:.1f}s  [{elapsed:.0f}s total]", flush=True)
+
+            # Check mastery
+            if acc >= target_acc:
+                winner = sprinter
+                break
         else:
-            plateau_counter += 1
+            elapsed = time.time() - t_start
 
-        # Print every cycle
-        print(f"  cycle {sprinter.cycle:4d}  acc={acc:.0%}  best={sprinter.best_acc:.0%}  "
-              f"loss={sprinter.last_loss:.3f}  plateau={plateau_counter}  "
-              f"{cycle_time:.1f}s  [{elapsed:.0f}s total]", flush=True)
-
-        # Check mastery
-        if acc >= target_acc:
-            winner = sprinter
-            break
+        # Refresh data every 10 cycles
+        if sprinter.cycle % 10 == 0:
+            examples = []
+            for _ in range(5000):
+                ex = gen_fn()
+                tokens, sep = tok.encode_curriculum(ex)
+                examples.append((tokens, sep))
 
         # Plateau → quick re-shootout with mutations
         if plateau_counter >= 30:
