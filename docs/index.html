@@ -601,6 +601,143 @@ function drawTree(lb, lineage) {
     .attr('fill', '#888').attr('font-size', '7')
     .text(d => d.data.id === 'root' ? '' : d.data.id.replace('exp_','') + ' ' + ((d.data.exp?.fresh||0)*100).toFixed(0) + '%');
 }
+// ── Replay mode ──
+// Usage: ?replay=true&speed=5
+// Reads /mamba3/history (timestamped snapshots) + /mamba3/events
+// Replays them chronologically, simulating how it happened.
+
+const params = new URLSearchParams(window.location.search);
+const isReplay = params.get('replay') === 'true';
+const replaySpeed = parseFloat(params.get('speed') || '5');
+
+if (isReplay) {
+  // Show replay controls
+  const controls = document.createElement('div');
+  controls.className = 'fixed top-0 left-0 right-0 bg-black text-white px-4 py-2 flex items-center gap-4 z-50 text-sm';
+  controls.innerHTML = `
+    <span class="font-bold text-yellow-400">▶ REPLAY MODE</span>
+    <span id="replay-progress">Loading...</span>
+    <span class="text-gray-400">Speed: ${replaySpeed}x</span>
+    <button onclick="location.href=location.pathname" class="ml-auto bg-gray-700 px-3 py-1 rounded hover:bg-gray-600">Exit Replay</button>
+  `;
+  document.body.prepend(controls);
+  document.body.style.paddingTop = '40px';
+
+  // Disconnect live listeners
+  db.ref('mamba3/snapshot').off();
+  db.ref('mamba3/events').off();
+  db.ref('mamba3/experiments').off();
+  db.ref('mamba3/task_series').off();
+
+  // Load all history + events
+  Promise.all([
+    db.ref('mamba3/history').once('value'),
+    db.ref('mamba3/events').once('value'),
+  ]).then(([histSnap, evtSnap]) => {
+    const history = histSnap.val() || {};
+    const events = evtSnap.val() || {};
+
+    // Merge into timeline
+    const timeline = [];
+    Object.entries(history).forEach(([ts, data]) => {
+      timeline.push({ time: parseInt(ts), type: 'snapshot', data });
+    });
+    Object.entries(events).forEach(([key, data]) => {
+      if (data && data.timestamp) {
+        timeline.push({ time: data.timestamp, type: 'event', data });
+      }
+    });
+    timeline.sort((a, b) => a.time - b.time);
+
+    if (!timeline.length) {
+      document.getElementById('replay-progress').textContent = 'No history data!';
+      return;
+    }
+
+    const startTime = timeline[0].time;
+    const endTime = timeline[timeline.length - 1].time;
+    const totalDuration = endTime - startTime;
+    let idx = 0;
+
+    document.getElementById('replay-progress').textContent =
+      `${timeline.length} events over ${Math.round(totalDuration/60)}min`;
+
+    function playNext() {
+      if (idx >= timeline.length) {
+        document.getElementById('replay-progress').textContent = '✅ Replay complete!';
+        return;
+      }
+
+      const item = timeline[idx];
+      const progress = ((idx / timeline.length) * 100).toFixed(0);
+      document.getElementById('replay-progress').textContent =
+        `${progress}% — event ${idx+1}/${timeline.length}`;
+
+      if (item.type === 'snapshot') {
+        // Build a fake snapshot from history data
+        const h = item.data;
+        const fakeSnapshot = {
+          timestamp: item.time,
+          tasks: h.tasks || {},
+          leaderboard: (h.top3 || []).map(e => ({...e, status: 'training'})),
+          gpu_pct: h.gpu_pct || 0,
+          mem_pct: h.mem_pct || 0,
+          n_running: h.n_workers || h.n_running || 0,
+          n_total: (h.n_workers||0) + (h.n_teachers||0) + (h.n_students||0),
+          best_fresh: h.best_fresh || 0,
+          three_pop: {
+            n_workers: h.n_workers || 0,
+            n_teachers: h.n_teachers || 0,
+            n_students: h.n_students || 0,
+            teachers: {},
+          },
+        };
+        // Trigger the snapshot handler manually
+        lastTs = item.time;
+        document.getElementById('last-update').textContent = new Date(item.time*1000).toLocaleTimeString();
+        document.getElementById('gpu-pct').textContent = (fakeSnapshot.gpu_pct||0).toFixed(0)+'%';
+        document.getElementById('mem-pct').textContent = (fakeSnapshot.mem_pct||0).toFixed(0)+'%';
+        document.getElementById('n-running').textContent = fakeSnapshot.n_running||0;
+        document.getElementById('n-total').textContent = fakeSnapshot.n_total||0;
+        document.getElementById('best-fresh').textContent = ((fakeSnapshot.best_fresh||0)*100).toFixed(1)+'%';
+        updTask(fakeSnapshot.tasks || {});
+      }
+
+      if (item.type === 'event') {
+        const e = item.data;
+        const time = new Date(e.timestamp*1000).toLocaleTimeString();
+        const icons = {mastery:'★',evolve:'🧬',pause:'⏸',unlock:'🔓',error:'❌',
+          new_best:'🏆',plateau_start:'🔥',plateau_end:'✅',spawn:'➕',
+          vram_warning:'⚠',regression:'📉',lineage_dropout:'🔀',
+          specialist_breed:'🎯',radical_mutation:'💥'};
+        const colors = {mastery:'text-yellow-700',error:'text-red-600',
+          new_best:'text-green-700',plateau_start:'text-red-600'};
+        const div = document.getElementById('events');
+        const el = document.createElement('div');
+        el.className = `text-xs py-0.5 ${colors[e.type]||'text-gray-600'}`;
+        el.innerHTML = `<span class="text-gray-400 tabular-nums">${time}</span> ${icons[e.type]||'·'} <b>${e.exp_id||''}</b> ${e.details||''}`;
+        div.prepend(el);
+        while (div.children.length > 50) div.removeChild(div.lastChild);
+      }
+
+      idx++;
+
+      // Calculate delay to next event
+      if (idx < timeline.length) {
+        const realDelay = (timeline[idx].time - item.time) * 1000; // ms
+        const replayDelay = Math.max(50, realDelay / replaySpeed); // min 50ms
+        setTimeout(playNext, Math.min(replayDelay, 2000)); // cap at 2s
+      } else {
+        setTimeout(playNext, 100);
+      }
+    }
+
+    // Start replay after a short pause
+    setTimeout(playNext, 1000);
+  });
+}
+
+document.getElementById('input')?.focus();
 </script>
 </body>
 </html>
