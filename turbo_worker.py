@@ -316,132 +316,172 @@ def run_tournament(args):
     if run_dir:
         run_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\n{'─'*70}", flush=True)
-    print(f"  TOURNAMENT START", flush=True)
-    print(f"{'─'*70}\n", flush=True)
-
     t_start = time.time()
-    round_num = 0
-    winner = None
     next_idx = len(contestants)
 
-    while not should_stop:
-        # ── Generate shared data (once per cycle, all contestants use it) ──
+    # ── PHASE 1: Quick shootout (2 cycles each — ~30 seconds) ──────
+    print(f"  PHASE 1: Shootout — {len(contestants)} configs × 2 cycles\n", flush=True)
+
+    for shootout_cycle in range(2):
         examples = []
         for _ in range(2000):
             ex = gen_fn()
             tokens, sep = tok.encode_curriculum(ex)
             examples.append((tokens, sep))
 
-        # ── Train each alive contestant for 1 cycle ──
-        alive = [c for c in contestants if c.alive]
-        for c in alive:
-            t0 = time.time()
+        for c in contestants:
             c.train_cycle(examples, tok, device)
-            elapsed = time.time() - t0
 
-        # ── Evaluate every eval_interval cycles ──
-        min_cycle = min(c.cycle for c in alive) if alive else 0
-        if min_cycle > 0 and min_cycle % eval_interval == 0:
-            round_num += 1
-            print(f"\n  ── Round {round_num} (cycle {min_cycle}) "
-                  f"── {time.time() - t_start:.0f}s elapsed ──", flush=True)
+    # Evaluate all
+    for c in contestants:
+        c.evaluate(gen_fn, tok, device)
+    contestants.sort(key=lambda c: -c.last_acc)
 
-            # Evaluate all
-            for c in alive:
-                acc = c.evaluate(gen_fn, tok, device)
+    shootout_time = time.time() - t_start
+    print(f"  Shootout results ({shootout_time:.0f}s):", flush=True)
+    for c in contestants:
+        print(f"    [{c.idx:2d}] acc={c.last_acc:5.0%} loss={c.last_loss:.3f} | {c.tag()}", flush=True)
 
-            # Sort by accuracy
-            alive.sort(key=lambda c: -c.last_acc)
+    # Pick winner
+    winner_cfg = contestants[0]
+    print(f"\n  Winner: [{winner_cfg.idx}] {winner_cfg.tag()} at {winner_cfg.last_acc:.0%}", flush=True)
 
-            # Print scoreboard
-            for rank, c in enumerate(alive):
-                marker = "★" if c.last_acc >= target_acc else " "
-                plateau = c.cycle - c.best_at_cycle
-                print(f"  {marker} [{c.idx:2d}] acc={c.last_acc:5.0%} "
-                      f"best={c.best_acc:5.0%} loss={c.last_loss:.3f} "
-                      f"plateau={plateau:3d} | {c.tag()}", flush=True)
+    # ── PHASE 2: Sprint — train winner solo until mastery ──────────
+    print(f"\n{'─'*70}", flush=True)
+    print(f"  PHASE 2: Sprint — {winner_cfg.tag()}", flush=True)
+    print(f"{'─'*70}\n", flush=True)
 
-            # Check for mastery
-            for c in alive:
-                if c.last_acc >= target_acc:
-                    winner = c
-                    break
+    # Keep only the winner (free GPU memory from other models)
+    sprinter = winner_cfg
+    for c in contestants:
+        if c.idx != sprinter.idx:
+            del c.model
+            del c.opt
+    contestants = [sprinter]
+    if device == "cuda":
+        torch.cuda.empty_cache()
 
-            if winner:
-                break
+    plateau_counter = 0
+    last_best = sprinter.best_acc
 
-            # ── Tournament selection ──
-            # Early: no killing (let configs explore)
-            # Mid: kill bottom 25%
-            # Late: kill bottom 50%
-            if min_cycle >= 20 and len(alive) > 2:
-                if min_cycle < 100:
-                    kill_count = max(1, len(alive) // 4)
-                else:
-                    kill_count = max(1, len(alive) // 2)
+    while not should_stop:
+        # Generate fresh data
+        examples = []
+        for _ in range(2000):
+            ex = gen_fn()
+            tokens, sep = tok.encode_curriculum(ex)
+            examples.append((tokens, sep))
 
-                # Kill the worst
-                to_kill = alive[-kill_count:]
-                for c in to_kill:
-                    c.alive = False
-                    print(f"    ✗ Killed [{c.idx}] ({c.last_acc:.0%})", flush=True)
+        # Train 1 cycle
+        t0 = time.time()
+        sprinter.train_cycle(examples, tok, device)
+        cycle_time = time.time() - t0
 
-                # Determine mutation aggressiveness
-                best = alive[0]
-                plateau_cycles = best.cycle - best.best_at_cycle
-                if plateau_cycles < 20:
-                    severity = 0.0
-                elif plateau_cycles < 50:
-                    severity = 1.0
-                else:
-                    severity = 2.5
+        # Evaluate
+        acc = sprinter.evaluate(gen_fn, tok, device)
+        elapsed = time.time() - t_start
 
-                # Spawn replacements from best
-                for _ in range(kill_count):
-                    child_cfg = smart_mutate_config(
-                        best.cfg, mutation_history=mut_history,
-                        plateau_severity=severity,
-                    )
-                    child_cfg["_parent_idx"] = best.idx
+        # Track plateau
+        if sprinter.best_acc > last_best:
+            last_best = sprinter.best_acc
+            plateau_counter = 0
+        else:
+            plateau_counter += 1
 
-                    # Check VRAM
-                    child_mem = estimate_vram_mb(child_cfg)
-                    if child_mem > 500:  # sanity cap
-                        child_cfg = best.cfg.copy()  # fallback to parent
+        # Print every cycle
+        print(f"  cycle {sprinter.cycle:4d}  acc={acc:.0%}  best={sprinter.best_acc:.0%}  "
+              f"loss={sprinter.last_loss:.3f}  plateau={plateau_counter}  "
+              f"{cycle_time:.1f}s  [{elapsed:.0f}s total]", flush=True)
 
-                    child = Contestant(next_idx, child_cfg, device)
-                    contestants.append(child)
-                    next_idx += 1
+        # Check mastery
+        if acc >= target_acc:
+            winner = sprinter
+            break
 
-                    changed = {k: child_cfg[k] for k in child_cfg
-                              if k not in ("steps_per_cycle",) and
-                              child_cfg.get(k) != best.cfg.get(k)}
-                    print(f"    + [{child.idx}] from [{best.idx}]: {changed}", flush=True)
+        # Plateau → quick re-shootout with mutations
+        if plateau_counter >= 30:
+            print(f"\n  🔍 PLATEAU at {sprinter.best_acc:.0%} for {plateau_counter} cycles. "
+                  f"Re-shootout with mutations...\n", flush=True)
 
-                # Record mutation outcomes for history
-                for c in alive[1:]:
-                    if c.parent_idx is not None:
-                        parent = next((p for p in contestants if p.idx == c.parent_idx), None)
-                        if parent:
-                            mut_history.record(parent.cfg, c.cfg,
-                                             parent.best_acc, c.best_acc)
+            # Determine severity
+            severity = min(3.0, plateau_counter / 20)
 
-            # Write metrics
-            if run_dir:
-                best = alive[0] if alive else None
-                write_metrics(run_dir, {
-                    "cycle": min_cycle,
-                    "round": round_num,
-                    "task": task,
-                    "n_alive": len([c for c in contestants if c.alive]),
-                    "best_acc": best.best_acc if best else 0,
-                    "best_config": best.cfg if best else {},
-                    "acc": best.last_acc if best else 0,
-                    "loss": best.last_loss if best else 0,
-                    "n_params": best.n_params if best else 0,
-                    "elapsed": time.time() - t_start,
-                })
+            # Create 4 mutants + keep current best
+            new_contestants = [sprinter]
+            for i in range(4):
+                child_cfg = smart_mutate_config(
+                    sprinter.cfg, mutation_history=mut_history,
+                    plateau_severity=severity,
+                )
+                child_cfg["_parent_idx"] = sprinter.idx
+                child = Contestant(next_idx, child_cfg, device)
+                new_contestants.append(child)
+                next_idx += 1
+                changed = {k: child_cfg[k] for k in child_cfg
+                          if k not in ("steps_per_cycle",) and
+                          child_cfg.get(k) != sprinter.cfg.get(k)}
+                print(f"    Mutant [{child.idx}]: {changed}", flush=True)
+
+            # Quick shootout: 3 cycles
+            for _ in range(3):
+                examples = []
+                for _ in range(2000):
+                    ex = gen_fn()
+                    tokens, sep = tok.encode_curriculum(ex)
+                    examples.append((tokens, sep))
+                for c in new_contestants:
+                    c.train_cycle(examples, tok, device)
+
+            # Evaluate
+            for c in new_contestants:
+                c.evaluate(gen_fn, tok, device)
+            new_contestants.sort(key=lambda c: -c.last_acc)
+
+            new_best = new_contestants[0]
+            print(f"\n  Re-shootout results:", flush=True)
+            for c in new_contestants:
+                print(f"    [{c.idx:2d}] acc={c.last_acc:5.0%} | {c.tag()}", flush=True)
+
+            # Record mutation outcomes
+            for c in new_contestants[1:]:
+                mut_history.record(sprinter.cfg, c.cfg, sprinter.best_acc, c.best_acc)
+
+            if new_best.idx != sprinter.idx:
+                print(f"\n  Switching to [{new_best.idx}] {new_best.tag()}", flush=True)
+                # Free old sprinter
+                for c in new_contestants:
+                    if c.idx != new_best.idx:
+                        del c.model
+                        del c.opt
+                sprinter = new_best
+                contestants = [sprinter]
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+            else:
+                print(f"\n  Keeping [{sprinter.idx}] — still the best", flush=True)
+                for c in new_contestants:
+                    if c.idx != sprinter.idx:
+                        del c.model
+                        del c.opt
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+
+            plateau_counter = 0
+            last_best = sprinter.best_acc
+
+        # Write metrics
+        if run_dir:
+            write_metrics(run_dir, {
+                "cycle": sprinter.cycle,
+                "task": task,
+                "acc": round(acc, 4),
+                "best_acc": round(sprinter.best_acc, 4),
+                "loss": round(sprinter.last_loss, 4),
+                "config": sprinter.cfg,
+                "n_params": sprinter.n_params,
+                "elapsed": elapsed,
+                "plateau": plateau_counter,
+            })
 
     # ── Mastery achieved ──
     elapsed = time.time() - t_start
