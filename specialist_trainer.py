@@ -78,7 +78,10 @@ def get_loss_fn(name):
 
 
 def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_cycle=None):
-    """Train one specialist on one task. Returns when mastered or max cycles."""
+    """Train one specialist on one task. Returns when mastered or max cycles.
+
+    Resumes from checkpoints/specialists/{task}.pt if it exists (same task only).
+    """
     load_generators()
     gen_fn = GENERATORS.get(task)
     if not gen_fn:
@@ -99,8 +102,6 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
     model.set_mode("kernel")
 
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"\n[{task}] d={config.get('d_model')}, L={config.get('n_kernel_layers')}, "
-          f"{n_params:,} params", flush=True)
 
     # Optimizer
     wd = config.get("weight_decay", 0.0)
@@ -118,8 +119,31 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
     batch_size = config.get("batch_size", 256)
     steps_per_cycle = config.get("steps_per_cycle", 200)
     best_acc = 0.0
+    cycle_start = 0
 
-    for cycle in range(1, max_cycles + 1):
+    # Resume from checkpoint if exists (same task)
+    ckpt_dir = Path("checkpoints/specialists")
+    ckpt_path = ckpt_dir / f"{task}.pt"
+    if ckpt_path.exists():
+        try:
+            ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+            if ckpt.get("task") == task:
+                model.load_state_dict(ckpt["model"])
+                cycle_start = ckpt.get("cycles", 0)
+                best_acc = ckpt.get("accuracy", 0.0)
+                if "optimizer" in ckpt:
+                    try:
+                        opt.load_state_dict(ckpt["optimizer"])
+                    except Exception:
+                        pass
+                print(f"  Resumed {task} from cycle {cycle_start}, best={best_acc:.0%}", flush=True)
+        except Exception as e:
+            print(f"  Checkpoint load failed: {e}", flush=True)
+
+    print(f"\n[{task}] d={config.get('d_model')}, L={config.get('n_kernel_layers')}, "
+          f"{n_params:,} params", flush=True)
+
+    for cycle in range(cycle_start + 1, cycle_start + max_cycles + 1):
         t0 = time.time()
         model.train()
 
@@ -224,6 +248,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
     ckpt_path = ckpt_dir / f"{task}.pt"
     torch.save({
         "model": model.state_dict(),
+        "optimizer": opt.state_dict(),
         "task": task,
         "config": config,
         "accuracy": best_acc,
