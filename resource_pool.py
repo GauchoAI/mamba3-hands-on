@@ -97,6 +97,12 @@ class ResourceAwarePool:
         self.next_id = 0
         self.pending_configs = [] # (task, config, parent_id) waiting for admission
 
+        # Plateau detection for GA probing
+        self.worker_best_at = {}  # exp_id → (best_acc, cycle_when_best)
+        self.plateau_threshold = 50  # cycles without improvement before probing
+        self.probe_cycles = 10       # cycles per probe
+        self.n_probes = 3            # number of probes to try
+
         # Student
         self.student_proc = None
         self.student_exp_id = None
@@ -278,6 +284,15 @@ class ResourceAwarePool:
             if last_cycle > 0:
                 self.evo_state.record(exp_id, last_cycle, best_acc)
 
+                # Track plateau: when did best_acc last improve?
+                prev_best, prev_cycle = self.worker_best_at.get(exp_id, (0, 0))
+                if best_acc > prev_best:
+                    self.worker_best_at[exp_id] = (best_acc, last_cycle)
+                elif prev_cycle > 0 and (last_cycle - prev_cycle) >= self.plateau_threshold:
+                    # Plateau detected — trigger GA probes
+                    if best_acc < self.target_acc:
+                        self._trigger_probes(exp_id, task, best_acc, last_cycle)
+
                 if self.on_cycle:
                     s = self.monitor.snapshot()
                     n_alive = sum(1 for p in self.processes.values() if p.poll() is None)
@@ -304,6 +319,112 @@ class ResourceAwarePool:
 
         except (json.JSONDecodeError, IOError):
             pass
+
+    def _trigger_probes(self, stuck_exp_id, task, current_best, current_cycle):
+        """Plateau detected. Kill worker, run quick probes, pick best config, continue."""
+        self._log(f"\n  🔍 PLATEAU: {task} stuck at {current_best:.0%} for "
+                 f"{self.plateau_threshold} cycles. Probing {self.n_probes} mutations...")
+
+        # Kill the stuck worker
+        proc = self.processes.get(stuck_exp_id)
+        if proc and proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=10)
+        if stuck_exp_id in self.processes:
+            del self.processes[stuck_exp_id]
+
+        # Get the stuck worker's config and checkpoint
+        parent_config = self.worker_config.get(stuck_exp_id, {})
+        parent_ckpt = self.runs_dir / stuck_exp_id / "checkpoint.pt"
+
+        # Calculate plateau severity for mutation aggressiveness
+        plateau_severity = min(3.0, (current_cycle - self.worker_best_at.get(stuck_exp_id, (0, 0))[1]) / 50)
+
+        # Run N probes sequentially (each gets full GPU)
+        probe_results = []
+        for i in range(self.n_probes):
+            probe_cfg = smart_mutate_config(
+                parent_config,
+                mutation_history=self.mutation_history,
+                plateau_severity=plateau_severity,
+            )
+            probe_cfg["task"] = task
+
+            probe_id = self._next_exp_id()
+            probe_dir = self.runs_dir / probe_id
+            probe_dir.mkdir(parents=True, exist_ok=True)
+
+            # Write config
+            config_path = probe_dir / "config.json"
+            with open(config_path, "w") as f:
+                json.dump(probe_cfg, f, indent=2)
+
+            # Copy parent checkpoint for weight inheritance
+            if parent_ckpt.exists():
+                shutil.copy2(parent_ckpt, probe_dir / "checkpoint.pt")
+
+            # Run probe (short: probe_cycles)
+            changed = {k: probe_cfg[k] for k in probe_cfg
+                      if k not in ("task", "steps_per_cycle") and probe_cfg.get(k) != parent_config.get(k)}
+            self._log(f"    Probe {i+1}/{self.n_probes} [{probe_id}]: {changed}")
+
+            probe_proc = subprocess.Popen(
+                [sys.executable, "-u", "specialist_trainer.py",
+                 "--task", task,
+                 "--run-dir", str(probe_dir),
+                 "--d-model", str(probe_cfg.get("d_model", 64)),
+                 "--d-state", str(probe_cfg.get("d_state", 16)),
+                 "--headdim", str(probe_cfg.get("headdim", 16)),
+                 "--layers", str(probe_cfg.get("n_kernel_layers", 3)),
+                 "--lr", str(probe_cfg.get("lr", 1e-3)),
+                 "--weight-decay", str(probe_cfg.get("weight_decay", 0.0)),
+                 "--optimizer", str(probe_cfg.get("optimizer", "adamw")),
+                 "--loss-fn", str(probe_cfg.get("loss_fn", "ce")),
+                 "--batch-size", str(probe_cfg.get("batch_size", 256)),
+                 "--steps-per-cycle", str(probe_cfg.get("steps_per_cycle", 200)),
+                 "--max-cycles", str(self.probe_cycles),
+                 "--target-acc", str(self.target_acc)],
+                stdout=open(probe_dir / "stdout.log", "w"),
+                stderr=subprocess.STDOUT,
+                cwd=str(Path(__file__).parent),
+            )
+
+            # Wait for probe to finish
+            probe_proc.wait(timeout=300)
+
+            # Read result
+            metrics_path = probe_dir / "metrics.json"
+            probe_best = 0.0
+            if metrics_path.exists():
+                try:
+                    with open(metrics_path) as f:
+                        m = json.load(f)
+                    probe_best = m.get("best_acc", 0)
+                except Exception:
+                    pass
+
+            probe_results.append((probe_id, probe_cfg, probe_best))
+            self._log(f"    Probe {i+1} result: {probe_best:.0%}")
+
+            # Record for mutation history
+            self.mutation_history.record(parent_config, probe_cfg, current_best, probe_best)
+
+        # Pick the best probe
+        probe_results.sort(key=lambda x: -x[2])
+        best_probe_id, best_cfg, best_probe_acc = probe_results[0]
+
+        if best_probe_acc > current_best:
+            # Winner found — continue with this config
+            self._log(f"  ✓ Probe {best_probe_id} won: {best_probe_acc:.0%} > {current_best:.0%}")
+            self._log(f"    Config: { {k: best_cfg[k] for k in best_cfg if k not in ('task', 'steps_per_cycle') and best_cfg.get(k) != parent_config.get(k)} }")
+            # Queue the winning config to continue training
+            self.pending_configs.insert(0, (task, best_cfg, best_probe_id))
+        else:
+            # No improvement — continue with original config but reset plateau counter
+            self._log(f"  ✗ No probe beat {current_best:.0%}. Continuing with original config.")
+            self.pending_configs.insert(0, (task, parent_config, stuck_exp_id))
+            # Reset plateau tracking so we don't probe again immediately
+            self.worker_best_at.pop(stuck_exp_id, None)
 
     def _handle_finished(self, exp_id):
         """A worker process finished. Check if it mastered the task."""
