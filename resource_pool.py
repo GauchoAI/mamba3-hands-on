@@ -99,9 +99,10 @@ class ResourceAwarePool:
 
         # Plateau detection for GA probing
         self.worker_best_at = {}  # exp_id → (best_acc, cycle_when_best)
-        self.plateau_threshold = 50  # cycles without improvement before probing
-        self.probe_cycles = 5        # cycles per probe (fast: ~9s each)
+        self.plateau_threshold = 20  # cycles without improvement before probing
+        self.probe_cycles = 5        # cycles per probe (fast: ~5s each)
         self.n_probes = 3            # number of probes to try
+        self.probed_tasks = set()    # tasks already probed this round (avoid re-probing)
 
         # Student
         self.student_proc = None
@@ -239,6 +240,7 @@ class ResourceAwarePool:
         self.worker_parent[exp_id] = parent_id
         (run_dir / "status").write_text("running")
 
+        self.probed_tasks.discard(task)  # allow probing again with new config
         self._log(f"  + {exp_id} [{task}]: d={cfg.get('d_model')} "
                  f"L={cfg.get('n_kernel_layers')} lr={cfg.get('lr', 1e-3):.0e} "
                  f"opt={cfg.get('optimizer', 'adamw')} loss={cfg.get('loss_fn', 'ce')}")
@@ -289,8 +291,9 @@ class ResourceAwarePool:
                 if best_acc > prev_best:
                     self.worker_best_at[exp_id] = (best_acc, last_cycle)
                 elif prev_cycle > 0 and (last_cycle - prev_cycle) >= self.plateau_threshold:
-                    # Plateau detected — trigger GA probes
-                    if best_acc < self.target_acc:
+                    # Plateau detected — trigger GA probes (once per task per stint)
+                    if best_acc < self.target_acc and task not in self.probed_tasks:
+                        self.probed_tasks.add(task)
                         self._trigger_probes(exp_id, task, best_acc, last_cycle)
 
                 if self.on_cycle:
