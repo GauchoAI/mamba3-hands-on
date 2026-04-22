@@ -363,6 +363,7 @@ def run_tournament(args):
 
     plateau_counter = 0
     last_best = sprinter.best_acc
+    acc = sprinter.last_acc  # initialize from shootout
 
     # Pre-generate data (reuse across cycles, refresh every 10 cycles)
     examples = []
