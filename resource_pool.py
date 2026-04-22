@@ -115,7 +115,6 @@ class WorkerThread(threading.Thread):
 
     def run(self):
         try:
-            load_generators()
             gen_fn = GENERATORS.get(self.task)
             if not gen_fn:
                 self.error = f"Unknown task: {self.task}"
@@ -225,7 +224,6 @@ class StudentThread(threading.Thread):
     def run(self):
         try:
             from distill import distillation_loss, pcgrad_project
-            load_generators()
             tok = ByteTokenizer()
 
             cfg = {k: v for k, v in self.config.items() if not k.startswith('_')}
@@ -426,6 +424,7 @@ class ResourceAwarePool:
 
     def _log(self, msg):
         print(msg, flush=True)
+        sys.stdout.flush()
 
     def _next_exp_id(self):
         eid = f"exp_{self.next_id:04d}"
@@ -519,6 +518,11 @@ class ResourceAwarePool:
             if worker.graduated:
                 self._handle_graduation(worker)
             elif worker.error:
+                self._log(f"  CRASH [{exp_id}] {worker.task}: {worker.error}")
+                self._handle_crash(worker)
+            else:
+                self._log(f"  DIED [{exp_id}] {worker.task}: no error, no graduation "
+                         f"(cycle={worker.cycle}, alive={worker.is_alive()})")
                 self._handle_crash(worker)
             with self.worker_lock:
                 del self.workers[exp_id]
