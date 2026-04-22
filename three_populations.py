@@ -290,83 +290,149 @@ def run(args):
             except Exception:
                 pass
 
-        for task in list(tasks_remaining):
+        # ── Determine pool size from VRAM ──
+        gpu_pct, mem_pct = get_gpu_usage()
+        vram_free_pct = 100 - mem_pct
+        # Each worker uses ~2-5% VRAM. Allow up to N workers while keeping 30% free.
+        max_concurrent = max(1, min(4, int(vram_free_pct / 20)))
+
+        active_tasks = [t for t in tasks_remaining
+                       if t not in teacher_tasks and not should_stop]
+
+        # ── Train champions in batches of max_concurrent ──
+        for batch_start in range(0, len(active_tasks), max_concurrent):
             if should_stop:
                 break
-            if task in teacher_tasks:
-                continue
+            batch = active_tasks[batch_start:batch_start + max_concurrent]
 
-            # Always train the champion first (current best config)
-            cfg = task_config[task]
-            mutation_desc = None
+            if len(batch) > 1:
+                print(f"\n  Training {len(batch)} tasks concurrently "
+                      f"(VRAM: {mem_pct:.0f}%, pool: {max_concurrent})", flush=True)
 
-            print(f"\n  Training {task}... (d={cfg.get('d_model')} L={cfg.get('n_kernel_layers')} "
-                  f"lr={cfg.get('lr', 1e-3):.0e} {cfg.get('optimizer', 'adamw')} "
-                  f"{cfg.get('loss_fn', 'ce')})", flush=True)
+            # Launch batch as subprocesses
+            procs = {}
+            for task in batch:
+                cfg = task_config[task]
+                print(f"  + {task} (d={cfg.get('d_model')} L={cfg.get('n_kernel_layers')} "
+                      f"lr={cfg.get('lr', 1e-3):.0e} {cfg.get('optimizer', 'adamw')} "
+                      f"{cfg.get('loss_fn', 'ce')})", flush=True)
 
-            acc = train_specialist(
-                task, cfg, device,
-                max_cycles=cycles_per_round,
-                target_acc=0.95,
-                on_cycle=on_cycle,
-            )
-
-            # Track best for plateau detection + remember winning config
-            if acc and acc > task_best.get(task, 0):
-                task_best[task] = acc
-                task_best_round[task] = round_num
-                task_best_config[task] = cfg.copy()
-
-            # Plateau? Run a challenger with mutated config
-            rounds_stuck = round_num - task_best_round.get(task, 0)
-            best = task_best.get(task, 0)
-
-            if rounds_stuck >= PLATEAU_THRESHOLD and best > 0 and acc and acc < 0.95:
-                severity = min(3.0, rounds_stuck / 3)
-                base = task_best_config[task].copy()
-                challenger_cfg = mutate_config(base, plateau_severity=severity)
-
-                changes = {k: challenger_cfg[k] for k in challenger_cfg
-                          if challenger_cfg.get(k) != base.get(k) and k != "steps_per_cycle"}
-                mutation_desc = f"severity={severity:.1f} changes={changes}"
-
-                # If architecture changed, challenger starts fresh
-                arch_changed = any(challenger_cfg.get(k) != base.get(k)
-                                  for k in ["d_model", "d_state", "headdim", "n_kernel_layers"])
-
-                # Back up champion checkpoint
-                ckpt = Path("checkpoints/specialists") / f"{task}.pt"
-                champion_ckpt = Path("checkpoints/specialists") / f"{task}_champion.pt"
-                if ckpt.exists():
-                    import shutil
-                    shutil.copy2(ckpt, champion_ckpt)
-                    if arch_changed:
-                        ckpt.unlink()  # challenger can't use champion weights
-
-                print(f"  🧬 CHALLENGER for {task}: {changes}"
-                      f"{' (fresh start)' if arch_changed else ''}", flush=True)
-
-                challenger_acc = train_specialist(
-                    task, challenger_cfg, device,
-                    max_cycles=cycles_per_round,
-                    target_acc=0.95,
-                    on_cycle=on_cycle,
+                proc = subprocess.Popen(
+                    [sys.executable, "-u", "specialist_trainer.py",
+                     "--task", task,
+                     "--d-model", str(cfg.get("d_model", 64)),
+                     "--d-state", str(cfg.get("d_state", 16)),
+                     "--headdim", str(cfg.get("headdim", 16)),
+                     "--layers", str(cfg.get("n_kernel_layers", 3)),
+                     "--lr", str(cfg.get("lr", 1e-3)),
+                     "--weight-decay", str(cfg.get("weight_decay", 0.1)),
+                     "--optimizer", str(cfg.get("optimizer", "adamw")),
+                     "--loss-fn", str(cfg.get("loss_fn", "ce")),
+                     "--batch-size", str(cfg.get("batch_size", 256)),
+                     "--steps-per-cycle", str(cfg.get("steps_per_cycle", 200)),
+                     "--max-cycles", str(cycles_per_round),
+                     "--target-acc", "0.95"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    cwd=str(Path(__file__).parent),
                 )
+                procs[task] = proc
 
-                # Compare: challenger wins only if it beats champion's best
-                if challenger_acc and challenger_acc > best:
-                    print(f"  ✓ Challenger wins: {challenger_acc:.0%} > {best:.0%}", flush=True)
-                    task_config[task] = challenger_cfg
-                    task_best[task] = challenger_acc
+            # Wait for all to finish, collect results
+            for task, proc in procs.items():
+                output = proc.communicate(timeout=600)[0].decode("utf-8", errors="ignore")
+                # Print last few lines
+                lines = output.strip().split("\n")
+                for line in lines[-3:]:
+                    print(f"    {line}", flush=True)
+
+                # Read accuracy from checkpoint
+                cfg = task_config[task]
+                ckpt_path = Path("checkpoints/specialists") / f"{task}.pt"
+                acc = 0.0
+                if ckpt_path.exists():
+                    try:
+                        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+                        acc = ckpt.get("accuracy", 0.0)
+                    except Exception:
+                        pass
+
+                # Track best
+                mutation_desc = None
+                if acc > task_best.get(task, 0):
+                    task_best[task] = acc
                     task_best_round[task] = round_num
-                    task_best_config[task] = challenger_cfg.copy()
-                    acc = challenger_acc  # for lineage
-                else:
-                    print(f"  ✗ Champion holds: {best:.0%} >= {challenger_acc:.0%}", flush=True)
-                    # Restore champion checkpoint
-                    if champion_ckpt.exists():
-                        shutil.copy2(champion_ckpt, ckpt)
-                    task_config[task] = task_best_config[task].copy()
+                    task_best_config[task] = cfg.copy()
+
+                # Check graduation
+                if acc >= 0.95:
+                    exp_id = f"w_{task}_{worker_counter:03d}"
+                    teacher_tasks[task] = exp_id
+                    if task in tasks_remaining:
+                        tasks_remaining.remove(task)
+                    worker_counter += 1
+                    print(f"  🎓 GRADUATED: {task} → Teacher ({acc:.0%})", flush=True)
+
+                    import shutil
+                    if ckpt_path.exists():
+                        shutil.copy2(ckpt_path, teachers_dir / f"{task}.pt")
+                    cache = Path("checkpoints/specialists") / f"{task}_cache.pt"
+                    if cache.exists():
+                        shutil.copy2(cache, teachers_dir / f"{task}_cache.pt")
+
+                    try:
+                        import firebase_push as fb
+                        fb.evt_mastery(exp_id, task, 0, 0, 0)
+                    except Exception:
+                        pass
+
+                # Plateau? Run challenger (sequential — one at a time for challengers)
+                rounds_stuck = round_num - task_best_round.get(task, 0)
+                best = task_best.get(task, 0)
+
+                if rounds_stuck >= PLATEAU_THRESHOLD and best > 0 and acc < 0.95:
+                    severity = min(3.0, rounds_stuck / 3)
+                    base = task_best_config[task].copy()
+                    challenger_cfg = mutate_config(base, plateau_severity=severity)
+
+                    changes = {k: challenger_cfg[k] for k in challenger_cfg
+                              if challenger_cfg.get(k) != base.get(k) and k != "steps_per_cycle"}
+                    mutation_desc = f"severity={severity:.1f} changes={changes}"
+
+                    arch_changed = any(challenger_cfg.get(k) != base.get(k)
+                                      for k in ["d_model", "d_state", "headdim", "n_kernel_layers"])
+
+                    # Back up champion
+                    champion_ckpt = Path("checkpoints/specialists") / f"{task}_champion.pt"
+                    if ckpt_path.exists():
+                        import shutil
+                        shutil.copy2(ckpt_path, champion_ckpt)
+                        if arch_changed:
+                            ckpt_path.unlink()
+
+                    print(f"  🧬 CHALLENGER for {task}: {changes}"
+                          f"{' (fresh)' if arch_changed else ''}", flush=True)
+
+                    # Run challenger inline (sequential)
+                    challenger_acc = train_specialist(
+                        task, challenger_cfg, device,
+                        max_cycles=cycles_per_round,
+                        target_acc=0.95,
+                        on_cycle=on_cycle,
+                    )
+
+                    if challenger_acc and challenger_acc > best:
+                        print(f"  ✓ Challenger wins: {challenger_acc:.0%} > {best:.0%}", flush=True)
+                        task_config[task] = challenger_cfg
+                        task_best[task] = challenger_acc
+                        task_best_round[task] = round_num
+                        task_best_config[task] = challenger_cfg.copy()
+                        acc = challenger_acc
+                    else:
+                        print(f"  ✗ Champion holds: {best:.0%} >= {challenger_acc:.0%}", flush=True)
+                        if champion_ckpt.exists():
+                            import shutil
+                            shutil.copy2(champion_ckpt, ckpt_path)
+                        task_config[task] = task_best_config[task].copy()
 
             # Log lineage
             entry = {
