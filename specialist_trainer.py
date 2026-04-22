@@ -257,7 +257,10 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
     }, ckpt_path)
     print(f"  Saved specialist → {ckpt_path} ({best_acc:.0%})", flush=True)
 
-    # Precompute teacher outputs for distillation
+    # Precompute teacher outputs for distillation (only if mastered)
+    if best_acc < target_acc:
+        return best_acc
+
     print(f"  Precomputing teacher outputs...", flush=True)
     model.eval()
     teacher_data = []
