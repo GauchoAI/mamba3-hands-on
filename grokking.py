@@ -22,8 +22,9 @@ import torch.nn.functional as F
 
 def _stable_s(x):
     """Piecewise activation: linear for x>=0, rational for x<0."""
+    x = x.clamp(-1e6, 1e6)        # prevent inf from extreme logits
     pos = x + 1                    # linear growth (not exponential)
-    neg = 1.0 / (1.0 - x)         # smooth decay toward 0
+    neg = 1.0 / (1.0 - x + 1e-8)  # smooth decay toward 0 (epsilon prevents div/0)
     return torch.where(x >= 0, pos, neg)
 
 

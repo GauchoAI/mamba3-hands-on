@@ -164,7 +164,7 @@ class Contestant:
         self.last_loss = cycle_loss / max(self.steps_per_cycle, 1)
         self.cycle += 1
 
-    def evaluate(self, gen_fn, tok, device, n_eval=100):
+    def evaluate(self, gen_fn, tok, device, n_eval=50):
         """Evaluate on fresh examples."""
         self.model.eval()
         correct = total = 0
@@ -198,47 +198,47 @@ class Contestant:
 # ── Initial config pool ────────────────────────────────────────────
 
 TURBO_CONFIGS = [
-    # Grokking-style: small, fast, PerpGrad
+    # Grokking-style: small, fast, PerpGrad (use CE not stable_ce — stable_ce+perp=NaN)
     {"d_model": 32, "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
      "lr": 3e-3, "weight_decay": 0.0, "use_perp": True,
-     "optimizer": "adamw", "loss_fn": "stable_ce", "batch_size": 512,
-     "steps_per_cycle": 200},
+     "optimizer": "adamw", "loss_fn": "ce", "batch_size": 512,
+     "steps_per_cycle": 100},
 
     # Proven default (graduated 5 tasks before)
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
      "lr": 1e-3, "weight_decay": 0.1, "use_perp": False,
      "optimizer": "adamw", "loss_fn": "ce", "batch_size": 256,
-     "steps_per_cycle": 200},
+     "steps_per_cycle": 100},
 
     # Lion optimizer: sign-based, fast for small models
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 2,
      "lr": 3e-4, "weight_decay": 0.1, "use_perp": False,
      "optimizer": "lion", "loss_fn": "ce", "batch_size": 256,
-     "steps_per_cycle": 200},
+     "steps_per_cycle": 100},
 
     # Big model: more capacity for harder tasks
     {"d_model": 96, "d_state": 16, "headdim": 16, "n_kernel_layers": 4,
      "lr": 5e-4, "weight_decay": 0.1, "use_perp": False,
      "optimizer": "adamw", "loss_fn": "ce", "batch_size": 128,
-     "steps_per_cycle": 200},
+     "steps_per_cycle": 100},
 
     # Focal loss: focus on hard examples
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
      "lr": 1e-3, "weight_decay": 0.1, "use_perp": False,
      "optimizer": "adamw", "loss_fn": "focal", "batch_size": 256,
-     "steps_per_cycle": 200},
+     "steps_per_cycle": 100},
 
     # Small + aggressive LR
     {"d_model": 48, "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
      "lr": 5e-3, "weight_decay": 0.05, "use_perp": False,
      "optimizer": "adamw", "loss_fn": "ce", "batch_size": 512,
-     "steps_per_cycle": 200},
+     "steps_per_cycle": 100},
 
     # Label smoothing: anti-overconfidence
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
      "lr": 1e-3, "weight_decay": 0.1, "use_perp": False,
      "optimizer": "adamw", "loss_fn": "label_smooth", "batch_size": 256,
-     "steps_per_cycle": 200},
+     "steps_per_cycle": 100},
 
     # Warm restarts: escape local minima
     {"d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 2,
@@ -328,7 +328,7 @@ def run_tournament(args):
     while not should_stop:
         # ── Generate shared data (once per cycle, all contestants use it) ──
         examples = []
-        for _ in range(5000):
+        for _ in range(2000):
             ex = gen_fn()
             tokens, sep = tok.encode_curriculum(ex)
             examples.append((tokens, sep))
