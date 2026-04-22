@@ -153,14 +153,20 @@ def run(args):
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    # ── Phase 1: Spawn initial workers (one per task) ──
-    print("Phase 1: Spawning initial workers (one per task)...", flush=True)
-    for task in ALL_TASKS:
+    # ── Phase 1: Spawn workers (VRAM-aware, fill to 75%) ──
+    print("Phase 1: Spawning workers (adapts to available hardware)...", flush=True)
+    tasks_queue = list(ALL_TASKS)  # tasks needing their first worker
+    for task in tasks_queue:
+        gpu_pct, mem_pct = get_gpu_usage()
+        if mem_pct > 75:
+            print(f"  VRAM at {mem_pct:.0f}% — waiting for space before spawning more", flush=True)
+            break
         cfg = BASE_CONFIG.copy()
         exp_id, proc = spawn_worker(task, cfg, workers_dir, worker_counter)
         worker_procs[exp_id] = (proc, task, cfg)
         worker_counter += 1
-        print(f"  + Worker {exp_id}", flush=True)
+        print(f"  + Worker {exp_id} (VRAM: {mem_pct:.0f}%)", flush=True)
+        time.sleep(2)  # brief pause to let CUDA allocate before checking again
 
     print(f"\n{len(worker_procs)} workers spawned.\n", flush=True)
 
@@ -208,18 +214,21 @@ def run(args):
             except Exception:
                 pass
 
-        # ── Respawn workers for tasks without a teacher ──
+        # ── Spawn workers for tasks that need them (VRAM-aware) ──
         gpu_pct, mem_pct = get_gpu_usage()
         tasks_needing_workers = [t for t in ALL_TASKS if t not in teacher_tasks]
         active_worker_tasks = set(task for _, (_, task, _) in worker_procs.items())
 
         for task in tasks_needing_workers:
-            if task not in active_worker_tasks and mem_pct < 75:
-                # Spawn new worker with mutated config
+            if task not in active_worker_tasks:
+                gpu_pct, mem_pct = get_gpu_usage()
+                if mem_pct > 75:
+                    break  # wait for space
                 cfg = mutate_config(BASE_CONFIG.copy(), plateau_severity=0)
                 exp_id, proc = spawn_worker(task, cfg, workers_dir, worker_counter)
                 worker_procs[exp_id] = (proc, task, cfg)
                 worker_counter += 1
+                print(f"  + Spawned {exp_id} (VRAM: {mem_pct:.0f}%)", flush=True)
 
         # ── Spawn/check students if we have teachers ──
         if teacher_tasks and not student_procs and mem_pct < 75:
