@@ -43,6 +43,12 @@
   </div>
 </div>
 
+<!-- Three populations status -->
+<div id="three-pop-banner" class="hidden bg-purple-50 border border-purple-200 rounded-lg px-4 py-2 mb-3 text-sm">
+  <span class="font-bold text-purple-700">Three Populations</span>
+  <span id="three-pop-status" class="text-purple-600 ml-2"></span>
+</div>
+
 <!-- Plateau banner -->
 <div id="plateau-banner" class="hidden bg-red-50 border border-red-200 rounded-lg px-4 py-2 mb-3 text-sm text-red-800">
   🔥 <b>PLATEAU MODE</b> <span id="plateau-details" class="text-red-600"></span>
@@ -77,6 +83,12 @@
 <!-- Leaderboard + Detail (side by side) -->
 <div class="grid grid-cols-3 gap-3 mb-3">
   <div class="col-span-2 bg-white rounded-lg shadow-sm p-3 max-h-[480px] overflow-y-auto">
+    <div class="flex gap-2 mb-2">
+      <button onclick="showLeaderboard('all')" id="lb_all" class="text-xs font-bold px-2 py-1 rounded bg-blue-100 text-blue-700">All</button>
+      <button onclick="showLeaderboard('workers')" id="lb_workers" class="text-xs font-bold px-2 py-1 rounded bg-gray-100 text-gray-500">🔧 Workers</button>
+      <button onclick="showLeaderboard('teachers')" id="lb_teachers" class="text-xs font-bold px-2 py-1 rounded bg-gray-100 text-gray-500">🎓 Teachers</button>
+      <button onclick="showLeaderboard('students')" id="lb_students" class="text-xs font-bold px-2 py-1 rounded bg-gray-100 text-gray-500">📚 Students</button>
+    </div>
     <h2 class="text-xs font-bold text-gray-500 mb-2">Leaderboard <span class="font-normal text-gray-400">(click to inspect)</span></h2>
     <table class="w-full">
       <thead><tr class="border-b-2 border-gray-200 text-xs text-gray-400">
@@ -152,6 +164,23 @@ const STAGE={parity:0,binary_pattern_next:0,same_different:1,odd_one_out:1,seque
   pattern_period:2,run_length_next:2,mirror_detection:3,repeat_count:3,arithmetic_next:4,
   geometric_next:4,alternating_next:4,logic_gate:5,logic_chain:5,modus_ponens:5};
 
+// Three populations data
+let threePopData = null;
+db.ref('mamba3/three_pop').on('value', s=>{
+  threePopData = s.val();
+});
+
+let currentLeaderboard = 'all';
+function showLeaderboard(type) {
+  currentLeaderboard = type;
+  ['all','workers','teachers','students'].forEach(t => {
+    const btn = document.getElementById('lb_'+t);
+    btn.className = t===type
+      ? 'text-xs font-bold px-2 py-1 rounded bg-blue-100 text-blue-700'
+      : 'text-xs font-bold px-2 py-1 rounded bg-gray-100 text-gray-500';
+  });
+}
+
 // Freshness
 setInterval(()=>{if(!lastTs)return;const a=Math.round(Date.now()/1000-lastTs);const e=document.getElementById('freshness');const d=document.getElementById('live-dot');
   if(a<90){e.textContent=a+'s ago';e.className='text-green-600';d.className='text-green-500';}
@@ -170,6 +199,17 @@ db.ref('mamba3/snapshot').on('value', s=>{
   document.getElementById('n-total').textContent=d.n_total||0;
   document.getElementById('best-fresh').textContent=((d.best_fresh||0)*100).toFixed(1)+'%';
   document.getElementById('gen-counter').textContent='Generation '+(d.generation||0);
+
+  // Three populations banner
+  if(threePopData){
+    const tpb=document.getElementById('three-pop-banner');
+    tpb.classList.remove('hidden');
+    const tp=threePopData;
+    const teachers=Object.keys(tp.teachers||{});
+    const remaining=tp.tasks_remaining||[];
+    document.getElementById('three-pop-status').textContent=
+      `🔧 ${tp.n_workers||0} workers · 🎓 ${tp.n_teachers||0}/${15} teachers (${teachers.join(', ')||'none'}) · 📚 ${tp.n_students||0} students · ${remaining.length} tasks remaining`;
+  }
 
   // Plateau
   const pb=document.getElementById('plateau-banner');
