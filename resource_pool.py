@@ -227,7 +227,7 @@ class ResourceAwarePool:
              "--loss-fn", str(cfg.get("loss_fn", "ce")),
              "--batch-size", str(cfg.get("batch_size", 256)),
              "--steps-per-cycle", str(cfg.get("steps_per_cycle", 200)),
-             "--max-cycles", "500",
+             "--max-cycles", "10000",
              "--target-acc", str(self.target_acc)],
             stdout=open(run_dir / "stdout.log", "w"),
             stderr=subprocess.STDOUT,
