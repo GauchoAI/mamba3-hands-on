@@ -133,7 +133,29 @@ def _write_lineage(path, task, lineage):
 
 # ── Main orchestrator ───────────────────────────────────────────────
 
+def _acquire_lock():
+    """Ensure only one instance runs. Kill any existing instance."""
+    lock_path = Path("three_pop.pid")
+    if lock_path.exists():
+        old_pid = int(lock_path.read_text().strip())
+        try:
+            os.kill(old_pid, 0)  # check if alive
+            print(f"Killing existing instance (PID {old_pid})...", flush=True)
+            os.kill(old_pid, signal.SIGTERM)
+            time.sleep(2)
+            try:
+                os.kill(old_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        except ProcessLookupError:
+            pass  # already dead
+    lock_path.write_text(str(os.getpid()))
+    return lock_path
+
+
 def run(args):
+    lock_path = _acquire_lock()
+
     base_dir = Path(args.dir)
     workers_dir = base_dir / "workers"
     teachers_dir = base_dir / "teachers"
@@ -383,6 +405,7 @@ def run(args):
         print(f"{'='*60}", flush=True)
         # TODO: distillation phase
 
+    lock_path.unlink(missing_ok=True)
     print("Done.", flush=True)
 
 
