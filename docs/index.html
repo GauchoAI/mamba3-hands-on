@@ -629,6 +629,21 @@ if (isReplay) {
   db.ref('mamba3/experiments').off();
   db.ref('mamba3/task_series').off();
 
+  // Clear UI to blank state
+  document.getElementById('gpu-pct').textContent = '0%';
+  document.getElementById('mem-pct').textContent = '0%';
+  document.getElementById('n-running').textContent = '0';
+  document.getElementById('n-total').textContent = '0';
+  document.getElementById('best-fresh').textContent = '0%';
+  document.getElementById('workers-table').innerHTML = '';
+  document.getElementById('teachers-table').innerHTML = '';
+  document.getElementById('events').innerHTML = '';
+  document.getElementById('curriculum').innerHTML = '';
+  document.getElementById('tp-workers').textContent = '0';
+  document.getElementById('tp-teachers').textContent = '0/15';
+  document.getElementById('tp-students').textContent = '0';
+  document.getElementById('last-update').textContent = 'rewinding...';
+
   // Load all history + events
   Promise.all([
     db.ref('mamba3/history').once('value'),
@@ -659,8 +674,17 @@ if (isReplay) {
     const totalDuration = endTime - startTime;
     let idx = 0;
 
+    const startDate = new Date(startTime*1000).toLocaleTimeString();
+    const endDate = new Date(endTime*1000).toLocaleTimeString();
     document.getElementById('replay-progress').textContent =
-      `${timeline.length} events over ${Math.round(totalDuration/60)}min`;
+      `${timeline.length} events · ${startDate} → ${endDate} · ${Math.round(totalDuration/60)}min`;
+
+    // Add big time display
+    const timeDisplay = document.createElement('div');
+    timeDisplay.className = 'fixed bottom-4 right-4 bg-black text-yellow-400 px-4 py-2 rounded-lg shadow-lg z-50 font-mono text-lg';
+    timeDisplay.id = 'replay-time';
+    timeDisplay.textContent = startDate;
+    document.body.appendChild(timeDisplay);
 
     function playNext() {
       if (idx >= timeline.length) {
@@ -670,8 +694,11 @@ if (isReplay) {
 
       const item = timeline[idx];
       const progress = ((idx / timeline.length) * 100).toFixed(0);
+      const eventTime = new Date(item.time*1000).toLocaleTimeString();
       document.getElementById('replay-progress').textContent =
-        `${progress}% — event ${idx+1}/${timeline.length}`;
+        `${progress}% — ${eventTime} — event ${idx+1}/${timeline.length}`;
+      const rtd = document.getElementById('replay-time');
+      if (rtd) rtd.textContent = eventTime;
 
       if (item.type === 'snapshot') {
         // Build a fake snapshot from history data
