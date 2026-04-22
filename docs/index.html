@@ -132,8 +132,8 @@
 <!-- Family tree + Events -->
 <div class="grid grid-cols-2 gap-3 mb-3">
   <div class="bg-white rounded-lg shadow-sm p-3">
-    <h2 class="text-xs font-bold text-gray-500 mb-2">Family Tree <span class="font-normal text-gray-400">(click nodes)</span></h2>
-    <svg id="familyTree" width="100%" height="300" class="bg-gray-50 rounded"></svg>
+    <h2 class="text-xs font-bold text-gray-500 mb-2">Task Mastery Pipeline</h2>
+    <div id="mastery-pipeline" class="space-y-1"></div>
   </div>
   <div class="bg-white rounded-lg shadow-sm p-3 max-h-[340px] overflow-y-auto">
     <h2 class="text-xs font-bold text-gray-500 mb-2">Live Events</h2>
@@ -318,7 +318,27 @@ function updateUI(d) {
   wkH.push(d.n_running||0);if(wkH.length>100)wkH.shift();
   updMini('gpuChart',gpuH,'#1a5276','rgba(26,82,118,0.1)',100);
   updMini('workersChart',wkH,'#27ae60','rgba(39,174,96,0.1)',null);
-  if(d.lineage)drawTree(d.leaderboard||[],d.lineage);
+  // Task mastery pipeline (replaces family tree)
+  const mp=document.getElementById('mastery-pipeline');
+  if(mp){
+    mp.innerHTML='';
+    const allEntries2=d.leaderboard||[];
+    TASKS.forEach(t=>{
+      const entry=allEntries2.find(e=>e.task===t);
+      const tAcc=d.tasks?.[t]?.acc||0;
+      const isTeacher=entry?.status==='teacher'||tAcc>=0.95;
+      const acc=entry?.acc||tAcc||0;
+      const pct=Math.round(acc*100);
+      const barColor=isTeacher?'bg-green-500':pct>50?'bg-blue-500':pct>0?'bg-blue-300':'bg-gray-200';
+      const label=isTeacher?'🎓 Teacher':pct>0?`🔧 ${pct}%`:'⏳ Waiting';
+      const textColor=isTeacher?'text-green-700':pct>0?'text-gray-700':'text-gray-400';
+      mp.innerHTML+=`<div class="flex items-center gap-2 ${textColor}">
+        <span class="w-28 text-[10px] truncate">${t.replace(/_/g,' ')}</span>
+        <div class="flex-1 bg-gray-100 rounded-full h-2"><div class="h-2 rounded-full ${barColor} transition-all" style="width:${pct}%"></div></div>
+        <span class="w-20 text-[10px] text-right">${label}</span>
+      </div>`;
+    });
+  }
 }
 
 // Live mode: Firebase → updateUI
@@ -749,8 +769,9 @@ if (isReplay) {
       // Calculate delay to next event
       if (idx < timeline.length) {
         const realDelay = (timeline[idx].time - item.time) * 1000; // ms
-        const replayDelay = Math.max(50, realDelay / replaySpeed); // min 50ms
-        setTimeout(playNext, Math.min(replayDelay, 2000)); // cap at 2s
+        const minDelay = Math.max(150, 500 / replaySpeed); // visible pacing
+        const replayDelay = Math.max(minDelay, realDelay / replaySpeed);
+        setTimeout(playNext, Math.min(replayDelay, 2000));
       } else {
         setTimeout(playNext, 100);
       }

@@ -225,9 +225,35 @@ def run(args):
                         "generation": round_num,
                     },
                 })
-                # Also push per-task timeseries
+                # Per-task timeseries
                 fb._put(f"mamba3/task_series/{task_name}/{cycle}", {
                     "acc": round(acc, 3), "diff": 0,
+                })
+                # Per-experiment cycle data (for Fresh Accuracy Over Time chart)
+                fb._put(f"mamba3/experiments/{task_name}", {
+                    "best_fresh": round(best, 4),
+                    "status": "training",
+                    "config": {"task": task_name, "d_model": 64, "n_kernel_layers": 3},
+                    "n_params": 103539,
+                    "cycle": cycle,
+                    "cycles": None,  # will be set below
+                })
+                fb._put(f"mamba3/experiments/{task_name}/cycles/{cycle}", {
+                    "fresh": round(acc, 4),
+                    "loss": round(loss, 4),
+                    "t": time.time(),
+                })
+                # Append-only history for replay
+                fb._put(f"mamba3/history/{int(time.time())}", {
+                    "best_fresh": round(max(ta.get("best", 0) for ta in task_accs.values()) if task_accs else 0, 4),
+                    "gpu_pct": round(gpu_pct, 1),
+                    "mem_pct": round(mem_pct, 1),
+                    "n_workers": len(tasks_remaining),
+                    "n_teachers": len(teacher_tasks),
+                    "n_students": 0,
+                    "tasks": {t: {"acc": round(ta["acc"], 3), "exp": "worker"} for t, ta in task_accs.items()},
+                    "teachers": list(teacher_tasks.keys()),
+                    "worker_best": {t: round(ta["best"], 3) for t, ta in task_accs.items()},
                 })
             except Exception:
                 pass
