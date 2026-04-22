@@ -38,12 +38,22 @@ def sync_once(reader):
     mem_pct = gpu_history[-1]["mem_pct"] if gpu_history else 0
     n_workers = gpu_history[-1]["n_workers"] if gpu_history else 0
 
+    # ── Build per-experiment type_accs from latest task data ──
+    all_task_rows = reader.get_all_task_latest()
+    exp_type_accs = {}  # exp_id → {task: acc}
+    for t in all_task_rows:
+        eid = t["exp_id"]
+        if eid not in exp_type_accs:
+            exp_type_accs[eid] = {}
+        exp_type_accs[eid][t["task_type"]] = round(t["accuracy"], 3)
+
     # ── Snapshot ──
     leaderboard = []
     for exp in experiments[:30]:
         cfg = json.loads(exp["config_json"]) if exp.get("config_json") else {}
+        eid = exp["exp_id"]
         leaderboard.append({
-            "exp_id": exp["exp_id"],
+            "exp_id": eid,
             "fresh": round(exp.get("peak_fresh", 0) or 0, 4),
             "cycle": exp.get("max_cycle", 0) or 0,
             "d_model": exp.get("d_model"),
@@ -61,6 +71,7 @@ def sync_once(reader):
             "parent_id": cfg.get("_parent_id"),
             "lr": cfg.get("lr"),
             "batch_size": cfg.get("batch_size"),
+            "type_accs": exp_type_accs.get(eid, {}),
         })
 
     # Best per task
@@ -91,6 +102,15 @@ def sync_once(reader):
             "unlocked": json.loads(teacher.get("unlocked_tasks", "[]")),
             "mastery_log": json.loads(teacher.get("mastery_log", "[]")),
         }
+
+    # Build lineage from experiment configs
+    lineage = {}
+    for exp in experiments[:30]:
+        cfg = json.loads(exp["config_json"]) if exp.get("config_json") else {}
+        pid = cfg.get("_parent_id")
+        if pid:
+            lineage[exp["exp_id"]] = {"parent": pid}
+    snapshot["lineage"] = lineage
 
     fb._put("mamba3/snapshot", snapshot)
 
