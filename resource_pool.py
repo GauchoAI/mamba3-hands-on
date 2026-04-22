@@ -28,8 +28,9 @@ from pathlib import Path
 from collections import defaultdict
 
 from coordinator import (
-    EvolutionState, score_experiments, select_parent, mutate_config,
-    SEED_CONFIGS, get_system_resources,
+    EvolutionState, score_experiments, select_parent,
+    mutate_config, smart_mutate_config, MutationHistory,
+    SEED_CONFIGS, BASE_CONFIG, get_system_resources,
 )
 
 
@@ -83,6 +84,7 @@ class ResourceAwarePool:
 
         # GA state
         self.evo_state = EvolutionState()
+        self.mutation_history = MutationHistory()
 
         # Worker tracking: subprocess.Popen per worker
         self.processes = {}       # exp_id → Popen
@@ -205,10 +207,11 @@ class ResourceAwarePool:
         proc = subprocess.Popen(
             [sys.executable, "-u", "specialist_trainer.py",
              "--task", task,
+             "--run-dir", str(run_dir),
              "--d-model", str(cfg.get("d_model", 64)),
              "--d-state", str(cfg.get("d_state", 16)),
              "--headdim", str(cfg.get("headdim", 16)),
-             "--layers", str(cfg.get("n_kernel_layers", 1)),
+             "--layers", str(cfg.get("n_kernel_layers", 3)),
              "--lr", str(cfg.get("lr", 1e-3)),
              "--weight-decay", str(cfg.get("weight_decay", 0.0)),
              "--optimizer", str(cfg.get("optimizer", "adamw")),
@@ -250,55 +253,29 @@ class ResourceAwarePool:
                 self._handle_finished(exp_id)
                 continue
 
-            # Still running — read latest output to check progress
-            self._read_worker_progress(exp_id)
+            # Still running — read metrics.json
+            self._read_worker_metrics(exp_id)
 
-    def _read_worker_progress(self, exp_id):
-        """Read stdout.log tail to get latest accuracy for a running worker."""
-        log_path = self.runs_dir / exp_id / "stdout.log"
-        if not log_path.exists():
+    def _read_worker_metrics(self, exp_id):
+        """Read metrics.json (written atomically by specialist_trainer)."""
+        metrics_path = self.runs_dir / exp_id / "metrics.json"
+        if not metrics_path.exists():
             return
 
         try:
-            # Read last 2KB of log
-            with open(log_path, 'rb') as f:
-                f.seek(0, 2)
-                size = f.tell()
-                f.seek(max(0, size - 2048))
-                tail = f.read().decode('utf-8', errors='ignore')
+            with open(metrics_path) as f:
+                m = json.load(f)
 
-            # Parse last cycle line: "[task] cycle N  loss=X  acc=Y%  best=Z%"
             task = self.worker_task[exp_id]
-            best_acc = 0.0
-            last_acc = 0.0
-            last_cycle = 0
-            last_loss = 0.0
-
-            for line in tail.split('\n'):
-                if f'[{task}] cycle' in line:
-                    parts = line.strip().split()
-                    for p in parts:
-                        if p.startswith('acc='):
-                            last_acc = float(p.replace('acc=', '').replace('%', '')) / 100
-                        elif p.startswith('best='):
-                            best_acc = float(p.replace('best=', '').replace('%', '')) / 100
-                        elif p.startswith('loss='):
-                            last_loss = float(p.replace('loss=', ''))
-                    # Extract cycle number
-                    try:
-                        idx = parts.index('cycle')
-                        last_cycle = int(parts[idx + 1])
-                    except (ValueError, IndexError):
-                        pass
-
-                if '★' in line and 'MASTERED' in line:
-                    best_acc = max(best_acc, self.target_acc)
+            last_cycle = m.get("cycle", 0)
+            last_acc = m.get("acc", 0)
+            best_acc = m.get("best_acc", 0)
+            last_loss = m.get("loss", 0)
+            n_params = m.get("n_params", 0)
 
             if last_cycle > 0:
-                # Record for GA scoring
                 self.evo_state.record(exp_id, last_cycle, best_acc)
 
-                # Push to Firebase via callback
                 if self.on_cycle:
                     s = self.monitor.snapshot()
                     n_alive = sum(1 for p in self.processes.values() if p.poll() is None)
@@ -309,7 +286,7 @@ class ResourceAwarePool:
                             best_acc=best_acc, loss=last_loss,
                             exp_id=exp_id, config=cfg,
                             parent_id=self.worker_parent.get(exp_id),
-                            n_params=0,
+                            n_params=n_params,
                             cpu_pct=s["cpu_pct"], ram_pct=s["ram_pct"],
                             gpu_pct=s["gpu_pct"], vram_pct=s["vram_pct"],
                             n_workers=n_alive,
@@ -323,7 +300,7 @@ class ResourceAwarePool:
                     except Exception as e:
                         self._log(f"  on_cycle error: {e}")
 
-        except Exception:
+        except (json.JSONDecodeError, IOError):
             pass
 
     def _handle_finished(self, exp_id):
@@ -373,6 +350,18 @@ class ResourceAwarePool:
                      f" | {len(self.teacher_tasks)}/{len(self.tasks)} teachers"
                      f" | {len(self.tasks_remaining)} remaining\n")
 
+            # Cross-task config transfer: winning config seeds remaining tasks
+            winning_config = self.worker_config.get(exp_id, {})
+            updated = 0
+            for i, (t, cfg, pid) in enumerate(self.pending_configs):
+                if t in self.tasks_remaining:
+                    new_cfg = winning_config.copy()
+                    new_cfg["task"] = t
+                    self.pending_configs[i] = (t, new_cfg, exp_id)
+                    updated += 1
+            if updated:
+                self._log(f"  📋 Cross-task transfer: {task}'s config seeded {updated} pending tasks")
+
             # Start student on first graduation
             if len(self.teacher_tasks) == 1 and not self._student_alive():
                 self._start_student()
@@ -411,7 +400,19 @@ class ResourceAwarePool:
 
         scored = score_experiments(results, self.evo_state)
 
-        # Per task: select parent, mutate, queue child
+        # Record mutation outcomes for history-informed future mutations
+        for r in scored:
+            parent_id = self.worker_parent.get(r["exp_id"])
+            if parent_id:
+                parent_h = self.evo_state.history.get(parent_id, [])
+                parent_best = parent_h[-1][1] if parent_h else 0.0
+                if parent_best > 0 and r["best_fresh"] > 0:
+                    parent_cfg = self.worker_config.get(parent_id, {})
+                    child_cfg_r = self.worker_config.get(r["exp_id"], {})
+                    self.mutation_history.record(parent_cfg, child_cfg_r,
+                                                parent_best, r["best_fresh"])
+
+        # Per task: select parent, smart mutate, queue child
         for task in list(self.tasks_remaining):
             task_workers = [r for r in scored if r["task"] == task]
             if not task_workers:
@@ -426,7 +427,11 @@ class ResourceAwarePool:
 
             parent, reason = select_parent(task_workers, self.evo_state, generation)
             if parent:
-                child_cfg = mutate_config(parent["config"], plateau_severity=plateau_severity)
+                child_cfg = smart_mutate_config(
+                    parent["config"],
+                    mutation_history=self.mutation_history,
+                    plateau_severity=plateau_severity,
+                )
                 child_cfg["task"] = task
                 self.pending_configs.append((task, child_cfg, parent["exp_id"]))
 

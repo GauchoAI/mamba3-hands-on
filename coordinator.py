@@ -33,6 +33,7 @@ import signal
 import subprocess
 from pathlib import Path
 from datetime import datetime
+from collections import defaultdict
 
 
 # ── Evolution state ─────────────────────────────────────────────────
@@ -299,42 +300,169 @@ def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0):
     return child
 
 
-# ── Default seed configs ────────────────────────────────────────────
+# ── Default seed config: proven to graduate 5 tasks in 3 rounds ────
 
-SEED_CONFIGS = [
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200},
-    {"d_model": 32,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 512, "lr": 1e-3, "weight_decay": 0.0, "steps_per_cycle": 200},
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 2,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200},
-    {"d_model": 128, "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 128, "lr": 5e-4, "weight_decay": 0.1, "steps_per_cycle": 200},
-    {"d_model": 64,  "d_state": 8,  "headdim": 8,  "n_kernel_layers": 1,
-     "batch_size": 512, "lr": 1e-3, "weight_decay": 0.0, "steps_per_cycle": 200},
-    {"d_model": 48,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 2e-3, "weight_decay": 0.05, "steps_per_cycle": 200},
-    # tinygrad experiment
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200,
-     "backend": "tinygrad"},
-    # Label smoothing — directly targets overconfidence/DAME bug
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200,
-     "loss_fn": "label_smooth"},
-    # Lion optimizer — faster convergence on small models
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 3e-4, "weight_decay": 0.1, "steps_per_cycle": 200,
-     "optimizer": "lion"},
-    # Warm restarts + focal loss — escape minima + focus on hard examples
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200,
-     "loss_fn": "focal", "warm_restarts": True},
-    # Noise injection + PerpGrad — shake + prevent NLM
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.0, "steps_per_cycle": 200,
-     "use_perp": True, "noise_scale": 0.001},
-]
+BASE_CONFIG = {
+    "d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
+    "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1,
+    "steps_per_cycle": 200, "loss_fn": "ce", "optimizer": "adamw",
+    "noise_scale": 0.0, "use_perp": False,
+}
+
+SEED_CONFIGS = [BASE_CONFIG]  # All tasks start from the proven config
+
+
+# ── Mutation history: learn what works ─────────────────────────────
+
+class MutationHistory:
+    """Tracks which config changes helped vs hurt, to inform future mutations."""
+
+    def __init__(self):
+        self.outcomes = defaultdict(list)  # param_name → [{parent_val, child_val, improvement}]
+
+    def record(self, parent_config, child_config, parent_acc, child_acc):
+        improvement = child_acc - parent_acc
+        for key in ["d_model", "n_kernel_layers", "lr", "weight_decay",
+                    "batch_size", "loss_fn", "optimizer"]:
+            pv = parent_config.get(key)
+            cv = child_config.get(key)
+            if pv != cv:
+                self.outcomes[key].append({
+                    "parent_val": pv, "child_val": cv,
+                    "improvement": improvement,
+                })
+
+    def get_bias(self, param_name):
+        """Return (direction, confidence) based on historical outcomes.
+
+        direction: +1 increase helped, -1 decrease helped, 0 unclear
+        confidence: 0.0-1.0 based on sample count
+        """
+        history = self.outcomes.get(param_name, [])
+        if len(history) < 3:
+            return 0, 0.0
+
+        # For numeric params: check if increases or decreases helped more
+        numeric = [h for h in history
+                   if isinstance(h["parent_val"], (int, float))
+                   and isinstance(h["child_val"], (int, float))]
+        if not numeric:
+            return 0, min(len(history) / 10, 1.0)
+
+        increases = [h for h in numeric if h["child_val"] > h["parent_val"]]
+        decreases = [h for h in numeric if h["child_val"] < h["parent_val"]]
+
+        inc_avg = sum(h["improvement"] for h in increases) / max(len(increases), 1)
+        dec_avg = sum(h["improvement"] for h in decreases) / max(len(decreases), 1)
+
+        confidence = min(len(history) / 10, 1.0)
+        if inc_avg > dec_avg + 0.01:
+            return +1, confidence
+        elif dec_avg > inc_avg + 0.01:
+            return -1, confidence
+        return 0, confidence
+
+
+# ── Smart mutation: informed, conservative, cost-aware ─────────────
+
+def _mutate_one_param(child, param, direction, confidence, plateau_severity):
+    """Mutate one parameter, biased by history."""
+    noise = random.gauss(0, 0.3)
+
+    if param == "lr":
+        # Log-scale: bias by direction, always explore a little
+        bias = direction * 0.3 * confidence
+        factor = 2 ** (bias + noise * 0.5)
+        child["lr"] = max(1e-5, min(1e-2, child["lr"] * factor))
+
+    elif param == "weight_decay":
+        current = child.get("weight_decay", 0.1)
+        step = 0.05 if direction == 0 else (0.05 * direction)
+        child["weight_decay"] = max(0.0, min(0.5, current + step + noise * 0.02))
+
+    elif param == "noise_scale":
+        options = [0.0, 0.0005, 0.001, 0.002, 0.005]
+        current = child.get("noise_scale", 0.0)
+        idx = min(range(len(options)), key=lambda i: abs(options[i] - current))
+        if direction > 0 and idx < len(options) - 1:
+            idx += 1
+        elif direction < 0 and idx > 0:
+            idx -= 1
+        else:
+            idx = max(0, min(len(options) - 1, idx + random.choice([-1, 0, 1])))
+        child["noise_scale"] = options[idx]
+
+    elif param == "n_kernel_layers":
+        current = child.get("n_kernel_layers", 3)
+        if confidence > 0.5 and direction != 0:
+            child["n_kernel_layers"] = max(1, current + direction)
+        else:
+            child["n_kernel_layers"] = max(1, current + random.choice([-1, 0, 1]))
+
+    elif param == "d_model":
+        current = child.get("d_model", 64)
+        if confidence > 0.5 and direction != 0:
+            child["d_model"] = max(32, min(256, current + direction * 16))
+        else:
+            child["d_model"] = max(32, min(256, current + random.choice([-16, 0, 16])))
+        child["headdim"] = min(child.get("headdim", 16), child["d_model"])
+
+    elif param == "d_state":
+        child["d_state"] = random.choice([8, 16, 32])
+
+    elif param == "batch_size":
+        current = child.get("batch_size", 256)
+        child["batch_size"] = random.choice([
+            max(64, current // 2), current, min(1024, current * 2)])
+
+    elif param == "loss_fn":
+        child["loss_fn"] = random.choice(["ce", "stable_ce", "focal", "label_smooth"])
+
+    elif param == "optimizer":
+        child["optimizer"] = random.choice(["adamw", "lion"])
+
+
+def smart_mutate_config(parent_config, mutation_history=None, plateau_severity=0.0):
+    """Create a child config with informed, conservative mutations.
+
+    Key principles:
+    - Mutate 1 param normally, 2-3 when stuck
+    - Cheap params (lr, wd) first, architecture only when stuck
+    - Biased by historical outcomes when confident
+    """
+    child = parent_config.copy()
+    child.pop("task", None)  # remove task key if present
+
+    # How many params to mutate
+    if plateau_severity < 1.0:
+        n_mutations = 1
+    elif plateau_severity < 2.0:
+        n_mutations = 2
+    else:
+        n_mutations = 3
+
+    # Categorize by cost of change
+    cheap = ["lr", "weight_decay", "noise_scale"]
+    medium = ["batch_size", "loss_fn", "optimizer"]
+    expensive = ["d_model", "n_kernel_layers", "d_state"]
+
+    # Unlock categories based on plateau severity
+    if plateau_severity < 1.0:
+        candidates = cheap
+    elif plateau_severity < 2.0:
+        candidates = cheap + medium
+    else:
+        candidates = cheap + medium + expensive
+
+    params = random.sample(candidates, min(n_mutations, len(candidates)))
+
+    for param in params:
+        direction, confidence = (0, 0.0)
+        if mutation_history:
+            direction, confidence = mutation_history.get_bias(param)
+        _mutate_one_param(child, param, direction, confidence, plateau_severity)
+
+    return child
 
 
 # ── Worker management ───────────────────────────────────────────────

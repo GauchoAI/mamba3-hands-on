@@ -228,8 +228,24 @@ def precompute_teacher_cache(model, gen_fn, tok, device, n_examples=10000):
     return teacher_data
 
 
-def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_cycle=None):
-    """Train one specialist on one task. Returns when mastered or max cycles."""
+def write_metrics(run_dir, data):
+    """Atomically write metrics so pool never reads partial data."""
+    tmp = Path(run_dir) / "metrics.tmp"
+    final = Path(run_dir) / "metrics.json"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    tmp.rename(final)
+
+
+def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
+                     on_cycle=None, run_dir=None):
+    """Train one specialist on one task. Returns when mastered or max cycles.
+
+    If run_dir is provided:
+      - Loads checkpoint.pt (resume from parent or previous run)
+      - Saves checkpoint every 10 cycles
+      - Writes metrics.json every cycle (atomic)
+    """
     load_generators()
     gen_fn = GENERATORS.get(task)
     if not gen_fn:
@@ -240,11 +256,31 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
     model, opt, perp, scheduler, loss_fn, n_params = create_model_and_optimizer(config, device)
     noise = config.get("noise_scale", 0.0)
 
+    # Resume from checkpoint if available
+    cycle_start = 0
+    best_acc = 0.0
+    if run_dir:
+        run_dir = Path(run_dir)
+        ckpt_path = run_dir / "checkpoint.pt"
+        if ckpt_path.exists():
+            try:
+                ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+                model.load_state_dict(ckpt["model"])
+                cycle_start = ckpt.get("cycle", 0)
+                best_acc = ckpt.get("best_acc", ckpt.get("accuracy", 0.0))
+                if "optimizer" in ckpt:
+                    try:
+                        opt.load_state_dict(ckpt["optimizer"])
+                    except Exception:
+                        pass
+                print(f"  Resumed from cycle {cycle_start}, best={best_acc:.0%}", flush=True)
+            except Exception as e:
+                print(f"  Checkpoint load failed: {e} — starting fresh", flush=True)
+
     print(f"\n[{task}] d={config.get('d_model')}, L={config.get('n_kernel_layers')}, "
           f"{n_params:,} params", flush=True)
 
-    best_acc = 0.0
-    for cycle in range(1, max_cycles + 1):
+    for cycle in range(cycle_start + 1, cycle_start + max_cycles + 1):
         acc, cycle_loss, elapsed = run_single_cycle(
             model, opt, gen_fn, tok, config, device, loss_fn,
             perp=perp, scheduler=scheduler, noise=noise,
@@ -257,11 +293,40 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
         if on_cycle:
             on_cycle(task, cycle, acc, best_acc, cycle_loss)
 
+        # Write metrics.json (atomic) for pool to read
+        if run_dir:
+            write_metrics(run_dir, {
+                "cycle": cycle, "loss": round(cycle_loss, 4),
+                "acc": round(acc, 4), "best_acc": round(best_acc, 4),
+                "task": task, "config": config, "n_params": n_params,
+            })
+
+        # Checkpoint every 10 cycles
+        if run_dir and cycle % 10 == 0:
+            torch.save({
+                "model": model.state_dict(),
+                "optimizer": opt.state_dict(),
+                "cycle": cycle,
+                "best_acc": best_acc,
+                "task": task,
+                "config": config,
+            }, run_dir / "checkpoint.pt")
+
         if acc >= target_acc:
             print(f"  ★ [{task}] MASTERED at {acc:.0%} in {cycle} cycles!", flush=True)
+            # Save checkpoint on mastery
+            if run_dir:
+                torch.save({
+                    "model": model.state_dict(),
+                    "optimizer": opt.state_dict(),
+                    "cycle": cycle,
+                    "best_acc": best_acc,
+                    "task": task,
+                    "config": config,
+                }, run_dir / "checkpoint.pt")
             break
 
-    # Save specialist
+    # Save specialist to shared checkpoint dir
     ckpt_dir = Path("checkpoints/specialists")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / f"{task}.pt"
@@ -320,6 +385,7 @@ def train_all_specialists(config, device, tasks=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", type=str, default=None, help="Single task, or None for all")
+    parser.add_argument("--run-dir", type=str, default=None, help="Run dir for checkpointing + metrics")
     parser.add_argument("--d-model", type=int, default=64)
     parser.add_argument("--d-state", type=int, default=16)
     parser.add_argument("--headdim", type=int, default=16)
@@ -348,6 +414,6 @@ if __name__ == "__main__":
 
     if args.task:
         train_specialist(args.task, config, device, max_cycles=args.max_cycles,
-                        target_acc=args.target_acc)
+                        target_acc=args.target_acc, run_dir=args.run_dir)
     else:
         train_all_specialists(config, device)
