@@ -6,6 +6,7 @@
 <title>Mamba-3 Curriculum Evolution</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <style>
@@ -103,6 +104,12 @@
     <h2 class="text-xs font-bold text-gray-500 mb-2">Live Events</h2>
     <div id="events" class="space-y-0.5"></div>
   </div>
+</div>
+
+<!-- Per-task charts -->
+<div class="bg-white rounded-lg shadow-sm p-3 mb-3">
+  <h2 class="text-xs font-bold text-gray-500 mb-2">Per-Task Accuracy Over Time (dual axis: accuracy + difficulty)</h2>
+  <div id="per-task-charts" class="grid grid-cols-3 gap-3"></div>
 </div>
 
 <!-- Curriculum + Teacher -->
@@ -306,143 +313,136 @@ db.ref('mamba3/experiments').on('value', s=>{
       scales:{x:{type:'linear',title:{display:true,text:'Cycle',font:{size:9}},ticks:{font:{size:8}},grid:{color:'#f5f5f5'}},
               y:{min:0,max:100,title:{display:true,text:'Fresh %',font:{size:9}},ticks:{font:{size:8}},grid:{color:'#f5f5f5'}}}}});
 
-  // Per-task timeseries: one chart showing all tasks from the BEST experiment
-  const best=exps[0];
-  if(best&&best.cycles){
-    const cycles=Object.entries(best.cycles).sort((a,b)=>parseInt(a[0])-parseInt(b[0]));
-    const allTasks=new Set();
-    cycles.forEach(([,v])=>Object.keys(v.tasks||{}).forEach(t=>allTasks.add(t)));
-    const taskDS=[...allTasks].sort((a,b)=>(STAGE[a]||99)-(STAGE[b]||99)).map(task=>({
-      label:task.replace(/_/g,' '),
-      data:cycles.map(([c,v])=>({x:parseInt(c),y:((v.tasks||{})[task]||0)*100})),
-      borderColor:TC[task]||'#888',backgroundColor:'transparent',
-      pointRadius:0,tension:0.3,borderWidth:1.5,
-    }));
-    const cv2=document.getElementById('taskHistChart');
-    if(window._taskHistChart)window._taskHistChart.destroy();
-    window._taskHistChart=new Chart(cv2,{type:'line',data:{datasets:taskDS},
-      options:{responsive:true,maintainAspectRatio:false,animation:false,
-        plugins:{legend:{position:'bottom',labels:{font:{size:7},boxWidth:8,padding:3}}},
-        scales:{x:{type:'linear',title:{display:true,text:'Cycle',font:{size:9}},ticks:{font:{size:8}},grid:{color:'#f5f5f5'}},
-                y:{min:0,max:100,title:{display:true,text:'%',font:{size:9}},ticks:{font:{size:8}},grid:{color:'#f5f5f5'}}}}});
-  }
 });
 
-// Family tree — proper hierarchical top-down layout
+// Task Accuracy Over Time — read from task_series (pushed by firebase_sync)
+db.ref('mamba3/task_series').on('value', s=>{
+  const all=s.val(); if(!all) return;
+  const datasets=[];
+  Object.entries(all).sort((a,b)=>(STAGE[a[0]]||99)-(STAGE[b[0]]||99)).forEach(([task,data])=>{
+    const entries=Object.entries(data).sort((a,b)=>parseInt(a[0])-parseInt(b[0]));
+    datasets.push({
+      label:task.replace(/_/g,' '),
+      data:entries.map(([c,v])=>({x:parseInt(c),y:(v.acc||0)*100})),
+      borderColor:TC[task]||'#888',backgroundColor:'transparent',
+      pointRadius:0,tension:0.3,borderWidth:1.5,
+    });
+  });
+  const cv=document.getElementById('taskHistChart');
+  if(window._taskHistChart)window._taskHistChart.destroy();
+  window._taskHistChart=new Chart(cv,{type:'line',data:{datasets},
+    options:{responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{position:'bottom',labels:{font:{size:7},boxWidth:8,padding:3}}},
+      scales:{x:{type:'linear',title:{display:true,text:'Cycle',font:{size:9}},ticks:{font:{size:8}},grid:{color:'#f5f5f5'}},
+              y:{min:0,max:100,title:{display:true,text:'%',font:{size:9}},ticks:{font:{size:8}},grid:{color:'#f5f5f5'}}}}});
+
+  // Per-task individual charts with dual axes (accuracy + difficulty)
+  const container=document.getElementById('per-task-charts');
+  container.innerHTML='';
+  Object.entries(all).sort((a,b)=>(STAGE[a[0]]||99)-(STAGE[b[0]]||99)).forEach(([task,data])=>{
+    const entries=Object.entries(data).sort((a,b)=>parseInt(a[0])-parseInt(b[0]));
+    const div=document.createElement('div');
+    const st=STAGE[task]||'?';
+    div.innerHTML=`<h3 class="text-[10px] font-bold text-gray-500 mb-1">S${st}: ${task.replace(/_/g,' ')}</h3><div style="height:140px"><canvas></canvas></div>`;
+    container.appendChild(div);
+    const canvas=div.querySelector('canvas');
+    const accData=entries.map(([c,v])=>({x:parseInt(c),y:(v.acc||0)*100}));
+    const diffData=entries.map(([c,v])=>({x:parseInt(c),y:(v.diff||0)*100}));
+    new Chart(canvas,{type:'line',data:{datasets:[
+      {label:'Accuracy',data:accData,borderColor:TC[task]||'#888',backgroundColor:'transparent',borderWidth:2,pointRadius:0,tension:0.3,yAxisID:'y'},
+      {label:'Difficulty',data:diffData,borderColor:(TC[task]||'#888')+'66',backgroundColor:'transparent',borderWidth:1,borderDash:[4,4],pointRadius:0,tension:0.3,yAxisID:'y2'},
+    ]},options:{responsive:true,maintainAspectRatio:false,animation:false,
+      plugins:{legend:{display:false}},
+      scales:{x:{type:'linear',ticks:{font:{size:7}},grid:{color:'#f8f8f8'}},
+              y:{position:'left',min:0,max:100,ticks:{font:{size:7},color:'#888'},grid:{color:'#f5f5f5'}},
+              y2:{position:'right',min:0,max:100,ticks:{font:{size:7},color:'#ccc'},grid:{drawOnChartArea:false}}}}});
+  });
+});
+
+// Family tree — D3.js proper hierarchy
 function drawTree(lb, lineage) {
-  const svg = document.getElementById('familyTree');
-  const W = svg.clientWidth || 500;
+  const container = document.getElementById('familyTree');
+  const W = container.clientWidth || 500;
   const H = 300;
-  svg.innerHTML = '';
-  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  container.innerHTML = '';
 
   const exps = lb.slice(0, 20);
   if (!exps.length) return;
 
-  // Build parent→children map
-  const children = {};
+  const expMap = {};
+  exps.forEach(e => { expMap[e.exp_id] = e; });
+
+  // Build hierarchy data for D3
+  const childrenMap = {};
   const hasParent = new Set();
   exps.forEach(e => {
     const pid = e.parent_id || (lineage && lineage[e.exp_id] && lineage[e.exp_id].parent);
-    if (pid) {
-      if (!children[pid]) children[pid] = [];
-      children[pid].push(e.exp_id);
+    if (pid && expMap[pid]) {
+      if (!childrenMap[pid]) childrenMap[pid] = [];
+      childrenMap[pid].push(e.exp_id);
       hasParent.add(e.exp_id);
     }
   });
 
-  // Find roots (no parent or parent not in our set)
-  const expSet = new Set(exps.map(e => e.exp_id));
-  const roots = exps.filter(e => !hasParent.has(e.exp_id) || !expSet.has(e.parent_id || (lineage?.[e.exp_id]?.parent)));
+  // Find roots
+  const roots = exps.filter(e => !hasParent.has(e.exp_id));
+  if (!roots.length) roots.push(exps[0]);
 
-  // BFS to assign layers
-  const layers = {};
-  const queue = roots.map(r => ({ id: r.exp_id, depth: 0 }));
-  const visited = new Set();
-  while (queue.length) {
-    const { id, depth } = queue.shift();
-    if (visited.has(id)) continue;
-    visited.add(id);
-    if (!layers[depth]) layers[depth] = [];
-    layers[depth].push(id);
-    (children[id] || []).forEach(cid => {
-      if (expSet.has(cid)) queue.push({ id: cid, depth: depth + 1 });
-    });
+  // Build D3 hierarchy from first root (largest tree)
+  function buildNode(id) {
+    const e = expMap[id] || { exp_id: id, fresh: 0, status: 'unknown' };
+    return {
+      id: id,
+      exp: e,
+      children: (childrenMap[id] || []).map(cid => buildNode(cid))
+    };
   }
-  // Add orphans
-  exps.forEach(e => {
-    if (!visited.has(e.exp_id)) {
-      if (!layers[0]) layers[0] = [];
-      layers[0].push(e.exp_id);
-    }
-  });
 
-  const expMap = {};
-  exps.forEach(e => { expMap[e.exp_id] = e; });
+  // Use a virtual root if multiple trees
+  const treeData = roots.length === 1
+    ? buildNode(roots[0].exp_id)
+    : { id: 'root', exp: { exp_id: 'root', fresh: 0, status: 'virtual' }, children: roots.map(r => buildNode(r.exp_id)) };
 
-  // Position nodes
-  const pos = {};
-  const maxDepth = Math.max(...Object.keys(layers).map(Number));
-  const yStep = maxDepth > 0 ? (H - 50) / maxDepth : 0;
-  Object.entries(layers).forEach(([depth, ids]) => {
-    const d = parseInt(depth);
-    const xStep = ids.length > 1 ? (W - 60) / (ids.length - 1) : 0;
-    ids.forEach((id, i) => {
-      pos[id] = {
-        x: ids.length > 1 ? 30 + i * xStep : W / 2,
-        y: 20 + d * yStep,
-      };
-    });
-  });
+  const root = d3.hierarchy(treeData);
+  const treeLayout = d3.tree().size([W - 40, H - 60]);
+  treeLayout(root);
 
-  // Draw edges (curved)
-  exps.forEach(e => {
-    const pid = e.parent_id || (lineage && lineage[e.exp_id] && lineage[e.exp_id].parent);
-    if (pid && pos[pid] && pos[e.exp_id]) {
-      const p = pos[pid], c = pos[e.exp_id];
-      const mid = (p.y + c.y) / 2;
-      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      path.setAttribute('d', `M${p.x},${p.y} C${p.x},${mid} ${c.x},${mid} ${c.x},${c.y}`);
-      path.setAttribute('stroke', '#d0d0d0');
-      path.setAttribute('stroke-width', '1');
-      path.setAttribute('fill', 'none');
-      svg.appendChild(path);
-    }
-  });
+  const svg = d3.select(container).append('svg')
+    .attr('width', W).attr('height', H)
+    .append('g').attr('transform', 'translate(20, 30)');
 
-  // Draw nodes
-  exps.forEach((e, i) => {
-    const p = pos[e.exp_id];
-    if (!p) return;
-    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-    g.style.cursor = 'pointer';
-    g.setAttribute('onclick', `showDetail('${e.exp_id}')`);
+  // Links (curved)
+  svg.selectAll('.link').data(root.links()).enter().append('path')
+    .attr('class', 'link')
+    .attr('d', d3.linkVertical().x(d => d.x).y(d => d.y))
+    .attr('fill', 'none').attr('stroke', '#ddd').attr('stroke-width', 1);
 
-    const r = 5 + (e.fresh || 0) * 20;
-    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    circle.setAttribute('cx', p.x);
-    circle.setAttribute('cy', p.y);
-    circle.setAttribute('r', r);
-    const col = e.status === 'running'
-      ? (i === 0 ? '#e67e22' : '#27ae60')
-      : '#ccc';
-    circle.setAttribute('fill', col);
-    circle.setAttribute('opacity', '0.85');
-    circle.setAttribute('stroke', i === 0 ? '#c0392b' : 'none');
-    circle.setAttribute('stroke-width', i === 0 ? '2' : '0');
+  // Nodes
+  const node = svg.selectAll('.node').data(root.descendants()).enter().append('g')
+    .attr('transform', d => `translate(${d.x},${d.y})`)
+    .style('cursor', 'pointer')
+    .on('click', (ev, d) => { if (d.data.id !== 'root') showDetail(d.data.id); });
 
-    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    label.setAttribute('x', p.x);
-    label.setAttribute('y', p.y + r + 10);
-    label.setAttribute('text-anchor', 'middle');
-    label.setAttribute('fill', '#888');
-    label.setAttribute('font-size', '8');
-    label.textContent = e.exp_id.replace('exp_', '') + ' ' + ((e.fresh||0)*100).toFixed(0) + '%';
+  node.append('circle')
+    .attr('r', d => {
+      if (d.data.id === 'root') return 3;
+      return 5 + (d.data.exp.fresh || 0) * 18;
+    })
+    .attr('fill', d => {
+      if (d.data.id === 'root') return '#ccc';
+      const e = d.data.exp;
+      if (d.depth === 0 || d === root.descendants()[0]) return '#e67e22';
+      return e.status === 'running' ? '#27ae60' : '#ccc';
+    })
+    .attr('opacity', 0.85)
+    .attr('stroke', d => d === root.descendants().find(n => n.data.id !== 'root') ? '#c0392b' : 'none')
+    .attr('stroke-width', 2);
 
-    g.appendChild(circle);
-    g.appendChild(label);
-    svg.appendChild(g);
-  });
+  node.append('text')
+    .attr('dy', d => (5 + (d.data.exp?.fresh || 0) * 18) + 12)
+    .attr('text-anchor', 'middle')
+    .attr('fill', '#888').attr('font-size', '7')
+    .text(d => d.data.id === 'root' ? '' : d.data.id.replace('exp_','') + ' ' + ((d.data.exp?.fresh||0)*100).toFixed(0) + '%');
 }
 </script>
 </body>
