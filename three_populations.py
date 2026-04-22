@@ -211,10 +211,12 @@ def run(args):
     task_lineage = {}     # task → list of {round, config, acc, mutation}
 
     # Initialize all tasks with BASE_CONFIG
+    task_best_config = {}  # task → config that achieved the best accuracy
     for t in ALL_TASKS:
         task_config[t] = BASE_CONFIG.copy()
         task_best[t] = 0.0
         task_best_round[t] = 0
+        task_best_config[t] = BASE_CONFIG.copy()
         task_lineage[t] = []
 
     # Lineage log directory
@@ -298,20 +300,24 @@ def run(args):
             rounds_stuck = round_num - task_best_round.get(task, 0)
             cfg = task_config[task]
             mutation_desc = None
+            best = task_best.get(task, 0)
 
-            if rounds_stuck >= PLATEAU_THRESHOLD and task_best.get(task, 0) > 0:
+            # Don't mutate if close to graduating (>= 85%) — give it more time
+            if rounds_stuck >= PLATEAU_THRESHOLD and best > 0 and best < 0.85:
                 severity = min(3.0, rounds_stuck / 3)
-                old_cfg = cfg.copy()
-                cfg = mutate_config(old_cfg, plateau_severity=severity)
+
+                # Mutate from the BEST config, not the current (possibly bad) one
+                base = task_best_config[task].copy()
+                cfg = mutate_config(base, plateau_severity=severity)
                 task_config[task] = cfg
 
                 # Describe what changed
                 changes = {k: cfg[k] for k in cfg
-                          if cfg.get(k) != old_cfg.get(k) and k != "steps_per_cycle"}
+                          if cfg.get(k) != base.get(k) and k != "steps_per_cycle"}
                 mutation_desc = f"severity={severity:.1f} changes={changes}"
 
                 # If architecture changed, delete checkpoint (can't resume)
-                arch_changed = any(cfg.get(k) != old_cfg.get(k)
+                arch_changed = any(cfg.get(k) != base.get(k)
                                   for k in ["d_model", "d_state", "headdim", "n_kernel_layers"])
                 if arch_changed:
                     ckpt = Path("checkpoints/specialists") / f"{task}.pt"
@@ -320,6 +326,12 @@ def run(args):
                     print(f"  🧬 MUTATED {task} (arch change, fresh start): {changes}", flush=True)
                 else:
                     print(f"  🧬 MUTATED {task}: {changes}", flush=True)
+
+            elif rounds_stuck >= PLATEAU_THRESHOLD and best >= 0.85:
+                # Close to graduating — revert to best config, keep training
+                cfg = task_best_config[task].copy()
+                task_config[task] = cfg
+                print(f"  ⏳ {task} at {best:.0%} — keeping best config, needs more time", flush=True)
 
             print(f"\n  Training {task}... (d={cfg.get('d_model')} L={cfg.get('n_kernel_layers')} "
                   f"lr={cfg.get('lr', 1e-3):.0e} {cfg.get('optimizer', 'adamw')} "
@@ -332,10 +344,11 @@ def run(args):
                 on_cycle=on_cycle,
             )
 
-            # Track best for plateau detection
+            # Track best for plateau detection + remember winning config
             if acc and acc > task_best.get(task, 0):
                 task_best[task] = acc
                 task_best_round[task] = round_num
+                task_best_config[task] = cfg.copy()
 
             # Log lineage
             entry = {
