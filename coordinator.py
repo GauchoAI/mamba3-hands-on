@@ -695,6 +695,47 @@ def get_gpu_usage():
         return 0.0, 0.0
 
 
+def get_system_resources():
+    """Get CPU%, RAM%, GPU%, VRAM% — no psutil needed. Linux /proc only."""
+    gpu_pct, vram_pct = get_gpu_usage()
+
+    # CPU utilization from /proc/stat (instantaneous delta)
+    cpu_pct = 0.0
+    try:
+        with open('/proc/stat') as f:
+            fields = f.readline().split()[1:]  # cpu user nice system idle ...
+        idle = int(fields[3]) + int(fields[4])  # idle + iowait
+        total = sum(int(x) for x in fields)
+        # Store previous reading for delta
+        prev = getattr(get_system_resources, '_prev_cpu', None)
+        get_system_resources._prev_cpu = (idle, total)
+        if prev:
+            d_idle = idle - prev[0]
+            d_total = total - prev[1]
+            cpu_pct = (1 - d_idle / max(d_total, 1)) * 100
+    except FileNotFoundError:
+        # macOS / non-Linux fallback
+        try:
+            load1 = os.getloadavg()[0]
+            cpu_pct = min(load1 / os.cpu_count() * 100, 100)
+        except Exception:
+            pass
+
+    # RAM from /proc/meminfo
+    ram_pct = 0.0
+    try:
+        info = {}
+        with open('/proc/meminfo') as f:
+            for line in f:
+                parts = line.split()
+                info[parts[0].rstrip(':')] = int(parts[1])
+        ram_pct = (1 - info.get('MemAvailable', 0) / max(info.get('MemTotal', 1), 1)) * 100
+    except FileNotFoundError:
+        pass  # macOS — graceful degradation
+
+    return cpu_pct, ram_pct, gpu_pct, vram_pct
+
+
 def get_actual_worker_count():
     """Count actual worker processes via pgrep, not coordinator state."""
     try:

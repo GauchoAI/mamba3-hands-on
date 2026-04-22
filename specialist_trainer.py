@@ -77,17 +77,8 @@ def get_loss_fn(name):
         return stable_cross_entropy
 
 
-def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_cycle=None):
-    """Train one specialist on one task. Returns when mastered or max cycles."""
-    load_generators()
-    gen_fn = GENERATORS.get(task)
-    if not gen_fn:
-        print(f"Unknown task: {task}")
-        return None
-
-    tok = ByteTokenizer()
-
-    # Model
+def create_model_and_optimizer(config, device):
+    """Create a model + optimizer from config. Returns (model, opt, perp, scheduler, loss_fn, n_params)."""
     model = ProgressiveModel(
         d_model=config.get("d_model", 64),
         d_state=config.get("d_state", 16),
@@ -99,10 +90,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
     model.set_mode("kernel")
 
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"\n[{task}] d={config.get('d_model')}, L={config.get('n_kernel_layers')}, "
-          f"{n_params:,} params", flush=True)
 
-    # Optimizer
     wd = config.get("weight_decay", 0.0)
     if config.get("optimizer") == "lion":
         opt = Lion(model.parameters(), lr=config.get("lr", 1e-3), weight_decay=wd)
@@ -112,108 +100,163 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
     use_perp = config.get("use_perp", wd == 0.0)
     perp = PerpGradOptimizer(model) if use_perp else None
     scheduler = WarmRestartScheduler(opt, T_0=100) if config.get("warm_restarts") else None
-    noise = config.get("noise_scale", 0.0)
     loss_fn = get_loss_fn(config.get("loss_fn", "stable_ce"))
 
+    return model, opt, perp, scheduler, loss_fn, n_params
+
+
+def run_single_cycle(model, opt, gen_fn, tok, config, device, loss_fn,
+                     perp=None, scheduler=None, noise=0.0):
+    """Run one training cycle: generate data, N gradient steps, evaluate.
+
+    Returns (acc, loss, elapsed).
+    """
     batch_size = config.get("batch_size", 256)
     steps_per_cycle = config.get("steps_per_cycle", 200)
-    best_acc = 0.0
 
-    for cycle in range(1, max_cycles + 1):
-        t0 = time.time()
-        model.train()
+    t0 = time.time()
+    model.train()
 
-        # Generate task-specific data
-        examples = []
-        for _ in range(5000):
+    # Generate task-specific data
+    examples = []
+    for _ in range(5000):
+        ex = gen_fn()
+        tokens, sep = tok.encode_curriculum(ex)
+        examples.append((tokens, sep))
+
+    cycle_loss = 0.0
+    for step in range(steps_per_cycle):
+        indices = torch.randint(0, len(examples), (batch_size,))
+        max_len = 0
+        batch = []
+        for idx in indices:
+            tokens, sep = examples[idx.item()]
+            batch.append((tokens, sep))
+            max_len = max(max_len, len(tokens))
+
+        token_tensor = torch.full((batch_size, max_len), PAD,
+                                 dtype=torch.long, device=device)
+        sep_positions = []
+        for i, (tokens, sep) in enumerate(batch):
+            token_tensor[i, :len(tokens)] = torch.tensor(tokens)
+            sep_positions.append(sep)
+
+        logits = model(token_tensor)
+        B, L, V = logits.shape
+        pos = torch.arange(L, device=device).unsqueeze(0)
+        sep_t = torch.tensor(sep_positions, device=device, dtype=torch.long).unsqueeze(1)
+        mask = ((pos >= sep_t) & (pos < L - 1)).float()
+        pad_mask = (token_tensor != PAD).float()
+        pred_mask = mask[:, :L-1] * pad_mask[:, 1:]
+
+        if pred_mask.sum() > 0:
+            logits_flat = logits[:, :L-1].reshape(-1, V)
+            targets_flat = token_tensor[:, 1:].reshape(-1)
+            mask_flat = pred_mask.reshape(-1)
+            loss_all = loss_fn(logits_flat, targets_flat, reduction='none')
+            loss = (loss_all * mask_flat).sum() / (mask_flat.sum() + 1e-8)
+
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            if perp:
+                perp.project()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            if scheduler:
+                scheduler.step()
+            cycle_loss += loss.item()
+
+    if noise > 0:
+        inject_noise(model, noise)
+
+    cycle_loss /= max(steps_per_cycle, 1)
+
+    # Evaluate
+    model.eval()
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for _ in range(100):
             ex = gen_fn()
             tokens, sep = tok.encode_curriculum(ex)
-            examples.append((tokens, sep))
-
-        cycle_loss = 0.0
-        for step in range(steps_per_cycle):
-            # Build batch
-            indices = torch.randint(0, len(examples), (batch_size,))
-            max_len = 0
-            batch = []
-            for idx in indices:
-                tokens, sep = examples[idx.item()]
-                batch.append((tokens, sep))
-                max_len = max(max_len, len(tokens))
-
-            token_tensor = torch.full((batch_size, max_len), PAD,
-                                     dtype=torch.long, device=device)
-            sep_positions = []
-            for i, (tokens, sep) in enumerate(batch):
-                token_tensor[i, :len(tokens)] = torch.tensor(tokens)
-                sep_positions.append(sep)
-
-            logits = model(token_tensor)
-            B, L, V = logits.shape
-            pos = torch.arange(L, device=device).unsqueeze(0)
-            sep_t = torch.tensor(sep_positions, device=device, dtype=torch.long).unsqueeze(1)
-            mask = ((pos >= sep_t) & (pos < L - 1)).float()
-            pad_mask = (token_tensor != PAD).float()
-            pred_mask = mask[:, :L-1] * pad_mask[:, 1:]
-
-            if pred_mask.sum() > 0:
-                logits_flat = logits[:, :L-1].reshape(-1, V)
-                targets_flat = token_tensor[:, 1:].reshape(-1)
-                mask_flat = pred_mask.reshape(-1)
-                loss_all = loss_fn(logits_flat, targets_flat, reduction='none')
-                loss = (loss_all * mask_flat).sum() / (mask_flat.sum() + 1e-8)
-
-                opt.zero_grad(set_to_none=True)
-                loss.backward()
-                if perp:
-                    perp.project()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                opt.step()
-                if scheduler:
-                    scheduler.step()
-                cycle_loss += loss.item()
-
-        if noise > 0:
-            inject_noise(model, noise)
-
-        cycle_loss /= max(steps_per_cycle, 1)
-        elapsed = time.time() - t0
-
-        # Evaluate on this task only
-        model.eval()
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for _ in range(100):
-                ex = gen_fn()
-                tokens, sep = tok.encode_curriculum(ex)
-                out_bytes = list(ex["output"].encode("utf-8"))
-                t = torch.tensor([tokens], dtype=torch.long, device=device)
-                logits = model(t)
-                ok = True
-                for j, expected in enumerate(out_bytes):
-                    p = sep + j
-                    if p < logits.shape[1]:
-                        if logits[0, p].argmax().item() != expected:
-                            ok = False
-                            break
-                    else:
+            out_bytes = list(ex["output"].encode("utf-8"))
+            t = torch.tensor([tokens], dtype=torch.long, device=device)
+            logits = model(t)
+            ok = True
+            for j, expected in enumerate(out_bytes):
+                p = sep + j
+                if p < logits.shape[1]:
+                    if logits[0, p].argmax().item() != expected:
                         ok = False
-                if ok:
-                    correct += 1
-                total += 1
-        acc = correct / max(total, 1)
+                        break
+                else:
+                    ok = False
+            if ok:
+                correct += 1
+            total += 1
+    acc = correct / max(total, 1)
+    elapsed = time.time() - t0
+    return acc, cycle_loss, elapsed
+
+
+def precompute_teacher_cache(model, gen_fn, tok, device, n_examples=10000):
+    """Precompute teacher output distributions for distillation.
+
+    Returns list of dicts with tokens, sep, target_bytes, teacher_logits.
+    """
+    model.eval()
+    teacher_data = []
+    with torch.no_grad():
+        for _ in range(n_examples):
+            ex = gen_fn()
+            tokens, sep = tok.encode_curriculum(ex)
+            t = torch.tensor([tokens], dtype=torch.long, device=device)
+            logits = model(t)
+            out_bytes = list(ex["output"].encode("utf-8"))
+            distributions = []
+            for j in range(len(out_bytes)):
+                p = sep + j
+                if p < logits.shape[1]:
+                    distributions.append(logits[0, p].cpu())
+            if distributions:
+                teacher_data.append({
+                    "tokens": tokens,
+                    "sep": sep,
+                    "target_bytes": out_bytes,
+                    "teacher_logits": distributions,
+                })
+    return teacher_data
+
+
+def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_cycle=None):
+    """Train one specialist on one task. Returns when mastered or max cycles."""
+    load_generators()
+    gen_fn = GENERATORS.get(task)
+    if not gen_fn:
+        print(f"Unknown task: {task}")
+        return None
+
+    tok = ByteTokenizer()
+    model, opt, perp, scheduler, loss_fn, n_params = create_model_and_optimizer(config, device)
+    noise = config.get("noise_scale", 0.0)
+
+    print(f"\n[{task}] d={config.get('d_model')}, L={config.get('n_kernel_layers')}, "
+          f"{n_params:,} params", flush=True)
+
+    best_acc = 0.0
+    for cycle in range(1, max_cycles + 1):
+        acc, cycle_loss, elapsed = run_single_cycle(
+            model, opt, gen_fn, tok, config, device, loss_fn,
+            perp=perp, scheduler=scheduler, noise=noise,
+        )
         best_acc = max(best_acc, acc)
-        model.train()
 
         print(f"  [{task}] cycle {cycle:3d}  loss={cycle_loss:.3f}  "
               f"acc={acc:.0%}  best={best_acc:.0%}  {elapsed:.1f}s", flush=True)
 
-        # Callback — push to Firebase / UI
         if on_cycle:
             on_cycle(task, cycle, acc, best_acc, cycle_loss)
 
-        # Mastered!
         if acc >= target_acc:
             print(f"  ★ [{task}] MASTERED at {acc:.0%} in {cycle} cycles!", flush=True)
             break
@@ -234,29 +277,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
 
     # Precompute teacher outputs for distillation
     print(f"  Precomputing teacher outputs...", flush=True)
-    model.eval()
-    teacher_data = []
-    with torch.no_grad():
-        for _ in range(10000):
-            ex = gen_fn()
-            tokens, sep = tok.encode_curriculum(ex)
-            t = torch.tensor([tokens], dtype=torch.long, device=device)
-            logits = model(t)
-            # Save the full distribution at output positions
-            out_bytes = list(ex["output"].encode("utf-8"))
-            distributions = []
-            for j in range(len(out_bytes)):
-                p = sep + j
-                if p < logits.shape[1]:
-                    distributions.append(logits[0, p].cpu())
-            if distributions:
-                teacher_data.append({
-                    "tokens": tokens,
-                    "sep": sep,
-                    "target_bytes": out_bytes,
-                    "teacher_logits": distributions,
-                })
-
+    teacher_data = precompute_teacher_cache(model, gen_fn, tok, device)
     cache_path = ckpt_dir / f"{task}_cache.pt"
     torch.save(teacher_data, cache_path)
     print(f"  Cached {len(teacher_data)} teacher outputs → {cache_path}", flush=True)
