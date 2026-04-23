@@ -1529,9 +1529,134 @@ to byte-level SSM architectures (also valuable knowledge).
 - **binary_pattern_next at 94%.** One percent from graduation.
 - **mirror_detection at 90%.** New high — checkpoint resume is paying off.
 - **Teacher-as-mutation deployed.** Waiting for GA to try it on stuck tasks.
-- **Parity ceiling at 63%.** No external teacher can help. Curriculum
-  approach (progressive difficulty) is the only path that worked (80%
-  in 130K steps on the overnight run).
-- **Distillation.** 5+ teachers ready. Student can start learning.
+- **Parity ceiling at 63%.** See Entry 22 — architecture insight.
+- **Distillation.** 6 teachers ready. Student can start learning.
 - **Cortex development.** Still waiting.
 - **Boss tasks.** 18 unseen tasks for generalization eval.
+- **Register inspector.** Built, deployed, pushes to Firebase.
+- **Stateless orchestrator.** Deployed. Workers self-sufficient.
+
+---
+
+## Entry 22: The Architecture Dimension — What the GA Cannot See
+
+**Date:** 2026-04-23
+
+### The experiment
+
+`parity_experiment.py` — a 7-line model: embed(2→32) + one Mamba3Block + head(32→2).
+Feed raw bits in, running parity out. No tokenization, no strings, no bytes.
+
+| Model | Params | Steps | Accuracy |
+|-------|--------|-------|----------|
+| **Mamba-3** | **8,074** | **400** | **100%** |
+| Mamba-2-like | 7,690 | 400 | 49.5% (random) |
+
+400 steps. 8K params. Perfect parity. Position-wise accuracy: 100% at
+every position from 0 to 15. Mamba-2-like degrades from 100% at pos 0
+to 49.5% at pos 15 — it cannot track state.
+
+### Why our specialist is stuck at 63%
+
+The specialist has the SAME Mamba-3 architecture. Same RoPE, same
+trapezoidal gate, same state dynamics. But it's stuck at 63%.
+
+The difference:
+
+**The experiment feeds raw bits:**
+```
+input: tensor([0, 1, 1, 0, 1])  → 5 tokens, each is 0 or 1
+```
+
+**The specialist feeds byte-encoded strings:**
+```
+input: "0 1 1 0 1" → [48, 32, 49, 32, 49, 32, 48, 32, 49] → 9 tokens
+```
+
+The specialist must learn THREE things simultaneously:
+1. 48 means "zero" and 49 means "one" (byte decoding)
+2. 32 means "space" and should be ignored (noise filtering)
+3. Count the ones and output parity (the actual task)
+
+The experiment only needs to learn #3.
+
+### What this means
+
+The model architecture is POWERFUL ENOUGH. 8K params, 1 layer, 400
+steps — parity solved perfectly. The SSM's 2,048 registers with
+data-dependent decay CAN implement a running XOR.
+
+But the GA cannot change the INPUT REPRESENTATION. It mutates
+d_model, layers, lr, optimizer, loss_fn — all training parameters.
+It cannot change HOW the data is presented to the model. The byte
+tokenization is fixed. The spaces are fixed. The ASCII encoding
+is fixed.
+
+This is a blind spot. The GA explores a 15-dimensional config space
+but the most impactful dimension — data representation — is not in
+the search space.
+
+### The SSM as a computing machine
+
+The Mamba-3 SSM has:
+- **2,048 registers per layer** (8 heads × 16 headdim × 16 d_state)
+- **Data-dependent decay** — the model controls how much to remember
+  vs forget at each timestep
+- **Trapezoidal blending** — second-order integration, can look at
+  current AND previous input
+- **RoPE dynamics** — complex-valued rotations that enable state
+  tracking across arbitrary lengths
+
+Parity needs exactly 1 register as a flip-flop. The model has 2,047
+more than it needs. The bottleneck is not capacity — it's learning
+to ROUTE information through the projection matrices.
+
+The parity experiment succeeds because the embedding is trivial:
+embed(2, 32) maps {0, 1} to two 32-dim vectors. The model immediately
+knows "this is a zero" vs "this is a one."
+
+The specialist fails because embed(260, 64) maps 260 possible bytes
+to 64-dim vectors. The model must discover that bytes 48 and 49 are
+special (they represent bits), byte 32 is noise (space), and bytes
+256-259 are control tokens. That's a much harder optimization problem
+with many local minima.
+
+### What we can do about it
+
+1. **Task-specific tokenization** — for parity, embed bits directly
+   instead of going through byte strings. The GA could mutate the
+   tokenization scheme as part of the config: `"tokenizer": "raw_bits"`
+   vs `"tokenizer": "byte_string"`.
+
+2. **Pre-trained byte embeddings** — initialize the embedding so that
+   48→"zero concept" and 49→"one concept" are already separated. The
+   model doesn't have to discover this from scratch.
+
+3. **Curriculum on representation** — start with raw bits (easy), then
+   gradually shift to byte encoding. The model learns the algorithm
+   first, then learns to parse the encoding.
+
+4. **Architecture as mutation** — the GA already mutates d_model and
+   layers. It could also mutate the embedding type, the input format,
+   or the number of heads. The model architecture itself becomes part
+   of the search space.
+
+### The bigger picture
+
+We are teaching this SSM two things at once:
+1. **How to compute** — the algorithm (XOR, comparison, counting)
+2. **How to instrument** — how to use its own registers, gates, decays
+
+The parity experiment shows that #1 takes 400 steps when #2 is trivial
+(raw bits). Our specialists show that #1 + #2 together take 60,000+
+steps and often plateau.
+
+This is analogous to teaching someone to play piano AND teaching them
+music theory simultaneously. The experiment says "here are the keys,
+play this" — 400 steps to mastery. The specialist says "here are some
+symbols on paper, figure out what they mean, then play what they
+represent" — 60,000 steps and still struggling.
+
+The architecture — the SSM with its registers and gates — is the piano.
+It's a beautiful instrument. The question is how to teach someone to
+play it efficiently.
