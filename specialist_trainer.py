@@ -812,7 +812,7 @@ if __name__ == "__main__":
                        choices=["jit", "triton"],
                        help="SSM scan backend: jit (precise) or triton (fast)")
     parser.add_argument("--device", type=str, default=None,
-                       choices=["cuda", "cpu"],
+                       choices=["cuda", "cpu", "mps"],
                        help="Training device: cpu (precise) or cuda (fast)")
     parser.add_argument("--problems-dir", type=str, default="problems",
                        help="Directory containing problem YAML manifests")

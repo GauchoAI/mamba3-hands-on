@@ -17,10 +17,11 @@ mutations:
     type: categorical
     probability: 0.15
     max_probability: 1.0
-    values: [cuda, cpu]
+    values: [cuda, cpu, mps]
     default: cuda
     implies:
       cpu: {scan_backend: jit}
+      mps: {scan_backend: jit}
 
   - name: lr
     key: lr
