@@ -282,6 +282,32 @@ def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0):
     if random.random() < min(0.1 * amp, 0.5):
         child["use_perp"] = not child.get("use_perp", child.get("weight_decay", 0) == 0)
 
+    # Mutate teacher_model — try an external or specialist teacher
+    # Higher chance when stuck, picks from available teachers for this task
+    if random.random() < min(0.15 * amp, 0.7):
+        task = child.get("task", "")
+        available_teachers = []
+
+        # Our own specialists as teachers
+        from pathlib import Path
+        for ckpt in Path("checkpoints/specialists").glob("*.pt"):
+            name = ckpt.stem
+            if name != task and "_cache" not in name and "_champion" not in name and "_meta" not in name:
+                available_teachers.append(f"specialist:{name}")
+
+        # External LLM teachers
+        available_teachers.extend(["mathstral-7b", "qwen-math-1.5b"])
+
+        if available_teachers:
+            if child.get("teacher_model"):
+                # 50% chance to remove teacher (go back to self-training)
+                if random.random() < 0.5:
+                    child.pop("teacher_model", None)
+                else:
+                    child["teacher_model"] = random.choice(available_teachers)
+            else:
+                child["teacher_model"] = random.choice(available_teachers)
+
     # When severely stuck: radical mutation — completely random config
     if plateau_severity >= 2.0 and random.random() < 0.3:
         child = random.choice(SEED_CONFIGS).copy()

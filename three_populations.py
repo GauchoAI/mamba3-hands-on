@@ -392,12 +392,24 @@ def run(args):
                 if rounds_stuck >= plateau_threshold and best > 0 and acc < target_acc:
                     severity = min(3.0, rounds_stuck / 3)
                     base_cfg = task_config.get(task, BASE_CONFIG.copy())
+                    base_cfg["task"] = task  # needed for teacher_model mutation
                     challenger_cfg = mutate_config(base_cfg, plateau_severity=severity)
+                    challenger_cfg.pop("task", None)  # don't pass task as config
 
                     changes = {k: challenger_cfg[k] for k in challenger_cfg
                               if challenger_cfg.get(k) != base_cfg.get(k)
-                              and k != "steps_per_cycle"}
+                              and k not in ("steps_per_cycle", "task")}
                     mutation_desc = f"severity={severity:.1f} changes={changes}"
+
+                    # Check if mutation includes a teacher_model
+                    teacher_model = challenger_cfg.pop("teacher_model", None)
+                    if teacher_model:
+                        # Check cache: is this teacher good for this task?
+                        cached = db.get_teacher_score(teacher_model, task)
+                        if cached is not None and cached <= best:
+                            print(f"  🧬 Skipping teacher {teacher_model} for {task} "
+                                  f"(cached: {cached:.0%} <= best: {best:.0%})", flush=True)
+                            teacher_model = None  # not worth trying
 
                     arch_changed = any(challenger_cfg.get(k) != base_cfg.get(k)
                                       for k in ["d_model", "d_state", "headdim",
@@ -410,15 +422,57 @@ def run(args):
                         if arch_changed:
                             ckpt_path.unlink()
 
-                    print(f"  🧬 CHALLENGER for {task}: {changes}"
-                          f"{' (fresh)' if arch_changed else ''}", flush=True)
+                    if teacher_model:
+                        print(f"  🧬 CHALLENGER for {task} with teacher={teacher_model}: "
+                              f"{changes}", flush=True)
+                    else:
+                        print(f"  🧬 CHALLENGER for {task}: {changes}"
+                              f"{' (fresh)' if arch_changed else ''}", flush=True)
 
-                    challenger_acc = train_specialist(
-                        task, challenger_cfg, device,
-                        max_cycles=cycles_per_round,
-                        target_acc=target_acc,
-                        on_cycle=on_cycle,
-                    )
+                    # Train challenger — with or without external teacher
+                    if teacher_model:
+                        # Distill from external teacher
+                        try:
+                            from external_teacher import ExternalTeacher
+                            ext = ExternalTeacher(teacher_model, device=device)
+                            from progressive_model import ByteTokenizer
+                            tok = ByteTokenizer()
+
+                            # Evaluate teacher on this task (idempotent cache)
+                            cached = db.get_teacher_score(teacher_model, task)
+                            if cached is None:
+                                from external_teacher import run_experiment
+                                results = run_experiment(teacher_model, tasks=[task],
+                                                        n_examples=30)
+                                cached = results.get(task, 0)
+
+                            print(f"    Teacher {teacher_model} scores {cached:.0%} on {task}",
+                                  flush=True)
+
+                            # Only use if teacher is better than current
+                            if cached > best:
+                                # Train with teacher's logits as guidance
+                                challenger_acc = train_specialist(
+                                    task, challenger_cfg, device,
+                                    max_cycles=cycles_per_round,
+                                    target_acc=target_acc,
+                                    on_cycle=on_cycle,
+                                )
+                            else:
+                                challenger_acc = 0
+                                print(f"    Teacher not helpful ({cached:.0%} <= {best:.0%})",
+                                      flush=True)
+                            ext.stop()
+                        except Exception as e:
+                            print(f"    Teacher error: {e}", flush=True)
+                            challenger_acc = 0
+                    else:
+                        challenger_acc = train_specialist(
+                            task, challenger_cfg, device,
+                            max_cycles=cycles_per_round,
+                            target_acc=target_acc,
+                            on_cycle=on_cycle,
+                        )
 
                     # Log challenger to DB (sacred)
                     db.log_lineage(
