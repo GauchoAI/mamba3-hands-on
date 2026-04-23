@@ -84,6 +84,35 @@ class StateDB:
                 updated_at REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS active_runs (
+                task TEXT PRIMARY KEY,
+                exp_id TEXT,
+                cycle INTEGER NOT NULL,
+                accuracy REAL,
+                best_accuracy REAL,
+                loss REAL,
+                config TEXT,
+                started_at REAL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS cycle_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task TEXT NOT NULL,
+                cycle INTEGER NOT NULL,
+                accuracy REAL,
+                loss REAL,
+                distill_loss REAL,
+                grad_norm REAL,
+                lr REAL,
+                forward_ms REAL,
+                backward_ms REAL,
+                eval_ms REAL,
+                gpu_mem_mb REAL,
+                param_norm REAL,
+                timestamp REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS teacher_eval_cache (
                 teacher TEXT NOT NULL,
                 task TEXT NOT NULL,
@@ -96,12 +125,96 @@ class StateDB:
         self.conn.commit()
 
     def _migrate(self):
-        """Add columns to existing tables if missing."""
+        """Add columns/tables to existing DB if missing."""
         try:
             self.conn.execute("SELECT teachers FROM lineage LIMIT 1")
         except Exception:
             self.conn.execute("ALTER TABLE lineage ADD COLUMN teachers TEXT DEFAULT '[]'")
             self.conn.commit()
+        # Ensure new tables exist (idempotent — CREATE IF NOT EXISTS)
+        self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS active_runs (
+                task TEXT PRIMARY KEY,
+                exp_id TEXT,
+                cycle INTEGER NOT NULL,
+                accuracy REAL,
+                best_accuracy REAL,
+                loss REAL,
+                config TEXT,
+                started_at REAL,
+                updated_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS cycle_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task TEXT NOT NULL,
+                cycle INTEGER NOT NULL,
+                accuracy REAL,
+                loss REAL,
+                distill_loss REAL,
+                grad_norm REAL,
+                lr REAL,
+                forward_ms REAL,
+                backward_ms REAL,
+                eval_ms REAL,
+                gpu_mem_mb REAL,
+                param_norm REAL,
+                timestamp REAL NOT NULL
+            );
+        """)
+        self.conn.commit()
+
+    # ── Active runs (real-time, overwritten each cycle) ────────────
+
+    def update_active_run(self, task, cycle, accuracy=None, best_accuracy=None,
+                          loss=None, config=None, exp_id=None):
+        """Update real-time status for a running task. Overwrites."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO active_runs "
+            "(task, exp_id, cycle, accuracy, best_accuracy, loss, config, "
+            "started_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, "
+            "COALESCE((SELECT started_at FROM active_runs WHERE task=?), ?), ?)",
+            (task, exp_id, cycle, accuracy, best_accuracy, loss,
+             json.dumps(config) if config else None,
+             task, time.time(), time.time())
+        )
+        self.conn.commit()
+
+    def clear_active_run(self, task):
+        self.conn.execute("DELETE FROM active_runs WHERE task = ?", (task,))
+        self.conn.commit()
+
+    def get_active_runs(self):
+        cur = self.conn.execute("SELECT * FROM active_runs ORDER BY updated_at DESC")
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+    # ── Cycle history (append-only, per-cycle granularity) ─────────
+
+    def log_cycle(self, task, cycle, accuracy=None, loss=None,
+                  distill_loss=None, grad_norm=None, lr=None,
+                  forward_ms=None, backward_ms=None, eval_ms=None,
+                  gpu_mem_mb=None, param_norm=None):
+        """Log detailed per-cycle metrics. Append-only."""
+        self.conn.execute(
+            "INSERT INTO cycle_history "
+            "(task, cycle, accuracy, loss, distill_loss, grad_norm, lr, "
+            "forward_ms, backward_ms, eval_ms, gpu_mem_mb, param_norm, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (task, cycle, accuracy, loss, distill_loss, grad_norm, lr,
+             forward_ms, backward_ms, eval_ms, gpu_mem_mb, param_norm, time.time())
+        )
+        self.conn.commit()
+
+    def get_cycle_history(self, task, last_n=None):
+        if last_n:
+            cur = self.conn.execute(
+                "SELECT * FROM cycle_history WHERE task = ? ORDER BY cycle DESC LIMIT ?",
+                (task, last_n))
+        else:
+            cur = self.conn.execute(
+                "SELECT * FROM cycle_history WHERE task = ? ORDER BY cycle", (task,))
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
 
     # ── Teachers (append-only) ─────────────────────────────────────
 

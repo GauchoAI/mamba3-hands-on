@@ -237,7 +237,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 loss.backward()
                 if perp:
                     perp.project()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                _grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 opt.step()
                 if scheduler:
                     scheduler.step()
@@ -276,8 +276,29 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         best_acc = max(best_acc, acc)
         model.train()
 
+        # Compute param norm for health monitoring
+        _param_norm = sum(p.data.norm().item() ** 2 for p in model.parameters()) ** 0.5
+        _gpu_mem = torch.cuda.memory_allocated() / 1024 / 1024 if torch.cuda.is_available() else 0
+        _current_lr = opt.param_groups[0]["lr"]
+        _eval_time = (time.time() - t0 - elapsed) if elapsed < (time.time() - t0) else 0
+
         print(f"  [{task}] cycle {cycle:3d}  loss={cycle_loss:.3f}  "
               f"acc={acc:.0%}  best={best_acc:.0%}  {elapsed:.1f}s", flush=True)
+
+        # Log to state DB (real-time + per-cycle history)
+        try:
+            from state_db import StateDB
+            _db = StateDB("three_pop/training.db")
+            _db.update_active_run(task, cycle, accuracy=acc, best_accuracy=best_acc,
+                                  loss=cycle_loss, config=config)
+            _db.log_cycle(task, cycle, accuracy=acc, loss=cycle_loss,
+                         grad_norm=float(_grad_norm) if isinstance(_grad_norm, torch.Tensor) else _grad_norm,
+                         lr=_current_lr, forward_ms=elapsed * 1000 / max(steps_per_cycle, 1),
+                         eval_ms=_eval_time * 1000, gpu_mem_mb=_gpu_mem,
+                         param_norm=_param_norm)
+            _db.close()
+        except Exception:
+            pass
 
         # Callback — push to Firebase / UI
         if on_cycle:
@@ -308,6 +329,15 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         if acc >= target_acc:
             print(f"  ★ [{task}] MASTERED at {acc:.0%} in {cycle} cycles!", flush=True)
             break
+
+    # Clear active run
+    try:
+        from state_db import StateDB
+        _db = StateDB("three_pop/training.db")
+        _db.clear_active_run(task)
+        _db.close()
+    except Exception:
+        pass
 
     # Save specialist
     ckpt_dir = Path("checkpoints/specialists")
