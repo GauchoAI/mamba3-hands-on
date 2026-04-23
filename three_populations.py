@@ -187,7 +187,7 @@ def run(args):
             # Wait for champions
             for task, proc in procs.items():
                 try:
-                    output = proc.communicate(timeout=600)[0].decode("utf-8", errors="ignore")
+                    output = proc.communicate(timeout=1800)[0].decode("utf-8", errors="ignore")
                     for line in output.strip().split("\n")[-3:]:
                         print(f"    {line}", flush=True)
                 except Exception as e:
@@ -258,7 +258,7 @@ def run(args):
                 cproc = spawn_worker(task, challenger_cfg, "challenger",
                                     cycles_per_round, target_acc)
                 try:
-                    output = cproc.communicate(timeout=600)[0].decode("utf-8", errors="ignore")
+                    output = cproc.communicate(timeout=1800)[0].decode("utf-8", errors="ignore")
                     for line in output.strip().split("\n")[-2:]:
                         print(f"    {line}", flush=True)
                 except Exception:
