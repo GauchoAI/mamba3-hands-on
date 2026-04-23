@@ -164,30 +164,35 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     print(f"\n[{task}] d={config.get('d_model')}, L={config.get('n_kernel_layers')}, "
           f"{n_params:,} params", flush=True)
 
-    # Load teacher models for distillation
-    teacher_models = []
-    # Auto-discover: if a same-task teacher checkpoint exists, use it
-    teacher_cache_path = ckpt_dir / f"{task}_cache.pt"
-    if teacher_cache_path.exists() and not teachers:
-        teachers = [{"model": f"specialist:{task}", "weight": 1.0}]
-    if teachers:
+    # Load teacher model for distillation — if a same-task teacher checkpoint exists,
+    # load it directly and use its outputs as soft targets during training
+    teacher_model_for_distill = None
+    teacher_ckpt_path = ckpt_dir / f"{task}_champion.pt"
+    if not teacher_ckpt_path.exists():
+        teacher_ckpt_path = ckpt_dir / f"{task}.pt"
+    # Only use teacher if it's from a DIFFERENT config (don't self-distill)
+    if teacher_ckpt_path.exists():
         try:
-            from external_teacher import ExternalTeacher
-            for t_info in teachers:
-                t_name = t_info.get("model", "")
-                t_weight = t_info.get("weight", 1.0)
-                if t_weight < 0.1:
-                    continue
-                try:
-                    ext = ExternalTeacher(t_name, device=device)
-                    teacher_models.append({"ext": ext, "weight": t_weight, "name": t_name})
-                    print(f"  Teacher: {t_name} (weight={t_weight:.2f})", flush=True)
-                except Exception as e:
-                    print(f"  Teacher {t_name} failed: {e}", flush=True)
-        except ImportError:
-            pass
-    if teacher_models:
-        print(f"  Distilling from {len(teacher_models)} teachers", flush=True)
+            _teacher_ckpt = torch.load(teacher_ckpt_path, map_location=device, weights_only=False)
+            _teacher_task = _teacher_ckpt.get("task", "")
+            _teacher_acc = _teacher_ckpt.get("accuracy", 0)
+            if _teacher_task == task and _teacher_acc >= 0.80:
+                # Build teacher model with its own architecture
+                _t_cfg = _teacher_ckpt.get("config", {})
+                _teacher_m = ProgressiveModel(
+                    d_model=_t_cfg.get("d_model", 64),
+                    d_state=_t_cfg.get("d_state", 16),
+                    expand=2,
+                    headdim=_t_cfg.get("headdim", 16),
+                ).to(device)
+                for _ in range(_t_cfg.get("n_kernel_layers", 1)):
+                    _teacher_m.add_kernel_layer()
+                _teacher_m.load_state_dict(_teacher_ckpt["model"])
+                _teacher_m.eval()
+                teacher_model_for_distill = _teacher_m
+                print(f"  Distilling from teacher ({_teacher_acc:.0%}, d={_t_cfg.get('d_model')} L={_t_cfg.get('n_kernel_layers')})", flush=True)
+        except Exception as e:
+            print(f"  Teacher load failed: {e}", flush=True)
 
     _hit_target = False
     for cycle in range(cycle_start + 1, cycle_start + max_cycles + 1):
@@ -234,26 +239,21 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 loss_all = loss_fn(logits_flat, targets_flat, reduction='none')
                 loss = (loss_all * mask_flat).sum() / (mask_flat.sum() + 1e-8)
 
-                # Blend distillation loss from teachers
-                if teacher_models and step % 10 == 0:  # every 10th step (amortize cost)
-                    for t_info in teacher_models:
-                        try:
-                            ext = t_info["ext"]
-                            w = t_info["weight"]
-                            if ext.specialist_model is not None:
-                                with torch.no_grad():
-                                    t_logits = ext.specialist_model(token_tensor)
-                                # KL divergence on output positions
-                                t_flat = t_logits[:, :L-1].reshape(-1, t_logits.shape[-1])
-                                soft_teacher = torch.nn.functional.softmax(t_flat / 3.0, dim=-1)
-                                soft_student = torch.nn.functional.log_softmax(logits_flat / 3.0, dim=-1)
-                                kl = torch.nn.functional.kl_div(
-                                    soft_student, soft_teacher, reduction='none'
-                                ).sum(-1)
-                                distill_loss = (kl * mask_flat).sum() / (mask_flat.sum() + 1e-8) * 9.0
-                                loss = loss + w * 0.3 * distill_loss
-                        except Exception:
-                            pass
+                # Distillation: blend KL loss from teacher's soft targets
+                if teacher_model_for_distill is not None and step % 5 == 0:
+                    try:
+                        with torch.no_grad():
+                            t_logits = teacher_model_for_distill(token_tensor)
+                        t_flat = t_logits[:, :L-1].reshape(-1, t_logits.shape[-1])
+                        soft_teacher = torch.nn.functional.softmax(t_flat / 3.0, dim=-1)
+                        soft_student = torch.nn.functional.log_softmax(logits_flat / 3.0, dim=-1)
+                        kl = torch.nn.functional.kl_div(
+                            soft_student, soft_teacher, reduction='none'
+                        ).sum(-1)
+                        distill_loss = (kl * mask_flat).sum() / (mask_flat.sum() + 1e-8) * 9.0
+                        loss = loss + 0.3 * distill_loss
+                    except Exception:
+                        pass
 
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
@@ -443,10 +443,14 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         from state_db import StateDB
         _db = StateDB(_DB_PATH)
         ckpt_str = str(Path("checkpoints/specialists") / f"{task}.pt")
+        # Track distillation in config for provenance
+        _logged_config = dict(config)
+        if teacher_model_for_distill is not None:
+            _logged_config["distilled_from"] = str(teacher_ckpt_path)
         _db.log_lineage(
             task=task, round_num=cycle,
             accuracy=best_acc, best_accuracy=best_acc,
-            config=config, role="worker",
+            config=_logged_config, role="worker",
             checkpoint_path=ckpt_str,
         )
         # Use confidence-based scoring: mean - k*std, not raw best
