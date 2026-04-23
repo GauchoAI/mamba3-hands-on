@@ -423,7 +423,8 @@ def run(args):
                     severity = min(3.0, rounds_stuck / 3)
                     base_cfg = task_config.get(task, BASE_CONFIG.copy())
                     base_cfg["task"] = task
-                    challenger_cfg = mutate_config(base_cfg, plateau_severity=severity)
+                    challenger_cfg, challenger_provenance = mutate_config(
+                        base_cfg, plateau_severity=severity)
                     challenger_cfg.pop("task", None)
 
                     changes = {k: challenger_cfg[k] for k in challenger_cfg
@@ -506,6 +507,7 @@ def run(args):
                         config=challenger_cfg, mutation=mutation_desc,
                         role="challenger",
                         teachers=active_teachers,
+                        provenance=challenger_provenance,
                     )
                     db.log_experiment(
                         task=task, round_num=round_num,

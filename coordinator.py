@@ -204,32 +204,72 @@ def select_parent(running_results, evo_state, generation,
 
 # ── Genetic config mutation ─────────────────────────────────────────
 
-def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0):
+def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0,
+                  diagnostic_bias=None):
     """Create a child config by mutating a parent.
 
-    When plateau_severity > 0, mutations become more aggressive:
-    - Higher probability of changing every parameter
-    - Wider ranges for numerical mutations
-    - Re-introduces discarded strategies (Lion, focal, SAM, etc.)
+    When plateau_severity > 0, mutations become more aggressive.
+    When diagnostic_bias is provided, applies the diagnostic prescription
+    FIRST, then applies random GA mutations on top. Provenance tracks
+    which changes came from the diagnostic vs the GA.
+
+    Returns (child_config, provenance) where provenance is a dict
+    mapping param names to their source.
     """
     child = parent_config.copy()
+    provenance = {}
+
+    # Mark all inherited params
+    for k, v in child.items():
+        if k not in ("task",):
+            provenance[k] = {"source": "inherited", "value": v}
+
     # Ensure all keys exist with defaults
     child.setdefault("loss_fn", "stable_ce")
     child.setdefault("backend", "pytorch")
     child.setdefault("steps_per_cycle", 200)
 
+    # Apply diagnostic bias first (if provided)
+    if diagnostic_bias:
+        rx_params = diagnostic_bias.get("params", {})
+        signal = diagnostic_bias.get("signal", "unknown")
+        rx_type = diagnostic_bias.get("type", "unknown")
+        for k, v in rx_params.items():
+            if k == "lr_multiply":
+                child["lr"] = child.get("lr", 1e-3) * v
+                provenance["lr"] = {"source": "diagnostic", "signal": signal,
+                                    "prescription": rx_type, "value": child["lr"]}
+            elif k == "batch_size_multiply":
+                child["batch_size"] = min(4096, int(child.get("batch_size", 256) * v))
+                provenance["batch_size"] = {"source": "diagnostic", "signal": signal,
+                                            "prescription": rx_type, "value": child["batch_size"]}
+            elif k == "weight_decay_add":
+                child["weight_decay"] = child.get("weight_decay", 0.0) + v
+                provenance["weight_decay"] = {"source": "diagnostic", "signal": signal,
+                                              "prescription": rx_type, "value": child["weight_decay"]}
+            else:
+                child[k] = v
+                provenance[k] = {"source": "diagnostic", "signal": signal,
+                                 "prescription": rx_type, "value": v}
+
     # Plateau amplifier: multiply mutation probabilities
     amp = 1.0 + plateau_severity  # 1.0 normal, 2.0-4.0 when stuck
 
+    _sev = round(plateau_severity, 1)
+
     # Mutate learning rate (log-scale)
     if random.random() < min(0.5 * amp, 0.95):
-        spread = mutation_strength * amp
-        factor = 2 ** (random.gauss(0, spread))
-        child["lr"] = max(1e-5, min(1e-2, child["lr"] * factor))
+        if "lr" not in provenance or provenance["lr"]["source"] == "inherited":
+            spread = mutation_strength * amp
+            factor = 2 ** (random.gauss(0, spread))
+            child["lr"] = max(1e-5, min(1e-2, child["lr"] * factor))
+            provenance["lr"] = {"source": "ga_mutation", "severity": _sev, "value": child["lr"]}
 
     # Mutate batch size
     if random.random() < min(0.3 * amp, 0.9):
-        child["batch_size"] = random.choice([64, 128, 256, 512, 1024])
+        if "batch_size" not in provenance or provenance["batch_size"]["source"] == "inherited":
+            child["batch_size"] = random.choice([64, 128, 256, 512, 1024])
+            provenance["batch_size"] = {"source": "ga_mutation", "severity": _sev, "value": child["batch_size"]}
 
     # Mutate d_model
     if random.random() < min(0.2 * amp, 0.8):
@@ -322,7 +362,17 @@ def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0):
         child["warm_restarts"] = random.choice([True, False])
         child["noise_scale"] = random.choice([0.0, 0.001, 0.005])
 
-    return child
+    # Auto-tag any remaining GA mutations not yet tracked
+    for k, v in child.items():
+        if k in ("task", "steps_per_cycle", "backend"):
+            continue
+        if k in provenance and provenance[k]["source"] != "inherited":
+            continue  # already tagged by diagnostic or explicit GA above
+        parent_v = parent_config.get(k)
+        if v != parent_v and parent_v is not None:
+            provenance[k] = {"source": "ga_mutation", "severity": _sev, "value": v}
+
+    return child, provenance
 
 
 # ── Default seed configs ────────────────────────────────────────────
