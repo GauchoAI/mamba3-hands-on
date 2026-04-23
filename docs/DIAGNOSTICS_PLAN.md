@@ -827,9 +827,234 @@ No state loss. New code runs on next restart.
 Diagnostic mutations go through champion-challenger — no risk.
 cycle_history already populated (210+ entries and growing).
 
+---
+
+## Strict Data Schemas — Everything Typed, Parseable, Explorable
+
+All data must be structured, not strings. Every field has a type,
+every JSON blob has a schema. No free-form text in data fields.
+
+### Schema: Provenance Entry
+```json
+{
+    "param": "lr",
+    "value": 0.002,
+    "source": "ga_mutation",          // enum: seed|inherited|ga_mutation|diagnostic|teacher_inherited
+    "round": 7,
+    "from_exp": "parity_r5",          // nullable: parent experiment
+    "diagnostic_signal": null,        // nullable: which signal triggered this
+    "diagnostic_prescription": null,  // nullable: what was prescribed
+    "severity": 2.0,                  // nullable: GA severity when mutated
+    "timestamp": 1776900000.0
+}
+```
+
+### Schema: Model Card
+```json
+{
+    "task": "arithmetic_next",
+    "exp_id": "arithmetic_next_r12",
+    "parent_id": "arithmetic_next_r11",
+    "round": 12,
+    "config": {
+        "d_model": 64,
+        "d_state": 16,
+        "headdim": 16,
+        "n_kernel_layers": 3,
+        "lr": 0.002,
+        "weight_decay": 0.0,
+        "optimizer": "adamw",
+        "loss_fn": "ce",
+        "noise_scale": 0.005,
+        "use_perp": false,
+        "warm_restarts": false,
+        "batch_size": 256,
+        "steps_per_cycle": 200
+    },
+    "provenance": [
+        {"param": "lr", "value": 0.002, "source": "ga_mutation", "round": 7, "severity": 2.0},
+        {"param": "noise_scale", "value": 0.005, "source": "diagnostic", "round": 8,
+         "diagnostic_signal": "dead_grad", "diagnostic_prescription": "noise_injection"},
+        {"param": "weight_decay", "value": 0.0, "source": "diagnostic", "round": 6,
+         "diagnostic_signal": "overconfidence", "diagnostic_prescription": "wd_reduction"}
+    ],
+    "teachers": [
+        {"model": "mathstral-7b", "weight": 0.8, "from_round": 9, "source": "ga_mutation"},
+        {"model": "specialist:logic_gate", "weight": 0.5, "from_round": 5, "source": "ga_mutation"}
+    ],
+    "diagnostics": {
+        "current_signals": ["dead_grad"],
+        "history": [
+            {"signal": "dead_grad", "round": 8, "prescription": "noise_injection", "won": true},
+            {"signal": "overconfidence", "round": 6, "prescription": "wd_reduction", "won": false}
+        ]
+    },
+    "metrics": {
+        "accuracy": 0.45,
+        "best_accuracy": 0.30,
+        "loss": 0.847,
+        "grad_norm": 2.1,
+        "param_norm": 125.3,
+        "cycles_total": 120
+    }
+}
+```
+
+### Schema: Diagnostic Event
+```json
+{
+    "task": "parity",
+    "round": 8,
+    "signal": "dead_grad",            // enum: dead_grad|oscillating_loss|accuracy_oscillation|
+                                      //       loss_acc_divergence|param_explosion|grad_spike|
+                                      //       stale_teacher|cycle_time_regression|mode_collapse|
+                                      //       systemic_failure|length_failure|overconfidence|
+                                      //       difficulty_cliff|early_plateau|never_learned|accelerating
+    "evidence": {
+        "avg_grad_norm": 0.08,
+        "n_cycles_observed": 10,
+        "threshold": 0.1
+    },
+    "prescription": {
+        "type": "noise_injection",    // enum: noise_injection|warm_restart|teacher_distill|
+                                      //       lr_spike|lr_reduce|batch_increase|wd_increase|
+                                      //       focal_loss|label_smooth|perpgrad|reinit_head|
+                                      //       protect_from_mutation|deprioritize|alert
+        "params": {"noise_scale": 0.005},
+        "priority": 1,               // 1=highest, lower tried first
+        "previously_tried": 0,
+        "previously_won": 0
+    },
+    "outcome": {                      // filled after challenger comparison
+        "challenger_acc": 0.42,
+        "champion_acc": 0.30,
+        "won": true
+    },
+    "timestamp": 1776900000.0
+}
+```
+
+### Schema: Error Analysis
+```json
+{
+    "task": "parity",
+    "cycle": 217,
+    "n_correct": 48,
+    "n_total": 100,
+    "accuracy": 0.48,
+    "errors": {
+        "by_length": {"3": 0.95, "4": 0.80, "5": 0.60, "6": 0.30, "7": 0.10, "8": 0.00},
+        "by_output": {"E": 0.70, "O": 0.26},
+        "by_difficulty": {"easy": 0.85, "medium": 0.45, "hard": 0.10}
+    },
+    "confidence": {
+        "correct_mean": 0.88,
+        "correct_std": 0.12,
+        "wrong_mean": 0.65,
+        "wrong_std": 0.20
+    },
+    "derived": {
+        "length_correlation": -0.85,
+        "output_bias": 0.73,
+        "overconfidence_score": 0.65,
+        "mode_collapse_score": 0.15
+    },
+    "timestamp": 1776900000.0
+}
+```
+
+### Schema: Cycle Telemetry (existing, for reference)
+```json
+{
+    "task": "parity",
+    "cycle": 217,
+    "accuracy": 0.48,
+    "loss": 0.347,
+    "distill_loss": null,
+    "grad_norm": 0.1,
+    "lr": 0.001,
+    "forward_ms": 8.5,
+    "backward_ms": 12.3,
+    "eval_ms": 45.0,
+    "gpu_mem_mb": 70,
+    "param_norm": 117.0,
+    "timestamp": 1776900000.0
+}
+```
+
+All enums, all typed, all parseable. No free-form strings in data
+fields. The `mutation` field in lineage will transition from the
+current string format to structured provenance entries.
+
+---
+
+## Implementation Plan — Sequenced Commits
+
+### Commit 1: Schema migration
+**Files:** `state_db.py`
+- Add `provenance` column to lineage table (TEXT, JSON, default '{}')
+- Add `diagnostic_history` table
+- Add `error_analysis` table
+- Migration auto-runs on existing DBs
+- All backward compatible — existing code works without provenance
+
+### Commit 2: Diagnostician core
+**Files:** `diagnostician.py` (new)
+- `class Diagnostician` with methods per signal
+- `diagnose(db, task) -> list[DiagnosticEvent]`
+- `prescribe(signal, task, config, db) -> (config, provenance_entries)`
+- Uses `cycle_history` and `error_analysis` tables
+- Returns structured `DiagnosticEvent` dicts (not strings)
+- `should_prescribe()` checks diagnostic_history for past failures
+
+### Commit 3: Error analysis in specialist_trainer
+**Files:** `specialist_trainer.py`
+- During eval loop: collect per-example results with properties
+- Compute: errors_by_length, errors_by_output, confidence stats
+- Write to `error_analysis` table via StateDB
+- No change to training logic — pure observation
+
+### Commit 4: Provenance tracking in mutation
+**Files:** `coordinator.py`, `three_populations.py`
+- `mutate_config()` returns `(config, provenance)` tuple
+- Each mutated param tagged with source + metadata
+- Inherited params tagged with parent reference
+- Diagnostic bias passed as `diagnostic_bias` parameter
+- Provenance stored in lineage table
+
+### Commit 5: Wire diagnostician into orchestrator
+**Files:** `three_populations.py`
+- Before creating challenger: run `diagnostician.diagnose(db, task)`
+- If diagnostic found: bias the mutation with `diagnostic_bias`
+- After challenger comparison: log to `diagnostic_history`
+- Provenance recorded in lineage for every entry
+
+### Commit 6: Model card builder uses provenance
+**Files:** `state_db.py`
+- `build_model_card()` includes provenance from lineage
+- Walks ancestor chain, collects provenance per param
+- Returns structured model card matching the schema above
+
+### Commit 7: Firebase sync + UI
+**Files:** `state_db.py`, `docs/index.html`
+- Push model cards + diagnostic events to Firebase
+- UI renders provenance color-coded (gray/orange/blue/green)
+- UI shows diagnostic signals when active
+
+### Each commit:
+- Write code locally
+- `git add && git commit && git push`
+- `ssh H100 git pull` — next worker batch picks up changes
+- No restart needed for specialist_trainer changes
+- Restart (via PID lock) needed for three_populations changes
+- DB state always preserved
+
 ## Verification
 
 1. Check `cycle_history` for tasks with grad_norm < 0.1
 2. Verify diagnostician prescribes noise/warm_restart for those
-3. Check lineage for "dead_grad:" mutation entries
-4. Compare: did diagnostic mutations beat random GA mutations?
+3. Check lineage provenance field shows structured source data
+4. Check error_analysis table populates with per-example breakdown
+5. Check diagnostic_history tracks which prescriptions won/lost
+6. Compare: diagnostic mutation win rate vs random GA win rate
+7. Verify model card has full provenance chain from seed to current
