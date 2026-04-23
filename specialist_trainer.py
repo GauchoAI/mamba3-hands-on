@@ -539,7 +539,7 @@ if __name__ == "__main__":
 
     if args.task:
         acc = train_specialist(args.task, config, device, max_cycles=args.max_cycles,
-                              target_acc=args.target_acc, run_dir=args.run_dir)
+                              target_acc=args.target_acc)
 
         # Challenger mode: compare against champion and restore if lost
         if args.mode == "challenger" and acc is not None:
