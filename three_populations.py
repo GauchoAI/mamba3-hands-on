@@ -79,6 +79,8 @@ def spawn_worker(task, config, mode="champion", cycles=10, target_acc=0.95):
          "--target-acc", str(target_acc)]
     if cfg.get("scan_backend"):
         cmd.extend(["--scan-backend", cfg["scan_backend"]])
+    if cfg.get("device"):
+        cmd.extend(["--device", cfg["device"]])
     return subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         cwd=str(Path(__file__).parent),

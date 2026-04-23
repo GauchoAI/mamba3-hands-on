@@ -86,6 +86,12 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     If teachers is provided (list of {model, weight}), blends distillation
     loss from each teacher with the task loss each cycle.
     """
+    # Override device from config (cpu for precision, cuda for speed)
+    config_device = config.get("device")
+    if config_device:
+        device = config_device
+        print(f"  Device override: {device}", flush=True)
+
     # Set scan backend from config (jit vs triton)
     scan_backend = config.get("scan_backend")
     if scan_backend:
@@ -773,9 +779,12 @@ if __name__ == "__main__":
     parser.add_argument("--scan-backend", type=str, default=None,
                        choices=["jit", "triton"],
                        help="SSM scan backend: jit (precise) or triton (fast)")
+    parser.add_argument("--device", type=str, default=None,
+                       choices=["cuda", "cpu"],
+                       help="Training device: cpu (precise) or cuda (fast)")
     args = parser.parse_args()
 
-    device = "cuda" if torch.cuda.is_available() else ("mps" if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else "cpu")
+    device = args.device or ("cuda" if torch.cuda.is_available() else ("mps" if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else "cpu"))
     print(f"Device: {device}", flush=True)
 
     config = {
@@ -788,6 +797,8 @@ if __name__ == "__main__":
     }
     if args.scan_backend:
         config["scan_backend"] = args.scan_backend
+    if args.device:
+        config["device"] = args.device
 
     if args.task:
         acc = train_specialist(args.task, config, device, max_cycles=args.max_cycles,
