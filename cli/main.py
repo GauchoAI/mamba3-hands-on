@@ -113,6 +113,36 @@ def cmd_status(args):
         print(f"  {nid}: {backends} ({info.get('gpu_name', info.get('arch', ''))})")
 
 
+def cmd_teachers(args):
+    """Show all graduated teachers across all nodes."""
+    from server.node_agent import _firebase_get, list_nodes
+
+    three_pop = _firebase_get("mamba3/three_pop") or {}
+    teachers = three_pop.get("teachers", {})
+
+    if not teachers:
+        print("No teachers registered yet.")
+        return
+
+    print(f"{'Task':25s} {'Accuracy':>8s} {'Node':20s}")
+    print("-" * 58)
+    for task in sorted(teachers.keys()):
+        info = teachers[task]
+        acc = info.get("accuracy", 0)
+        acc_str = f"{acc:.0%}" if acc <= 1 else f"{acc:.0f}%"
+        node = info.get("node_id", "unknown")
+        print(f"{task:25s} {acc_str:>8s} {node:20s}")
+
+    print(f"\nTotal: {len(teachers)} teachers")
+
+    # Show which nodes have which checkpoints
+    nodes = list_nodes()
+    online = {nid: info for nid, info in nodes.items()
+              if isinstance(info, dict) and info.get("status") == "online"}
+    if online:
+        print(f"\nTo sync teachers to a node: mamba sync --source <node> --dest <node>")
+
+
 def _resolve_node(target_name):
     """Resolve a target name to a node dict with SSH info."""
     from server.node_agent import list_nodes
@@ -419,6 +449,9 @@ def main():
     # nodes
     p_nodes = sub.add_parser("nodes", help="List registered training nodes")
 
+    # teachers
+    p_teachers = sub.add_parser("teachers", help="List all graduated teachers across nodes")
+
     # status
     p_status = sub.add_parser("status", help="Show task training status")
     p_status.add_argument("--node", type=str, default=None)
@@ -454,6 +487,8 @@ def main():
 
     if args.command == "nodes":
         cmd_nodes(args)
+    elif args.command == "teachers":
+        cmd_teachers(args)
     elif args.command == "status":
         cmd_status(args)
     elif args.command == "submit":

@@ -166,6 +166,10 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
 
     # Load teacher models for distillation
     teacher_models = []
+    # Auto-discover: if a same-task teacher checkpoint exists, use it
+    teacher_cache_path = ckpt_dir / f"{task}_cache.pt"
+    if teacher_cache_path.exists() and not teachers:
+        teachers = [{"model": f"specialist:{task}", "weight": 1.0}]
     if teachers:
         try:
             from external_teacher import ExternalTeacher
@@ -173,7 +177,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 t_name = t_info.get("model", "")
                 t_weight = t_info.get("weight", 1.0)
                 if t_weight < 0.1:
-                    continue  # too weak, skip
+                    continue
                 try:
                     ext = ExternalTeacher(t_name, device=device)
                     teacher_models.append({"ext": ext, "weight": t_weight, "name": t_name})
@@ -685,10 +689,15 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
 
         # 7. Teachers with graduation timestamps
         teachers = _db2.get_teachers()
+        import socket as _sock
+        _node_hostname = _sock.gethostname()
         fb._put("mamba3/three_pop/teachers", {
             t: {"exp_id": info.get("exp_id", t),
                 "accuracy": round(info["accuracy"], 3),
-                "graduated_at": info.get("graduated_at", 0)}
+                "graduated_at": info.get("graduated_at", 0),
+                "node": _node_hostname,
+                "checkpoint": info.get("checkpoint_path", ""),
+                "config": info.get("config", {})}
             for t, info in teachers.items()
         })
 
