@@ -40,12 +40,23 @@ def reload_problems(problems_dir="problems"):
     _problem_registry.discover([problems_dir])
     ALL_TASKS[:] = _problem_registry.list_problems()
 
-BASE_CONFIG = {
-    "d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
-    "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1,
-    "steps_per_cycle": 200, "loss_fn": "ce", "optimizer": "adamw",
-    "use_perp": False,
-}
+import platform as _platform
+
+# Lighter base config for CPU-only nodes (Apple Silicon, etc.)
+if _platform.system() == "Darwin":
+    BASE_CONFIG = {
+        "d_model": 32, "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
+        "batch_size": 128, "lr": 1e-3, "weight_decay": 0.1,
+        "steps_per_cycle": 100, "loss_fn": "ce", "optimizer": "adamw",
+        "use_perp": False, "device": "cpu", "scan_backend": "jit",
+    }
+else:
+    BASE_CONFIG = {
+        "d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
+        "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1,
+        "steps_per_cycle": 200, "loss_fn": "ce", "optimizer": "adamw",
+        "use_perp": False,
+    }
 
 
 def _acquire_lock():
@@ -87,8 +98,14 @@ def spawn_worker(task, config, mode="champion", cycles=10, target_acc=0.95):
          "--target-acc", str(target_acc)]
     if cfg.get("scan_backend"):
         cmd.extend(["--scan-backend", cfg["scan_backend"]])
-    if cfg.get("device"):
-        cmd.extend(["--device", cfg["device"]])
+    # Device: use config value, or default to cpu on Apple Silicon (MPS has precision issues)
+    device = cfg.get("device")
+    if not device:
+        import platform
+        if platform.system() == "Darwin":
+            device = "cpu"
+    if device:
+        cmd.extend(["--device", device])
     if _problems_dir != "problems":
         cmd.extend(["--problems-dir", _problems_dir])
     return subprocess.Popen(
