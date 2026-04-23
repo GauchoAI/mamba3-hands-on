@@ -81,6 +81,15 @@ class StateDB:
                 value TEXT NOT NULL,
                 updated_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS teacher_eval_cache (
+                teacher TEXT NOT NULL,
+                task TEXT NOT NULL,
+                accuracy REAL NOT NULL,
+                n_examples INTEGER NOT NULL,
+                timestamp REAL NOT NULL,
+                PRIMARY KEY (teacher, task)
+            );
         """)
         self.conn.commit()
 
@@ -248,6 +257,46 @@ class StateDB:
             return True
         except Exception:
             return False
+
+    # ── Teacher evaluation cache (idempotent) ────────────────────
+
+    def get_teacher_score(self, teacher, task):
+        """Get cached teacher accuracy for a task. Returns None if not evaluated."""
+        cur = self.conn.execute(
+            "SELECT accuracy FROM teacher_eval_cache WHERE teacher = ? AND task = ?",
+            (teacher, task)
+        )
+        row = cur.fetchone()
+        return row[0] if row else None
+
+    def set_teacher_score(self, teacher, task, accuracy, n_examples=30):
+        """Cache teacher evaluation. Idempotent — only writes if not present."""
+        existing = self.get_teacher_score(teacher, task)
+        if existing is not None:
+            return existing  # already cached
+        self.conn.execute(
+            "INSERT OR IGNORE INTO teacher_eval_cache "
+            "(teacher, task, accuracy, n_examples, timestamp) VALUES (?, ?, ?, ?, ?)",
+            (teacher, task, accuracy, n_examples, time.time())
+        )
+        self.conn.commit()
+        return accuracy
+
+    def get_best_teachers_for_task(self, task, min_accuracy=0.0):
+        """Get all teachers that score above min_accuracy on a task, sorted best first."""
+        cur = self.conn.execute(
+            "SELECT teacher, accuracy FROM teacher_eval_cache "
+            "WHERE task = ? AND accuracy > ? ORDER BY accuracy DESC",
+            (task, min_accuracy)
+        )
+        return [(r[0], r[1]) for r in cur.fetchall()]
+
+    def get_all_teacher_scores(self):
+        """Get all cached evaluations."""
+        cur = self.conn.execute(
+            "SELECT teacher, task, accuracy FROM teacher_eval_cache ORDER BY task, accuracy DESC"
+        )
+        return [{"teacher": r[0], "task": r[1], "accuracy": r[2]} for r in cur.fetchall()]
 
     # ── Export ─────────────────────────────────────────────────────
 

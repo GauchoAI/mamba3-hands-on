@@ -311,6 +311,17 @@ def run_experiment(model_name="qwen-math-1.5b", tasks=None, n_examples=20):
     print(f"\n  Average: {avg:.0%}")
     print(f"  Model: {model_name}")
 
+    # Cache results in StateDB (idempotent)
+    try:
+        from state_db import StateDB
+        db = StateDB("three_pop/training.db")
+        for task, acc in results.items():
+            db.set_teacher_score(model_name, task, acc, n_examples)
+        print(f"  Cached {len(results)} evaluations in DB")
+        db.close()
+    except Exception as e:
+        print(f"  Cache error: {e}")
+
     teacher.stop()
     return results
 

@@ -1308,24 +1308,136 @@ Training strategies doc        ✅ Bilingual EN/ES guide
 
 ---
 
+## Entry 19: GPU Saturation — Lessons Learned the Hard Way
+
+**Date:** 2026-04-22
+
+A full day of experiments on the H100, trying to maximize GPU utilization
+and training speed. Key lessons, all learned empirically:
+
+### GPU utilization is a vanity metric
+
+4 subprocess workers showed 99% GPU utilization but each trained at
+31s/cycle — 5x slower than 1 worker at 28% GPU doing 1.8s/cycle.
+Total throughput was LOWER with 99% GPU. The tiny models (100K params)
+can't saturate an H100; the 99% was from CUDA context-switching overhead.
+
+### Threads vs subprocesses vs single-process
+
+| Approach | GPU% | Cycle time | Throughput | Result |
+|----------|------|-----------|------------|--------|
+| 1 subprocess (sequential) | 28% | 1.7s | Best per-task | 5 teachers in 15min |
+| 4 subprocesses | 99% | 31s | Worst | 2 genuine teachers in 10h |
+| 4 threads | 25% CPU | 31s | Same as subproc | GIL killed it |
+| 8 models in for-loop | 98% | 7s avg | Medium | Slow shootout |
+
+**Verdict:** Sequential is best for small models. GPU% doesn't matter.
+
+### The inherited best_acc bug
+
+When weight inheritance copies a checkpoint from task A to task B, the
+child inherited task A's `best_acc=96%`. The pool thought task B had
+96% accuracy when it actually had 30%. Caused 3 false graduations.
+
+**Fix:** Reset best_acc and cycle count when loading cross-task checkpoint.
+
+### Models must persist across rounds
+
+The original three_populations.py created a NEW model every round (10
+cycles), then threw it away. 19 rounds × 10 cycles = 190 cycles of
+training, but across 19 separate models that never accumulated learning.
+Loss was literally 0.347 from cycle 1 to cycle 190 — flat.
+
+**Fix:** Save checkpoint after each round, load it on next round.
+
+### Never delete training state
+
+Twice in one session, earned mastery (5 graduated teachers) was destroyed
+by deleting the teachers directory as a "quick fix" for code bugs. Each
+teacher represents hours of GPU time. The fix is always to fix the code,
+never to delete the data.
+
+---
+
+## Entry 20: State Management + External Teachers
+
+**Date:** 2026-04-22
+
+### SQLite state database
+
+All training state now lives in SQLite (`three_pop/training.db`):
+- `teachers` table: append-only. First graduation wins. Never deleted.
+- `lineage` table: every round, every config, every result. Permanent.
+- `experiments` table: full metadata for every champion and challenger.
+- `runtime_config` table: hot-reload settings (no process restart needed).
+
+To change training parameters without restarting:
+```sql
+sqlite3 training.db "UPDATE runtime_config SET value='20' WHERE key='cycles_per_round'"
+```
+Process reads it next round. No kill, no restart, no lost state.
+
+### Champion-challenger mutations
+
+When a task plateaus (no improvement for 3 rounds), the GA creates a
+challenger with a mutated config. The champion keeps training alongside.
+The challenger must BEAT the champion's best accuracy to take over.
+Otherwise, the champion's checkpoint is restored. No more destroying
+91% models with bad mutations.
+
+Results from first champion-challenger rounds:
+- parity: Champion 63% held vs challenger 57%
+- binary_pattern_next: Champion 92% held vs challenger 92%
+- same_different: Champion 87% held vs challenger 56%
+- odd_one_out: Champion 74% held vs challenger 17%
+
+All champions held — the mutations weren't good enough yet.
+
+### External teacher experiment: LLMs as teachers
+
+Built `external_teacher.py` with llama.cpp integration. Tested two models
+on our 15 reasoning tasks:
+
+| Task | Qwen-Math 1.5B | Mathstral 7B | Our Specialist |
+|------|----------------|-------------|----------------|
+| arithmetic_next | 0% | **87%** | 30% |
+| logic_gate | 43% | **70%** | 100% |
+| same_different | 47% | 50% | **87%** |
+| binary_pattern_next | 47% | 33% | **92%** |
+| parity | 0% | 0% | **63%** |
+| modus_ponens | 10% | 0% | **100%** |
+
+**Key finding:** Mathstral 7B beats our specialist on arithmetic_next
+(87% vs 30%) and logic_gate (70% vs our training accuracy). But it
+can't do parity at all (0%). LLMs understand math sequences but not
+bit counting.
+
+**Design:** External teachers become a mutation option. The GA can try
+`"teacher_model": "mathstral-7b"` or `"specialist:same_different"`.
+Teacher evaluation results are cached — idempotent (compute once, reuse).
+Only teachers that surpass our current best for a task are eligible.
+
+### Current state
+
+- 5 teachers graduated: run_length_next, geometric_next, logic_gate,
+  logic_chain, modus_ponens
+- binary_pattern_next at 94% — 1% from graduating
+- same_different at 87%, mirror_detection at 78%
+- Parity stuck at 63% across all configs tried
+- llama.cpp + Mathstral 7B running on H100 alongside training
+- SQLite DB protects all state, Firebase syncs for UI
+
+---
+
 ## Open threads
 
-- **Tournament running.** 83 experiments, 60 running, d=64 L=3 PerpGrad
-  dominates. Meta-evolution (momentum, focal, temperature, lineage
-  dropout) deployed.
-- **same_different mastered (92%).** First non-binary task completed.
-  binary_pattern_next at 88%, closing in.
-- **modus_ponens at 71%.** Stage 5 logic via pure transfer. Remarkable.
-- **SAM not wired.** Code exists but needs 2-pass training loop in worker.
-- **Tinygrad.** numpy fixed, needs testing with 3-layer models.
-- **Cortex development.** Language training not started. Progressive model
-  ready. Tatoeba data proven. The kernel is getting smart enough to
-  deserve a voice.
-- **Few-shot eval.** The real test: give 2-3 examples of a novel task,
-  see if the model infers the rule.
-- **Boss tasks.** 18 unseen task types waiting to test generalization.
-- **Formal math.** SymPy-generated algebraic traces.
-- **Ratatouille UI.** Web playground working. Need to download latest
-  winning checkpoint for local play.
-- **The compilation problem.** How the cortex learns to invoke the kernel.
-  Becoming less abstract as the kernel demonstrates real capability.
+- **binary_pattern_next at 94%.** One percent from graduation. Next round?
+- **Mathstral as teacher.** 87% on arithmetic_next — integrate as mutation.
+- **Teacher evaluation cache.** Benchmark all available teachers per task,
+  cache results, only offer teachers that beat current specialist.
+- **Parity ceiling at 63%.** No config, no mutation, no LLM can break it.
+  The old curriculum run reached 80% in 130K steps. Specialists plateau
+  at 63% in 100 cycles. Multi-task training may be required.
+- **Distillation.** 5 teachers ready. Student can start learning.
+- **Cortex development.** Still waiting.
+- **Boss tasks.** 18 unseen tasks for generalization eval.
