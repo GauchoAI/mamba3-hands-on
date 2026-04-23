@@ -1,0 +1,6 @@
+name: run_length_next
+type: generator
+generator: generators.level0_patterns:gen_run_length_next
+target_accuracy: 0.95
+tags: [pattern, sequence, level0]
+description: "Predict the next value in a run-length sequence"

@@ -1,0 +1,6 @@
+name: binary_pattern_next
+type: generator
+generator: generators.level0_patterns:gen_binary_pattern_next
+target_accuracy: 0.95
+tags: [binary, pattern, sequence, level0]
+description: "Predict next bit in repeating binary pattern"

@@ -1,0 +1,127 @@
+# Mutation Registry — data-driven GA mutations
+# Each mutation specifies: what config key to mutate, how, and with what probability.
+# The GA amplifies probabilities during plateau (amp = 1 + plateau_severity).
+# Probabilities are capped at their max_probability value.
+
+mutations:
+  - name: scan_backend
+    key: scan_backend
+    type: categorical
+    probability: 0.3
+    max_probability: 1.0
+    values: [jit, triton]
+    default: triton
+
+  - name: device
+    key: device
+    type: categorical
+    probability: 0.15
+    max_probability: 1.0
+    values: [cuda, cpu]
+    default: cuda
+    implies:
+      cpu: {scan_backend: jit}
+
+  - name: lr
+    key: lr
+    type: continuous_log
+    probability: 0.5
+    max_probability: 0.95
+    min: 1.0e-5
+    max: 1.0e-2
+    spread: 0.3
+    respect_diagnostic: true
+
+  - name: batch_size
+    key: batch_size
+    type: categorical
+    probability: 0.3
+    max_probability: 0.9
+    values: [64, 128, 256, 512, 1024]
+    respect_diagnostic: true
+
+  - name: d_model
+    key: d_model
+    type: discrete_nearby
+    probability: 0.2
+    max_probability: 0.8
+    values: [32, 48, 64, 96, 128, 192, 256]
+    nearby_delta: 16
+    nearby_extra: [0, 32]
+    nearby_probability: 0.7
+    min_value: 16
+    side_effects:
+      - constrain: headdim
+        rule: min_of_self
+
+  - name: n_kernel_layers
+    key: n_kernel_layers
+    type: discrete_nearby
+    probability: 0.2
+    max_probability: 0.8
+    values: [1, 2, 3, 4, 6, 8]
+    nearby_offsets: [-1, 0, 1, 2]
+    nearby_probability: 0.7
+    min_value: 1
+
+  - name: weight_decay
+    key: weight_decay
+    type: categorical
+    probability: 0.2
+    max_probability: 0.8
+    values: [0.0, 0.01, 0.05, 0.1, 0.2, 0.5]
+
+  - name: d_state
+    key: d_state
+    type: categorical
+    probability: 0.15
+    max_probability: 0.7
+    values: [8, 16, 32]
+
+  - name: backend
+    key: backend
+    type: toggle
+    probability: 0.1
+    max_probability: 0.5
+    values: [pytorch, tinygrad]
+
+  - name: loss_fn
+    key: loss_fn
+    type: categorical
+    probability: 0.15
+    max_probability: 0.8
+    values: [stable_ce, ce, focal, label_smooth]
+
+  - name: optimizer
+    key: optimizer
+    type: categorical
+    probability: 0.1
+    max_probability: 0.6
+    values: [adamw, lion]
+
+  - name: warm_restarts
+    key: warm_restarts
+    type: boolean
+    probability: 0.1
+    max_probability: 0.5
+    default: false
+
+  - name: noise_scale
+    key: noise_scale
+    type: categorical
+    probability: 0.1
+    max_probability: 0.5
+    values: [0.0, 0.0005, 0.001, 0.002, 0.005]
+
+  - name: use_perp
+    key: use_perp
+    type: boolean
+    probability: 0.1
+    max_probability: 0.5
+
+  - name: teacher_model
+    key: teacher_model
+    type: teacher
+    probability: 0.15
+    max_probability: 0.7
+    # Special: queries DB for qualified teachers, gated by current best accuracy

@@ -1,0 +1,6 @@
+name: parity
+type: generator
+generator: generators.level0_patterns:gen_parity
+target_accuracy: 0.95
+tags: [binary, counting, level0]
+description: "Count 1s in binary sequence, even=S odd=D"

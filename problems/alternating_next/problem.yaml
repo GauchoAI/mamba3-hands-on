@@ -1,0 +1,6 @@
+name: alternating_next
+type: generator
+generator: generators.level0_patterns:gen_alternating_next
+target_accuracy: 0.95
+tags: [pattern, sequence, level0]
+description: "Predict next term in two interleaved sequences"

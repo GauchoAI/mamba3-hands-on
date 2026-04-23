@@ -1,0 +1,6 @@
+name: same_different
+type: generator
+generator: generators.level0_patterns:gen_same_different
+target_accuracy: 0.95
+tags: [comparison, level0]
+description: "Compare two numbers, S if equal D if different"

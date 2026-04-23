@@ -45,6 +45,9 @@ class StateDB:
                 best_round INTEGER DEFAULT 0,
                 total_cycles INTEGER DEFAULT 0,
                 diagnostic_signals TEXT DEFAULT '[]',
+                confidence_score REAL DEFAULT 0,
+                confidence_mean REAL DEFAULT 0,
+                confidence_std REAL DEFAULT 0,
                 updated_at REAL
             );
 
@@ -151,6 +154,15 @@ class StateDB:
             self.conn.execute("ALTER TABLE lineage ADD COLUMN provenance TEXT DEFAULT '{}'")
             self.conn.commit()
 
+        # Confidence score columns on task_status
+        try:
+            self.conn.execute("ALTER TABLE task_status ADD COLUMN confidence_score REAL DEFAULT 0")
+            self.conn.execute("ALTER TABLE task_status ADD COLUMN confidence_mean REAL DEFAULT 0")
+            self.conn.execute("ALTER TABLE task_status ADD COLUMN confidence_std REAL DEFAULT 0")
+            self.conn.commit()
+        except Exception:
+            pass  # columns already exist
+
         # Populate task_status from existing data if empty
         count = self.conn.execute("SELECT COUNT(*) FROM task_status").fetchone()[0]
         if count == 0:
@@ -241,7 +253,9 @@ class StateDB:
 
     def update_task_status(self, task, status=None, config=None,
                            best_accuracy=None, best_round=None,
-                           total_cycles=None, diagnostic_signals=None):
+                           total_cycles=None, diagnostic_signals=None,
+                           confidence_score=None, confidence_mean=None,
+                           confidence_std=None):
         """Update task status. Creates if not exists."""
         # Read existing
         cur = self.conn.execute("SELECT * FROM task_status WHERE task=?", (task,))
@@ -252,7 +266,8 @@ class StateDB:
             row = dict(zip(cols, existing))
             self.conn.execute(
                 "UPDATE task_status SET status=?, current_config=?, best_accuracy=?, "
-                "best_round=?, total_cycles=?, diagnostic_signals=?, updated_at=? "
+                "best_round=?, total_cycles=?, diagnostic_signals=?, "
+                "confidence_score=?, confidence_mean=?, confidence_std=?, updated_at=? "
                 "WHERE task=?",
                 (status or row["status"],
                  json.dumps(config) if config else row["current_config"],
@@ -260,17 +275,22 @@ class StateDB:
                  best_round if best_round is not None else row["best_round"],
                  total_cycles if total_cycles is not None else row["total_cycles"],
                  json.dumps(diagnostic_signals) if diagnostic_signals is not None else row["diagnostic_signals"],
+                 confidence_score if confidence_score is not None else row.get("confidence_score", 0),
+                 confidence_mean if confidence_mean is not None else row.get("confidence_mean", 0),
+                 confidence_std if confidence_std is not None else row.get("confidence_std", 0),
                  time.time(), task)
             )
         else:
             self.conn.execute(
                 "INSERT INTO task_status (task, status, current_config, best_accuracy, "
-                "best_round, total_cycles, diagnostic_signals, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "best_round, total_cycles, diagnostic_signals, "
+                "confidence_score, confidence_mean, confidence_std, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (task, status or "waiting",
                  json.dumps(config) if config else "{}",
                  best_accuracy or 0, best_round or 0, total_cycles or 0,
                  json.dumps(diagnostic_signals) if diagnostic_signals else "[]",
+                 confidence_score or 0, confidence_mean or 0, confidence_std or 0,
                  time.time())
             )
         self.conn.commit()
@@ -322,6 +342,26 @@ class StateDB:
                 d["diagnostic_signals"] = []
             results.append(d)
         return results
+
+    def get_confidence_score(self, task, last_n=20, k=1.0):
+        """Compute confidence-based score: mean - k * std.
+
+        Uses the last N cycle_history entries for this task.
+        Returns (score, mean, std, n_samples).
+        A model with mean=65% std=3% scores 62% (reliable).
+        A model with mean=50% std=12% scores 38% (noisy).
+        """
+        recent = self.get_cycle_history(task, last_n=last_n)
+        accs = [r["accuracy"] for r in recent if r.get("accuracy") is not None]
+        if len(accs) < 3:
+            return 0.0, 0.0, 0.0, len(accs)
+
+        mean = sum(accs) / len(accs)
+        variance = sum((a - mean) ** 2 for a in accs) / len(accs)
+        std = variance ** 0.5
+        score = mean - k * std
+
+        return round(max(score, 0), 4), round(mean, 4), round(std, 4), len(accs)
 
     # ── Active runs (real-time, overwritten each cycle) ────────────
 

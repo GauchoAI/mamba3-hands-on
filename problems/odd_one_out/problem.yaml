@@ -1,0 +1,6 @@
+name: odd_one_out
+type: generator
+generator: generators.level0_patterns:gen_odd_one_out
+target_accuracy: 0.95
+tags: [comparison, pattern, level0]
+description: "Find the element that differs from the majority"

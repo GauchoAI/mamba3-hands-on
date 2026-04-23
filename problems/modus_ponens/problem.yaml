@@ -1,0 +1,6 @@
+name: modus_ponens
+type: generator
+generator: generators.level0_patterns:gen_modus_ponens
+target_accuracy: 0.95
+tags: [logic, level0]
+description: "Apply modus ponens logical inference"

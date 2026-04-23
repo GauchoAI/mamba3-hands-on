@@ -1,0 +1,6 @@
+name: geometric_next
+type: generator
+generator: generators.level0_patterns:gen_geometric_next
+target_accuracy: 0.95
+tags: [arithmetic, sequence, level0]
+description: "Predict next term in geometric progression"

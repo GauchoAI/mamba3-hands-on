@@ -1,0 +1,6 @@
+name: logic_gate
+type: generator
+generator: generators.level0_patterns:gen_logic_gate
+target_accuracy: 0.95
+tags: [logic, binary, level0]
+description: "Evaluate AND/OR/XOR/NOT logic gates"

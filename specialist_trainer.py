@@ -31,34 +31,17 @@ import torch.nn.functional as F
 
 
 GENERATORS = {}  # task_name → generator function
+_REGISTRY = None  # ProblemRegistry singleton
 
-def load_generators():
-    """Load all task generators."""
-    global GENERATORS
-    from generators.level0_patterns import (
-        gen_parity, gen_binary_pattern_next, gen_same_different,
-        gen_odd_one_out, gen_sequence_completion, gen_pattern_period,
-        gen_run_length_next, gen_mirror_detection, gen_repeat_count,
-        gen_arithmetic_next, gen_geometric_next, gen_alternating_next,
-        gen_logic_gate, gen_logic_chain, gen_modus_ponens,
-    )
-    GENERATORS = {
-        "parity": gen_parity,
-        "binary_pattern_next": gen_binary_pattern_next,
-        "same_different": gen_same_different,
-        "odd_one_out": gen_odd_one_out,
-        "sequence_completion": gen_sequence_completion,
-        "pattern_period": gen_pattern_period,
-        "run_length_next": gen_run_length_next,
-        "mirror_detection": gen_mirror_detection,
-        "repeat_count": gen_repeat_count,
-        "arithmetic_next": gen_arithmetic_next,
-        "geometric_next": gen_geometric_next,
-        "alternating_next": gen_alternating_next,
-        "logic_gate": gen_logic_gate,
-        "logic_chain": gen_logic_chain,
-        "modus_ponens": gen_modus_ponens,
-    }
+def load_generators(problems_dir="problems"):
+    """Load task generators via ProblemRegistry (YAML-driven discovery)."""
+    global GENERATORS, _REGISTRY
+    from registry.problem_registry import ProblemRegistry
+    _REGISTRY = ProblemRegistry()
+    _REGISTRY.discover([problems_dir])
+    # Populate GENERATORS dict for backward compatibility
+    for name in _REGISTRY.list_problems():
+        GENERATORS[name] = _REGISTRY.get_generator(name)
 
 
 def get_loss_fn(name):
@@ -78,7 +61,7 @@ def get_loss_fn(name):
 
 
 def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
-                     on_cycle=None, teachers=None):
+                     on_cycle=None, teachers=None, problems_dir="problems"):
     """Train one specialist on one task. Returns when mastered or max cycles.
 
     Resumes from checkpoints/specialists/{task}.pt if it exists (same task only).
@@ -99,7 +82,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         ssm_triton.FORCE_BACKEND = scan_backend
         print(f"  Scan backend: {scan_backend}", flush=True)
 
-    load_generators()
+    load_generators(problems_dir)
     gen_fn = GENERATORS.get(task)
     if not gen_fn:
         print(f"Unknown task: {task}")
@@ -421,18 +404,31 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
             config=config, role="worker",
             checkpoint_path=ckpt_str,
         )
-        # Only update task_status if our accuracy is actually better
+        # Use confidence-based scoring: mean - k*std, not raw best
         existing = _db.get_task_status(task)
         existing_best = existing["best_accuracy"] if existing else 0
-        if best_acc >= target_acc:
+        conf_score, conf_mean, conf_std, conf_n = _db.get_confidence_score(task)
+        # Mastery requires BOTH a spike above target AND reliable score above 90%
+        if best_acc >= target_acc and conf_score >= 0.90:
             _db.update_task_status(task, "mastered", config, best_acc,
-                                   total_cycles=cycle)
+                                   total_cycles=cycle,
+                                   confidence_score=conf_score,
+                                   confidence_mean=conf_mean,
+                                   confidence_std=conf_std)
             _db.register_teacher(task, best_acc, cycle, config,
                                 checkpoint_path=ckpt_str)
             print(f"  Worker registered teacher: {task} ({best_acc:.0%})", flush=True)
         elif best_acc > existing_best:
             _db.update_task_status(task, "training", config, best_acc,
-                                   total_cycles=cycle)
+                                   total_cycles=cycle,
+                                   confidence_score=conf_score,
+                                   confidence_mean=conf_mean,
+                                   confidence_std=conf_std)
+        else:
+            # Even if we didn't beat the best, update confidence (it may have improved)
+            _db.update_task_status(task, confidence_score=conf_score,
+                                   confidence_mean=conf_mean,
+                                   confidence_std=conf_std)
         # else: don't overwrite — DB has a better result than us
         _db.clear_active_run(task)
         _db.close()
@@ -782,6 +778,8 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default=None,
                        choices=["cuda", "cpu"],
                        help="Training device: cpu (precise) or cuda (fast)")
+    parser.add_argument("--problems-dir", type=str, default="problems",
+                       help="Directory containing problem YAML manifests")
     args = parser.parse_args()
 
     device = args.device or ("cuda" if torch.cuda.is_available() else ("mps" if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else "cpu"))
@@ -802,7 +800,8 @@ if __name__ == "__main__":
 
     if args.task:
         acc = train_specialist(args.task, config, device, max_cycles=args.max_cycles,
-                              target_acc=args.target_acc)
+                              target_acc=args.target_acc,
+                              problems_dir=args.problems_dir)
 
         # Challenger mode: compare against champion and restore if lost
         if args.mode == "challenger" and acc is not None:
@@ -813,16 +812,36 @@ if __name__ == "__main__":
                 status = _db.get_task_status(args.task)
                 champion_best = status["best_accuracy"] if status else 0
 
+                # Champion confidence from STORED value (set before challenger ran)
+                # This avoids mixing champion + challenger cycles in the computation
+                champ_conf = status.get("confidence_score", 0) if status else 0
+                champ_mean = status.get("confidence_mean", 0) if status else 0
+                champ_std = status.get("confidence_std", 0) if status else 0
+
+                # Challenger confidence from its own recent cycles (last N = max_cycles)
+                chall_conf, chall_mean, chall_std, chall_n = _db.get_confidence_score(
+                    args.task, last_n=args.max_cycles, k=1.0)
+
                 ckpt_path = Path("checkpoints/specialists") / f"{args.task}.pt"
                 champion_ckpt = Path("checkpoints/specialists") / f"{args.task}_champion.pt"
 
-                if acc > champion_best:
-                    print(f"  ✓ Challenger wins: {acc:.0%} > {champion_best:.0%}", flush=True)
+                # Challenger wins if its confidence score beats the champion's stored score
+                # For early runs or zero champion confidence, fall back to raw accuracy
+                if chall_n >= 3 and champ_conf > 0:
+                    wins = chall_conf > champ_conf
+                    print(f"  Confidence comparison: challenger {chall_conf:.2%} (μ={chall_mean:.0%} σ={chall_std:.2f} n={chall_n}) "
+                          f"vs champion {champ_conf:.2%} (μ={champ_mean:.0%} σ={champ_std:.2f})", flush=True)
+                else:
+                    wins = acc > champion_best
+                    print(f"  Raw comparison (insufficient history): challenger {acc:.0%} vs champion {champion_best:.0%}", flush=True)
+
+                if wins:
+                    print(f"  ✓ Challenger wins!", flush=True)
                     _db.update_task_status(args.task, "training", config, acc)
                     _db.log_diagnostic(args.task, 0, "challenger_result",
                                        "win", config, acc, champion_best, True)
                 else:
-                    print(f"  ✗ Champion holds: {champion_best:.0%} >= {acc:.0%}", flush=True)
+                    print(f"  ✗ Champion holds!", flush=True)
                     if champion_ckpt.exists():
                         shutil.copy2(champion_ckpt, ckpt_path)
                     _db.log_diagnostic(args.task, 0, "challenger_result",

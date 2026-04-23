@@ -1,0 +1,6 @@
+name: logic_chain
+type: generator
+generator: generators.level0_patterns:gen_logic_chain
+target_accuracy: 0.95
+tags: [logic, binary, level0]
+description: "Evaluate chained logic operations"

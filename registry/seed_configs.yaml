@@ -1,0 +1,120 @@
+# Seed configurations — initial population for the GA
+# Each config is a complete starting point for a specialist worker.
+
+configs:
+  - name: baseline
+    d_model: 64
+    d_state: 16
+    headdim: 16
+    n_kernel_layers: 1
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 0.1
+    steps_per_cycle: 200
+
+  - name: small_fast
+    d_model: 32
+    d_state: 16
+    headdim: 16
+    n_kernel_layers: 1
+    batch_size: 512
+    lr: 1.0e-3
+    weight_decay: 0.0
+    steps_per_cycle: 200
+
+  - name: two_layer
+    d_model: 64
+    d_state: 16
+    headdim: 16
+    n_kernel_layers: 2
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 0.1
+    steps_per_cycle: 200
+
+  - name: wide
+    d_model: 128
+    d_state: 16
+    headdim: 16
+    n_kernel_layers: 1
+    batch_size: 128
+    lr: 5.0e-4
+    weight_decay: 0.1
+    steps_per_cycle: 200
+
+  - name: small_state
+    d_model: 64
+    d_state: 8
+    headdim: 8
+    n_kernel_layers: 1
+    batch_size: 512
+    lr: 1.0e-3
+    weight_decay: 0.0
+    steps_per_cycle: 200
+
+  - name: medium
+    d_model: 48
+    d_state: 16
+    headdim: 16
+    n_kernel_layers: 1
+    batch_size: 256
+    lr: 2.0e-3
+    weight_decay: 0.05
+    steps_per_cycle: 200
+
+  - name: tinygrad
+    d_model: 64
+    d_state: 16
+    headdim: 16
+    n_kernel_layers: 1
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 0.1
+    steps_per_cycle: 200
+    backend: tinygrad
+
+  - name: label_smooth
+    d_model: 64
+    d_state: 16
+    headdim: 16
+    n_kernel_layers: 1
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 0.1
+    steps_per_cycle: 200
+    loss_fn: label_smooth
+
+  - name: lion
+    d_model: 64
+    d_state: 16
+    headdim: 16
+    n_kernel_layers: 1
+    batch_size: 256
+    lr: 3.0e-4
+    weight_decay: 0.1
+    steps_per_cycle: 200
+    optimizer: lion
+
+  - name: focal_restarts
+    d_model: 64
+    d_state: 16
+    headdim: 16
+    n_kernel_layers: 1
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 0.1
+    steps_per_cycle: 200
+    loss_fn: focal
+    warm_restarts: true
+
+  - name: perp_noise
+    d_model: 64
+    d_state: 16
+    headdim: 16
+    n_kernel_layers: 1
+    batch_size: 256
+    lr: 1.0e-3
+    weight_decay: 0.0
+    steps_per_cycle: 200
+    use_perp: true
+    noise_scale: 0.001

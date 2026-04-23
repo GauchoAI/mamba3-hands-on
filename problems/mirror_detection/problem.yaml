@@ -1,0 +1,6 @@
+name: mirror_detection
+type: generator
+generator: generators.level0_patterns:gen_mirror_detection
+target_accuracy: 0.95
+tags: [pattern, comparison, level0]
+description: "Detect if sequence is a palindrome, M or N"

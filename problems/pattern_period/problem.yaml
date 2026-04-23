@@ -1,0 +1,6 @@
+name: pattern_period
+type: generator
+generator: generators.level0_patterns:gen_pattern_period
+target_accuracy: 0.95
+tags: [pattern, counting, level0]
+description: "Identify the period length of a repeating pattern"

@@ -204,233 +204,27 @@ def select_parent(running_results, evo_state, generation,
 
 # ── Genetic config mutation ─────────────────────────────────────────
 
+# ── Mutation Registry (data-driven) ────────────────────────────────
+from registry.mutation_registry import MutationRegistry
+
+_mutation_registry = MutationRegistry()
+_mutation_registry.load(["registry/mutations.yaml"], seed_path="registry/seed_configs.yaml")
+
+SEED_CONFIGS = _mutation_registry.get_seed_configs()
+
+
 def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0,
                   diagnostic_bias=None):
     """Create a child config by mutating a parent.
 
-    When plateau_severity > 0, mutations become more aggressive.
-    When diagnostic_bias is provided, applies the diagnostic prescription
-    FIRST, then applies random GA mutations on top. Provenance tracks
-    which changes came from the diagnostic vs the GA.
+    Delegates to MutationRegistry.apply() — mutations are defined in
+    registry/mutations.yaml, not hardcoded here. Node capabilities
+    auto-extend the registry.
 
     Returns (child_config, provenance) where provenance is a dict
     mapping param names to their source.
     """
-    child = parent_config.copy()
-    provenance = {}
-
-    # Mark all inherited params
-    for k, v in child.items():
-        if k not in ("task",):
-            provenance[k] = {"source": "inherited", "value": v}
-
-    # Ensure all keys exist with defaults
-    child.setdefault("loss_fn", "stable_ce")
-    child.setdefault("backend", "pytorch")
-    child.setdefault("steps_per_cycle", 200)
-
-    # Apply diagnostic bias first (if provided)
-    if diagnostic_bias:
-        rx_params = diagnostic_bias.get("params", {})
-        signal = diagnostic_bias.get("signal", "unknown")
-        rx_type = diagnostic_bias.get("type", "unknown")
-        for k, v in rx_params.items():
-            if k == "lr_multiply":
-                child["lr"] = child.get("lr", 1e-3) * v
-                provenance["lr"] = {"source": "diagnostic", "signal": signal,
-                                    "prescription": rx_type, "value": child["lr"]}
-            elif k == "batch_size_multiply":
-                child["batch_size"] = min(4096, int(child.get("batch_size", 256) * v))
-                provenance["batch_size"] = {"source": "diagnostic", "signal": signal,
-                                            "prescription": rx_type, "value": child["batch_size"]}
-            elif k == "weight_decay_add":
-                child["weight_decay"] = child.get("weight_decay", 0.0) + v
-                provenance["weight_decay"] = {"source": "diagnostic", "signal": signal,
-                                              "prescription": rx_type, "value": child["weight_decay"]}
-            else:
-                child[k] = v
-                provenance[k] = {"source": "diagnostic", "signal": signal,
-                                 "prescription": rx_type, "value": v}
-
-    # Plateau amplifier: multiply mutation probabilities
-    amp = 1.0 + plateau_severity  # 1.0 normal, 2.0-4.0 when stuck
-
-    _sev = round(plateau_severity, 1)
-
-    # Mutate scan backend — JIT is precise, Triton is fast
-    if random.random() < 0.3:
-        current = child.get("scan_backend", "triton")
-        child["scan_backend"] = "jit" if current == "triton" else "triton"
-        provenance["scan_backend"] = {"source": "ga_mutation", "severity": _sev,
-                                      "value": child["scan_backend"]}
-
-    # Mutate device — CPU is mathematically correct, CUDA is fast but imprecise
-    # CPU: 100% parity in 400 steps (80s). CUDA: 62% parity in 60K steps (stuck).
-    if random.random() < 0.15:
-        current = child.get("device", "cuda")
-        child["device"] = "cpu" if current == "cuda" else "cuda"
-        if child["device"] == "cpu":
-            child["scan_backend"] = "jit"  # CPU always uses JIT
-        provenance["device"] = {"source": "ga_mutation", "severity": _sev,
-                                "value": child["device"]}
-
-    # Mutate learning rate (log-scale)
-    if random.random() < min(0.5 * amp, 0.95):
-        if "lr" not in provenance or provenance["lr"]["source"] == "inherited":
-            spread = mutation_strength * amp
-            factor = 2 ** (random.gauss(0, spread))
-            child["lr"] = max(1e-5, min(1e-2, child["lr"] * factor))
-            provenance["lr"] = {"source": "ga_mutation", "severity": _sev, "value": child["lr"]}
-
-    # Mutate batch size
-    if random.random() < min(0.3 * amp, 0.9):
-        if "batch_size" not in provenance or provenance["batch_size"]["source"] == "inherited":
-            child["batch_size"] = random.choice([64, 128, 256, 512, 1024])
-            provenance["batch_size"] = {"source": "ga_mutation", "severity": _sev, "value": child["batch_size"]}
-
-    # Mutate d_model
-    if random.random() < min(0.2 * amp, 0.8):
-        # Dynamic: explore around parent's width
-        parent_d = child.get("d_model", 64)
-        nearby_d = [max(16, parent_d - 16), parent_d, parent_d + 16, parent_d + 32]
-        wild_d = [32, 48, 64, 96, 128, 192, 256]
-        choices_d = nearby_d if random.random() < 0.7 else wild_d
-        child["d_model"] = random.choice(choices_d)
-        child["headdim"] = min(child["headdim"], child["d_model"])
-
-    # Mutate layers
-    if random.random() < min(0.2 * amp, 0.8):
-        # Dynamic: explore around the parent's depth ± 1-2, plus random
-        parent_layers = child.get("n_kernel_layers", 1)
-        nearby = [max(1, parent_layers - 1), parent_layers, parent_layers + 1, parent_layers + 2]
-        wild = [1, 2, 3, 4, 6, 8]  # occasional wild jump
-        choices = nearby if random.random() < 0.7 else wild
-        child["n_kernel_layers"] = random.choice(choices)
-
-    # Mutate weight decay
-    if random.random() < min(0.2 * amp, 0.8):
-        child["weight_decay"] = random.choice([0.0, 0.01, 0.05, 0.1, 0.2, 0.5])
-
-    # Mutate d_state
-    if random.random() < min(0.15 * amp, 0.7):
-        child["d_state"] = random.choice([8, 16, 32])
-
-    # Flip backend
-    if random.random() < min(0.1 * amp, 0.5):
-        child["backend"] = "tinygrad" if child.get("backend") != "tinygrad" else "pytorch"
-
-    # Mutate loss function — when stuck, try everything
-    if random.random() < min(0.15 * amp, 0.8):
-        child["loss_fn"] = random.choice(["stable_ce", "ce", "focal", "label_smooth"])
-
-    # Mutate optimizer — when stuck, try Lion
-    if random.random() < min(0.1 * amp, 0.6):
-        child["optimizer"] = random.choice(["adamw", "lion"])
-
-    # Mutate warm restarts — when stuck, shake things up
-    if random.random() < min(0.1 * amp, 0.5):
-        child["warm_restarts"] = not child.get("warm_restarts", False)
-
-    # Mutate noise injection — when stuck, add noise
-    if random.random() < min(0.1 * amp, 0.5):
-        child["noise_scale"] = random.choice([0.0, 0.0005, 0.001, 0.002, 0.005])
-
-    # Mutate PerpGrad
-    if random.random() < min(0.1 * amp, 0.5):
-        child["use_perp"] = not child.get("use_perp", child.get("weight_decay", 0) == 0)
-
-    # Mutate teacher_model — only teachers that beat current baseline
-    if random.random() < min(0.15 * amp, 0.7):
-        task = child.get("task", "")
-        if task:
-            # Get current best accuracy for this task from DB
-            try:
-                from state_db import StateDB
-                _tdb = StateDB("three_pop/training.db")
-                task_status = _tdb.get_task_status(task)
-                current_best = task_status["best_accuracy"] if task_status else 0
-
-                # Only offer teachers that beat our current best (from cache)
-                qualified = _tdb.get_best_teachers_for_task(task, min_accuracy=current_best)
-                _tdb.close()
-
-                if qualified:
-                    if child.get("teacher_model"):
-                        if random.random() < 0.5:
-                            child.pop("teacher_model", None)
-                        else:
-                            child["teacher_model"] = random.choice(qualified)[0]
-                    else:
-                        child["teacher_model"] = random.choice(qualified)[0]
-                else:
-                    # No teacher can help — remove if present
-                    child.pop("teacher_model", None)
-            except Exception:
-                pass
-
-    # When severely stuck: radical mutation — completely random config
-    if plateau_severity >= 2.0 and random.random() < 0.3:
-        child = random.choice(SEED_CONFIGS).copy()
-        # Dynamic: explore around the parent's depth ± 1-2, plus random
-        parent_layers = child.get("n_kernel_layers", 1)
-        nearby = [max(1, parent_layers - 1), parent_layers, parent_layers + 1, parent_layers + 2]
-        wild = [1, 2, 3, 4, 6, 8]  # occasional wild jump
-        choices = nearby if random.random() < 0.7 else wild
-        child["n_kernel_layers"] = random.choice(choices)
-        child["loss_fn"] = random.choice(["stable_ce", "ce", "focal", "label_smooth"])
-        child["optimizer"] = random.choice(["adamw", "lion"])
-        child["warm_restarts"] = random.choice([True, False])
-        child["noise_scale"] = random.choice([0.0, 0.001, 0.005])
-
-    # Auto-tag any remaining GA mutations not yet tracked
-    for k, v in child.items():
-        if k in ("task", "steps_per_cycle", "backend"):
-            continue
-        if k in provenance and provenance[k]["source"] != "inherited":
-            continue  # already tagged by diagnostic or explicit GA above
-        parent_v = parent_config.get(k)
-        if v != parent_v and parent_v is not None:
-            provenance[k] = {"source": "ga_mutation", "severity": _sev, "value": v}
-
-    return child, provenance
-
-
-# ── Default seed configs ────────────────────────────────────────────
-
-SEED_CONFIGS = [
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200},
-    {"d_model": 32,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 512, "lr": 1e-3, "weight_decay": 0.0, "steps_per_cycle": 200},
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 2,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200},
-    {"d_model": 128, "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 128, "lr": 5e-4, "weight_decay": 0.1, "steps_per_cycle": 200},
-    {"d_model": 64,  "d_state": 8,  "headdim": 8,  "n_kernel_layers": 1,
-     "batch_size": 512, "lr": 1e-3, "weight_decay": 0.0, "steps_per_cycle": 200},
-    {"d_model": 48,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 2e-3, "weight_decay": 0.05, "steps_per_cycle": 200},
-    # tinygrad experiment
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200,
-     "backend": "tinygrad"},
-    # Label smoothing — directly targets overconfidence/DAME bug
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200,
-     "loss_fn": "label_smooth"},
-    # Lion optimizer — faster convergence on small models
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 3e-4, "weight_decay": 0.1, "steps_per_cycle": 200,
-     "optimizer": "lion"},
-    # Warm restarts + focal loss — escape minima + focus on hard examples
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.1, "steps_per_cycle": 200,
-     "loss_fn": "focal", "warm_restarts": True},
-    # Noise injection + PerpGrad — shake + prevent NLM
-    {"d_model": 64,  "d_state": 16, "headdim": 16, "n_kernel_layers": 1,
-     "batch_size": 256, "lr": 1e-3, "weight_decay": 0.0, "steps_per_cycle": 200,
-     "use_perp": True, "noise_scale": 0.001},
-]
+    return _mutation_registry.apply(parent_config, plateau_severity, diagnostic_bias)
 
 
 # ── Worker management ───────────────────────────────────────────────

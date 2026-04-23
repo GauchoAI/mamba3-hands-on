@@ -1,0 +1,6 @@
+name: arithmetic_next
+type: generator
+generator: generators.level0_patterns:gen_arithmetic_next
+target_accuracy: 0.95
+tags: [arithmetic, sequence, level0]
+description: "Predict next term in arithmetic progression"

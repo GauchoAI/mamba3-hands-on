@@ -1,0 +1,6 @@
+name: repeat_count
+type: generator
+generator: generators.level0_patterns:gen_repeat_count
+target_accuracy: 0.95
+tags: [counting, level0]
+description: "Count occurrences of a target element"

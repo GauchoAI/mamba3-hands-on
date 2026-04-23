@@ -22,15 +22,12 @@ from pathlib import Path
 
 from coordinator import mutate_config, get_gpu_usage
 from state_db import StateDB
+from registry.problem_registry import ProblemRegistry
 
-
-ALL_TASKS = [
-    "parity", "binary_pattern_next", "same_different", "odd_one_out",
-    "sequence_completion", "pattern_period", "run_length_next",
-    "mirror_detection", "repeat_count", "arithmetic_next",
-    "geometric_next", "alternating_next", "logic_gate", "logic_chain",
-    "modus_ponens",
-]
+# Discover tasks from YAML manifests — no hardcoded list
+_problem_registry = ProblemRegistry()
+_problem_registry.discover(["problems/"])
+ALL_TASKS = _problem_registry.list_problems()
 
 BASE_CONFIG = {
     "d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
