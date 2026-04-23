@@ -1728,3 +1728,114 @@ burning through gradient descent, 400 cycles of zero progress, one
 glorious spike to 9.3, and then mastery. The model taught itself to
 fly a 2,048-knob cockpit with no manual, no labels, starting from
 random noise. That's simultaneously ridiculous and magnificent.
+
+---
+
+## Entry 23: Triton Kernel Bug — CUDA Cannot Learn What CPU Can
+
+**Date:** 2026-04-23
+
+### The experiment
+
+`test_cpu_vs_cuda.py` — same model, same seed, same config, same code.
+Only difference: device.
+
+```
+Exact same config (d=32, dS=16, hd=16), seed=0, 400 steps
+
+  cpu:  acc_all=100.0%  acc_last=99.7%  loss=0.0014  time=84.8s
+  cuda: acc_all= 54.4%  acc_last=51.0%  loss=0.6816  time=1.4s
+```
+
+**CPU: 100% accuracy. CUDA: 54% (random). Same model.**
+
+### What this means
+
+The SSM scan has two implementations:
+1. `ssm_scan_jit` — Python/PyTorch loop, runs on CPU/MPS. Mathematically
+   correct. The parity experiment works perfectly on this.
+2. `ssm_scan_triton` — Triton GPU kernel, runs on CUDA. Fast but
+   numerically different enough that the model CANNOT learn parity.
+
+The dispatch logic in `ssm_triton.py`:
+```python
+def ssm_scan(inp, decay, C, x, z, D):
+    if inp.is_cuda and HAS_TRITON:
+        return ssm_scan_triton(inp, decay, C, x, z, D)  # ← broken
+    return ssm_scan_jit(inp, decay, C, x, z, D)         # ← works
+```
+
+Every task that trained on the H100 used the Triton kernel. Every task
+that struggled for thousands of cycles was fighting BOTH the byte
+encoding AND a numerically imprecise scan kernel.
+
+### The 7 teachers that graduated
+
+They graduated DESPITE the Triton kernel, not because of it. The tasks
+that converge easily (modus_ponens in 5 cycles, logic_gate in 8 cycles)
+are simple enough that numerical imprecision doesn't matter. The tasks
+stuck at 62-93% (parity, alternating_next) might be stuck BECAUSE of it.
+
+### Register sizes tested
+
+```
+test_register_sizes.py — all on CUDA (Triton kernel):
+
+config                          params  acc_all  acc_last  registers
+tiny d=16 dS=2 hd=4              2,122    51.7%    48.4%         64
+tiny d=16 dS=4 hd=4              2,210    53.3%    51.3%        128
+small d=32 dS=8 hd=8             7,794    53.2%    50.9%        512
+orig d=32 dS=16 hd=16            8,074    54.4%    51.0%      1,024
+current d=64 dS=16              29,138    53.0%    46.2%      2,048
+```
+
+ALL configurations fail on CUDA. Every register size. The issue is not
+the model architecture — it's the kernel implementation.
+
+### Possible causes
+
+The Triton kernel (`ssm_triton_kernel.py`) performs the scan:
+```
+h[t] = decay[t] * h[t-1] + inp[t]
+```
+
+In GPU registers using fp32. Possible sources of numerical divergence:
+- **Operation ordering**: the JIT computes sequentially in Python;
+  Triton may reorder or fuse operations differently
+- **Reduction precision**: the output projection `sum(h * C)` may
+  accumulate differently on GPU
+- **The silu gate**: `y = (y + D*x) * z * sigmoid(z)` is fused in
+  Triton but separate in JIT. Fused ops may lose precision.
+- **Decay precision**: `exp(A * dt)` computed once vs recomputed.
+  Small differences in decay compound over the sequence length.
+
+### The fix: backend as a mutation
+
+Rather than choosing one or the other globally, make the scan backend
+a mutation option in the GA config:
+
+```python
+{"scan_backend": "triton"}   # fast, possibly imprecise
+{"scan_backend": "jit"}      # slower, mathematically correct
+```
+
+The GA can try both. For parity, JIT wins (100% vs 54%). For tasks
+where precision matters less (logic_gate, modus_ponens), Triton is
+fine and 60x faster.
+
+This is added to the config space alongside d_model, layers, lr, etc.
+The champion-challenger system protects: if JIT produces better
+accuracy, it wins. The lineage records which backend was used.
+
+### The deeper lesson
+
+We spent hours optimizing the training loop — bigger batches, more
+workers, smarter mutations. The real bottleneck was a numerical bug
+in the innermost computation. The SSM's state update — the one
+operation that must be EXACT for state tracking to work — was
+approximate on CUDA.
+
+This is why observability matters. Without the CPU vs CUDA comparison,
+we would have blamed the byte encoding, the model size, the learning
+rate. The actual cause was invisible at the training level — it's in
+the kernel implementation, below the abstraction layer.
