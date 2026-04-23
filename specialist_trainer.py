@@ -424,45 +424,135 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         _db.clear_active_run(task)
         _db.close()
 
-        # Push lineage node + state to Firebase (worker does it, not orchestrator)
+        # Push RICH data to Firebase (worker does it, not orchestrator)
         import firebase_push as fb
-        node_id = f"{task}_c{cycle}_w"
-        cfg_summary = {
-            "d": config.get("d_model", 64),
-            "L": config.get("n_kernel_layers", 3),
-            "lr": config.get("lr", 1e-3),
-            "wd": config.get("weight_decay", 0.1),
-            "opt": config.get("optimizer", "adamw"),
-            "loss": config.get("loss_fn", "ce"),
-        }
-        if config.get("use_perp"): cfg_summary["perp"] = True
-        if config.get("warm_restarts"): cfg_summary["wr"] = True
-        if config.get("teacher_model"): cfg_summary["teacher"] = config["teacher_model"]
+        _db2 = StateDB("three_pop/training.db")
 
-        fb._put(f"mamba3/snapshot/lineage/{node_id}", {
+        # 1. Full per-round lineage entry (what UI needs for genetic tree)
+        node_id = f"{task}_c{cycle}_w"
+        cfg_full = {
+            "d_model": config.get("d_model", 64),
+            "n_kernel_layers": config.get("n_kernel_layers", 3),
+            "d_state": config.get("d_state", 16),
+            "lr": config.get("lr", 1e-3),
+            "weight_decay": config.get("weight_decay", 0.1),
+            "optimizer": config.get("optimizer", "adamw"),
+            "loss_fn": config.get("loss_fn", "ce"),
+            "batch_size": config.get("batch_size", 256),
+        }
+        if config.get("use_perp"): cfg_full["use_perp"] = True
+        if config.get("warm_restarts"): cfg_full["warm_restarts"] = True
+        if config.get("teacher_model"): cfg_full["teacher_model"] = config["teacher_model"]
+        if config.get("noise_scale"): cfg_full["noise_scale"] = config["noise_scale"]
+
+        # Get previous round's config for diff
+        lineage = _db2.get_lineage(task)
+        prev_config = None
+        if len(lineage) >= 2:
+            prev_config = lineage[-2].get("config", {})
+
+        # Compute mutation diff
+        mutation_diff = {}
+        if prev_config:
+            for k in set(list(cfg_full.keys()) + list(prev_config.keys())):
+                old = prev_config.get(k)
+                new = cfg_full.get(k)
+                if old != new:
+                    mutation_diff[k] = {"from": old, "to": new}
+
+        fb._put(f"mamba3/lineage/{node_id}", {
             "task": task,
             "round": cycle,
             "acc": round(best_acc, 3),
             "best": round(max(best_acc, existing_best), 3),
             "role": "worker",
             "won": best_acc > existing_best,
-            "config": cfg_summary,
-            "teachers": [],
+            "config": cfg_full,
+            "parent_id": f"{task}_c{lineage[-2]['round']}_{lineage[-2].get('role','w')[0]}" if len(lineage) >= 2 else "seed",
+            "mutation_diff": mutation_diff,
+            "teachers": config.get("teachers", []),
+            "n_params": n_params,
+            "timestamp": time.time(),
         })
 
-        # Push task status to Firebase
-        fb._put(f"mamba3/state/task_status/{task}", {
+        # 2. Task status with full detail
+        status_data = {
             "status": "mastered" if best_acc >= target_acc else "training",
             "best": round(max(best_acc, existing_best), 3),
             "cycles": cycle,
+            "config": cfg_full,
+            "best_config": cfg_full if best_acc >= existing_best else None,
+        }
+        # Add diagnostic signals if any
+        try:
+            from diagnostician import Diagnostician
+            diag = Diagnostician(_db2)
+            signals = diag.diagnose(task)
+            if signals:
+                status_data["diagnostic_signals"] = [
+                    {"signal": s["signal"], "evidence": s["evidence"]}
+                    for s in signals
+                ]
+        except Exception:
+            pass
+        fb._put(f"mamba3/state/task_status/{task}", status_data)
+
+        # 3. Per-task lineage summary (for mutation timeline)
+        model_card = _db2.build_model_card(task)
+        challengers = [e for e in lineage if e.get("role") == "challenger"]
+        champions = [e for e in lineage if e.get("role") == "champion"]
+        improvements = sum(1 for i, e in enumerate(lineage)
+                          if i > 0 and e["accuracy"] > lineage[i-1].get("best_accuracy", 0))
+        fb._put(f"mamba3/state/lineage/{task}", {
+            "rounds": len(lineage),
+            "best": round(max(best_acc, existing_best), 3),
+            "latest_config": cfg_full,
+            "latest_round": cycle,
+            "n_champions": len(champions),
+            "n_challengers": len(challengers),
+            "n_improvements": improvements,
+            "teachers": model_card.get("teachers", []),
+            "challengers": [{
+                "round": c["round"],
+                "acc": round(c["accuracy"], 3),
+                "config": c.get("config", {}),
+                "mutation": c.get("mutation", ""),
+                "won": c["accuracy"] > c.get("best_accuracy", 0),
+            } for c in challengers[-10:]],  # last 10 challengers
         })
 
-        # Push teacher matrix entries (if any cached scores exist)
-        _db2 = StateDB("three_pop/training.db")
+        # 4. Diagnostic history
+        diag_stats = _db2.get_diagnostic_stats(task)
+        if diag_stats:
+            fb._put(f"mamba3/state/diagnostics/{task}", diag_stats)
+
+        # 5. Teacher matrix
         teacher_scores = _db2.get_best_teachers_for_task(task)
         if teacher_scores:
             for t_name, t_score in teacher_scores:
                 fb._put(f"mamba3/state/teacher_matrix/{t_name}/{task}", round(t_score, 3))
+
+        # 6. Events (rich types the UI wants)
+        if best_acc > existing_best:
+            fb._put(f"mamba3/events/{node_id}_improved", {
+                "type": "improvement",
+                "task": task,
+                "exp_id": node_id,
+                "from_acc": round(existing_best, 3),
+                "to_acc": round(best_acc, 3),
+                "config": cfg_full,
+                "timestamp": time.time(),
+            })
+        if best_acc >= target_acc:
+            fb._put(f"mamba3/events/{node_id}_mastery", {
+                "type": "mastery",
+                "task": task,
+                "exp_id": node_id,
+                "acc": round(best_acc, 3),
+                "cycles": cycle,
+                "timestamp": time.time(),
+            })
+
         _db2.close()
     except Exception:
         pass
