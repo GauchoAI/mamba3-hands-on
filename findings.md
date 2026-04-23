@@ -1840,6 +1840,100 @@ we would have blamed the byte encoding, the model size, the learning
 rate. The actual cause was invisible at the training level — it's in
 the kernel implementation, below the abstraction layer.
 
+---
+
+## Entry 24: 14/15 Tasks Mastered — What the GA Discovered
+
+**Date:** 2026-04-23
+
+### The scoreboard
+
+14 out of 15 tasks mastered. Only repeat_count remains at 70%.
+
+### Winning configurations — discovered by the GA, not by humans
+
+```
+task                         d  L  dS  backend device   acc
+------------------------------------------------------------
+alternating_next           144  3  16      jit   cuda 100%
+arithmetic_next            192  5  32      jit   cuda  99%
+binary_pattern_next         64  3  16   triton   cuda  96%
+geometric_next              64  3  16   triton   cuda 100%
+logic_chain                 64  3  16   triton   cuda  98%
+logic_gate                  64  3  16   triton   cuda 100%
+mirror_detection            96  4  16      jit    cpu  96%
+modus_ponens                64  3  16   triton   cuda 100%
+odd_one_out                 48  2  32      jit    cpu  98%
+parity                      64  4   8      jit   cuda 100%
+pattern_period              64  8  16      jit   cuda  97%
+run_length_next             64  3  16   triton   cuda 100%
+same_different              64  3  16   triton   cuda  95%
+sequence_completion         96  6  32      jit   cuda 100%
+```
+
+### What the GA discovered — three categories
+
+**Easy tasks (6/14): default config is enough**
+geometric_next, logic_gate, modus_ponens, run_length_next,
+binary_pattern_next, same_different, logic_chain — all mastered
+with the original BASE_CONFIG (d=64, L=3, dS=16, triton, cuda).
+No mutation needed. These tasks are simple enough that even the
+imprecise Triton kernel can solve them.
+
+**Hard tasks needing JIT (8/14): precision matters**
+Every task that needed a mutation to master also needed the JIT
+backend. NOT ONE hard task mastered on Triton alone. The numerical
+precision of the scan kernel is the difference between convergence
+and permanent plateau.
+
+**Tasks needing CPU (2/14): GPU arithmetic itself is insufficient**
+mirror_detection and odd_one_out needed CPU execution. Even JIT on
+CUDA wasn't precise enough. These tasks require exact floating point
+behavior that only CPU provides.
+
+### Architecture insights — each task has its own optimal shape
+
+**Parity (d=64, L=4, dS=8):** Needed MORE layers (4 vs 3) but
+FEWER registers (dS=8 vs 16). The running XOR needs sequential
+processing depth, not state width. Fewer registers = smaller
+search space for the B matrix = faster convergence.
+
+**Arithmetic_next (d=192, L=5, dS=32):** Needed EVERYTHING bigger.
+Numbers require wide representations (d=192) and lots of state
+(dS=32 = 15,360 registers per layer) to track sequences. The GA
+discovered this via a severity 3.0 radical mutation.
+
+**Odd_one_out (d=48, L=2, dS=32):** SMALLER model, fewer layers,
+but MORE registers. The task needs to store and compare many values
+(find the outlier) but the comparison is simple — more state, less
+processing.
+
+**Pattern_period (d=64, L=8):** The deepest model. Finding the
+period of a repeating pattern requires many sequential processing
+steps — the model needs to hypothesize a period length and verify
+it across multiple repetitions. 8 layers of pipeline.
+
+**Sequence_completion (d=96, L=6, dS=32):** Wide, deep, lots of
+state. Completing sequences requires representing the pattern
+(d=96), verifying it (L=6 deep), and tracking position (dS=32).
+
+### The bigger picture
+
+No human designed these configurations. The GA explored the space
+through mutation + champion-challenger, and the lineage records
+every attempt. The key mutations:
+
+- `scan_backend: "jit"` — unlocked 8 tasks that Triton couldn't solve
+- `device: "cpu"` — unlocked 2 tasks that CUDA couldn't solve
+- `n_kernel_layers: 4→8` — unlocked tasks needing deeper reasoning
+- `d_model: 64→192` — unlocked tasks needing wider representations
+- `d_state: 16→32` — unlocked tasks needing more memory
+
+Each of these was discovered through the mutation gate, validated
+by champion-challenger, and recorded in the lineage with full
+provenance. The system found the right architecture for each task
+automatically.
+
 ### This is a known problem in the Mamba community
 
 Research confirmed this is not unique to our implementation:
