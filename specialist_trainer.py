@@ -387,10 +387,17 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
             print(f"  ★ [{task}] MASTERED at {acc:.0%} in {cycle} cycles!", flush=True)
             break
 
-    # Clear active run
+    # Log lineage + clear active run (worker writes its own lineage
+    # so no data is lost if orchestrator dies mid-batch)
     try:
         from state_db import StateDB
         _db = StateDB("three_pop/training.db")
+        _db.log_lineage(
+            task=task, round_num=cycle,  # use cycle as round for worker-logged entries
+            accuracy=best_acc, best_accuracy=best_acc,
+            config=config, role="worker",
+            checkpoint_path=str(Path("checkpoints/specialists") / f"{task}.pt"),
+        )
         _db.clear_active_run(task)
         _db.close()
     except Exception:
