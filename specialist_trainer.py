@@ -253,17 +253,26 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         model.eval()
         correct = 0
         total = 0
+        _errors_by_len = {}   # input_len → [correct_count, total_count]
+        _errors_by_out = {}   # output_char → [correct_count, total_count]
+        _conf_correct = []
+        _conf_wrong = []
         with torch.no_grad():
             for _ in range(100):
                 ex = gen_fn()
                 tokens, sep = tok.encode_curriculum(ex)
                 out_bytes = list(ex["output"].encode("utf-8"))
+                inp_len = len(ex.get("input", "").split(","))
+                out_char = ex["output"][0] if ex["output"] else "?"
                 t = torch.tensor([tokens], dtype=torch.long, device=device)
                 logits = model(t)
                 ok = True
+                conf = 0.0
                 for j, expected in enumerate(out_bytes):
                     p = sep + j
                     if p < logits.shape[1]:
+                        probs = torch.softmax(logits[0, p], dim=-1)
+                        conf = probs[expected].item()
                         if logits[0, p].argmax().item() != expected:
                             ok = False
                             break
@@ -271,10 +280,51 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                         ok = False
                 if ok:
                     correct += 1
+                    _conf_correct.append(conf)
+                else:
+                    _conf_wrong.append(conf)
                 total += 1
+                # Track by length
+                if inp_len not in _errors_by_len:
+                    _errors_by_len[inp_len] = [0, 0]
+                _errors_by_len[inp_len][1] += 1
+                if ok:
+                    _errors_by_len[inp_len][0] += 1
+                # Track by output
+                if out_char not in _errors_by_out:
+                    _errors_by_out[out_char] = [0, 0]
+                _errors_by_out[out_char][1] += 1
+                if ok:
+                    _errors_by_out[out_char][0] += 1
         acc = correct / max(total, 1)
         best_acc = max(best_acc, acc)
         model.train()
+
+        # Compute error analysis
+        _ebl = {str(k): round(v[0]/max(v[1],1), 3) for k, v in sorted(_errors_by_len.items())}
+        _ebo = {k: round(v[0]/max(v[1],1), 3) for k, v in _errors_by_out.items()}
+        _acc_correct = sum(_conf_correct) / max(len(_conf_correct), 1)
+        _acc_wrong = sum(_conf_wrong) / max(len(_conf_wrong), 1)
+        # Length correlation: negative means fails on longer inputs
+        if len(_ebl) >= 3:
+            lens = sorted(_ebl.keys(), key=int)
+            accs_by_len = [_ebl[l] for l in lens]
+            n = len(accs_by_len)
+            xs = list(range(n))
+            mx, my = sum(xs)/n, sum(accs_by_len)/n
+            cov = sum((x-mx)*(y-my) for x,y in zip(xs, accs_by_len))
+            vx = sum((x-mx)**2 for x in xs)
+            vy = sum((y-my)**2 for y in accs_by_len)
+            _len_corr = cov / max((vx*vy)**0.5, 1e-8)
+        else:
+            _len_corr = 0.0
+        # Output bias: how skewed predictions are
+        if _ebo:
+            vals = list(_ebo.values())
+            _out_bias = max(vals) - min(vals) if len(vals) > 1 else 0.0
+        else:
+            _out_bias = 0.0
+        _overconf = _acc_wrong  # high confidence when wrong = bad
 
         # Compute param norm for health monitoring
         _param_norm = sum(p.data.norm().item() ** 2 for p in model.parameters()) ** 0.5
@@ -296,6 +346,13 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                          lr=_current_lr, forward_ms=elapsed * 1000 / max(steps_per_cycle, 1),
                          eval_ms=_eval_time * 1000, gpu_mem_mb=_gpu_mem,
                          param_norm=_param_norm)
+            _db.log_error_analysis(task, cycle, correct, total, acc,
+                                   errors_by_length=_ebl, errors_by_output=_ebo,
+                                   avg_confidence_correct=round(_acc_correct, 4),
+                                   avg_confidence_wrong=round(_overconf, 4),
+                                   length_correlation=round(_len_corr, 4),
+                                   output_bias=round(_out_bias, 4),
+                                   overconfidence=round(_overconf, 4))
             _db.close()
         except Exception:
             pass
