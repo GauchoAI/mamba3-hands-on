@@ -312,21 +312,26 @@ class StateDB:
     def get_lineage(self, task):
         cur = self.conn.execute(
             "SELECT round, accuracy, best_accuracy, config, mutation, role, "
-            "timestamp, teachers "
+            "timestamp, teachers, provenance "
             "FROM lineage WHERE task = ? ORDER BY round, id",
             (task,)
         )
         results = []
         for r in cur.fetchall():
             teachers_raw = r[7] if r[7] else "[]"
+            prov_raw = r[8] if r[8] else "{}"
             try:
                 teachers = json.loads(teachers_raw)
             except (json.JSONDecodeError, TypeError):
                 teachers = []
+            try:
+                provenance = json.loads(prov_raw)
+            except (json.JSONDecodeError, TypeError):
+                provenance = {}
             results.append({
                 "round": r[0], "accuracy": r[1], "best_accuracy": r[2],
                 "config": json.loads(r[3]), "mutation": r[4], "role": r[5],
-                "timestamp": r[6], "teachers": teachers,
+                "timestamp": r[6], "teachers": teachers, "provenance": provenance,
             })
         return results
 
@@ -374,11 +379,27 @@ class StateDB:
         teachers.sort(key=lambda t: -t["weight"])
 
         best_cfg, best_acc = self.get_best_config(task)
+
+        # Collect provenance from the latest champion entry
+        latest_provenance = {}
+        for entry in reversed(lineage):
+            if entry.get("role") == "champion" and entry.get("provenance"):
+                latest_provenance = entry["provenance"]
+                break
+
+        # Diagnostic stats for this task
+        diag_stats = self.get_diagnostic_stats(task)
+
         return {
             "task": task,
             "config": best_cfg or {},
             "best_accuracy": best_acc,
             "teachers": teachers,
+            "provenance": latest_provenance,
+            "diagnostics": {
+                "stats": diag_stats,
+            },
+            "total_rounds": len(lineage),
         }
 
     def get_all_lineage(self):
