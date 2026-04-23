@@ -32,6 +32,11 @@ import torch.nn.functional as F
 
 GENERATORS = {}  # task_name → generator function
 _REGISTRY = None  # ProblemRegistry singleton
+_DB_PATH = "three_pop/training.db"  # configurable via --db-path CLI arg
+
+def _set_db_path(path):
+    global _DB_PATH
+    _DB_PATH = path
 
 def load_generators(problems_dir="problems"):
     """Load task generators via ProblemRegistry (YAML-driven discovery)."""
@@ -93,7 +98,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     _problem_spec = _REGISTRY.problems.get(task) if _REGISTRY else None
     try:
         from state_db import StateDB as _StageDB
-        _sdb = _StageDB("three_pop/training.db")
+        _sdb = _StageDB(_DB_PATH)
         _current_stage = _sdb.get_current_stage(task)
         _sdb.close()
     except Exception:
@@ -180,6 +185,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     if teacher_models:
         print(f"  Distilling from {len(teacher_models)} teachers", flush=True)
 
+    _hit_target = False
     for cycle in range(cycle_start + 1, cycle_start + max_cycles + 1):
         t0 = time.time()
         model.train()
@@ -350,7 +356,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         # Log to state DB (real-time + per-cycle history)
         try:
             from state_db import StateDB
-            _db = StateDB("three_pop/training.db")
+            _db = StateDB(_DB_PATH)
             _db.update_active_run(task, cycle, accuracy=acc, best_accuracy=best_acc,
                                   loss=cycle_loss, config=config)
             _db.log_cycle(task, cycle, accuracy=acc, loss=cycle_loss,
@@ -410,7 +416,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 _current_stage += 1
                 try:
                     from state_db import StateDB as _StageDB2
-                    _sdb2 = _StageDB2("three_pop/training.db")
+                    _sdb2 = _StageDB2(_DB_PATH)
                     _sdb2.advance_stage(task, _current_stage)
                     _sdb2.close()
                 except Exception:
@@ -420,16 +426,18 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 if new_stage:
                     print(f"  ★ [{task}] Stage {_current_stage}: {new_stage.params} (advance at {new_stage.advance_at:.0%})", flush=True)
 
-        # Mastered!
-        if acc >= target_acc:
-            print(f"  ★ [{task}] MASTERED at {acc:.0%} in {cycle} cycles!", flush=True)
-            break
+        # Note: do NOT break early on target_acc hit.
+        # The champion must run ALL cycles to build confidence history.
+        # Early break meant only 3 good cycles + 7 old bad ones = low confidence.
+        if acc >= target_acc and not _hit_target:
+            _hit_target = True
+            print(f"  ★ [{task}] Hit target at {acc:.0%} in {cycle} cycles! (continuing for confidence)", flush=True)
 
     # Log lineage + update task_status + clear active run
     # Worker writes its own state so nothing is lost if orchestrator dies
     try:
         from state_db import StateDB
-        _db = StateDB("three_pop/training.db")
+        _db = StateDB(_DB_PATH)
         ckpt_str = str(Path("checkpoints/specialists") / f"{task}.pt")
         _db.log_lineage(
             task=task, round_num=cycle,
@@ -442,8 +450,10 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         # contamination from challenger cycles mixed into cycle_history
         existing = _db.get_task_status(task)
         existing_best = existing["best_accuracy"] if existing else 0
+        # Use exactly the number of cycles THIS run completed
+        cycles_this_run = cycle - cycle_start
         conf_score, conf_mean, conf_std, conf_n = _db.get_confidence_score(
-            task, last_n=max(max_cycles, 5), k=1.0)
+            task, last_n=max(cycles_this_run, 5), k=1.0)
         # Mastery requires BOTH a spike above target AND reliable score above 90%
         if best_acc >= target_acc and conf_score >= 0.90:
             _db.update_task_status(task, "mastered", config, best_acc,
@@ -471,7 +481,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
 
         # Push RICH data to Firebase (worker does it, not orchestrator)
         import firebase_push as fb
-        _db2 = StateDB("three_pop/training.db")
+        _db2 = StateDB(_DB_PATH)
 
         # 1. Full per-round lineage entry (what UI needs for genetic tree)
         node_id = f"{task}_c{cycle}_w"
@@ -816,7 +826,12 @@ if __name__ == "__main__":
                        help="Training device: cpu (precise) or cuda (fast)")
     parser.add_argument("--problems-dir", type=str, default="problems",
                        help="Directory containing problem YAML manifests")
+    parser.add_argument("--db-path", type=str, default="three_pop/training.db",
+                       help="Path to StateDB SQLite file")
     args = parser.parse_args()
+
+    # Set module-level DB path before any usage
+    _set_db_path(args.db_path)
 
     device = args.device or ("cuda" if torch.cuda.is_available() else ("mps" if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else "cpu"))
     print(f"Device: {device}", flush=True)
@@ -844,7 +859,7 @@ if __name__ == "__main__":
             try:
                 from state_db import StateDB
                 import shutil
-                _db = StateDB("three_pop/training.db")
+                _db = StateDB(_DB_PATH)
                 status = _db.get_task_status(args.task)
                 champion_best = status["best_accuracy"] if status else 0
 

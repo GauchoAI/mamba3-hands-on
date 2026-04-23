@@ -26,6 +26,11 @@ from registry.problem_registry import ProblemRegistry
 
 # Discover tasks from YAML manifests — no hardcoded list
 _problems_dir = "problems"  # default, overridden by --problems-dir CLI arg
+_db_path = "three_pop/training.db"  # default, derived from --dir CLI arg
+
+def _set_db_path(path):
+    global _db_path
+    _db_path = path
 _problem_registry = ProblemRegistry()
 _problem_registry.discover([_problems_dir])
 ALL_TASKS = _problem_registry.list_problems()
@@ -108,6 +113,8 @@ def spawn_worker(task, config, mode="champion", cycles=10, target_acc=0.95):
         cmd.extend(["--device", device])
     if _problems_dir != "problems":
         cmd.extend(["--problems-dir", _problems_dir])
+    if _db_path != "three_pop/training.db":
+        cmd.extend(["--db-path", _db_path])
     return subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         cwd=str(Path(__file__).parent),
@@ -362,5 +369,8 @@ if __name__ == "__main__":
     # Re-discover problems if custom dir specified
     if args.problems_dir != "problems":
         reload_problems(args.problems_dir)
+
+    # Set DB path so workers use the same DB as orchestrator
+    _set_db_path(str(Path(args.dir) / "training.db"))
 
     run(args)
