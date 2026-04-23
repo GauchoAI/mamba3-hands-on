@@ -618,6 +618,162 @@ When a prescription fails 3 times:
 
 ---
 
+---
+
+## Config Provenance — Every Parameter Has a Source
+
+### The rule
+The diagnostic system does NOT bypass the mutation gate. It biases
+the mutation, making it more likely to pick the right change. The
+mutation still goes through champion-challenger. The lineage still
+records everything.
+
+But to analyze whether diagnostics actually help, we need to tag
+EVERY config parameter with its provenance: who decided this value
+and why.
+
+### Data model: config_provenance
+
+Each config in a model card carries provenance per parameter:
+
+```python
+{
+    "config": {
+        "d_model": 64,
+        "n_kernel_layers": 3,
+        "lr": 0.002,
+        "noise_scale": 0.005,
+        "teacher_model": "mathstral-7b",
+        "weight_decay": 0.0,
+    },
+    "provenance": {
+        "d_model": {"source": "inherited", "from": "exp_r5", "round": 5},
+        "n_kernel_layers": {"source": "inherited", "from": "exp_r5", "round": 5},
+        "lr": {"source": "ga_mutation", "severity": 2.0, "round": 7},
+        "noise_scale": {"source": "diagnostic", "signal": "dead_grad", "round": 8},
+        "teacher_model": {"source": "ga_mutation", "severity": 1.5, "round": 9},
+        "weight_decay": {"source": "diagnostic", "signal": "overconfidence", "round": 6},
+    }
+}
+```
+
+### Source types
+- **`seed`** — from BASE_CONFIG at round 0
+- **`inherited`** — unchanged from parent (no mutation touched it)
+- **`ga_mutation`** — the GA's random exploration changed this param.
+  Records: severity, round.
+- **`diagnostic`** — the diagnostic system biased the mutation toward
+  this value. Records: signal name, round, prescription.
+- **`teacher_inherited`** — came with a teacher through breeding
+
+### How it flows through generations
+
+When a child is created:
+1. Start with parent's config + provenance (all params marked "inherited")
+2. For each param the GA mutation changes:
+   - If the change was biased by a diagnostic → source="diagnostic"
+   - If the change was random GA → source="ga_mutation"
+3. Unchanged params keep their parent's provenance
+4. The child's provenance accumulates history from all ancestors
+
+### Storage
+
+Add `provenance` column to lineage table:
+```sql
+ALTER TABLE lineage ADD COLUMN provenance TEXT DEFAULT '{}';
+```
+
+The `provenance` field is a JSON dict mapping param names to source info.
+
+### Implementation in mutate_config
+
+```python
+def mutate_config(parent_config, ..., diagnostic_bias=None):
+    child = parent_config.copy()
+    provenance = parent_provenance.copy()  # inherit parent's provenance
+
+    # Mark all params as inherited initially
+    for k in provenance:
+        if provenance[k]["source"] != "seed":
+            provenance[k] = {"source": "inherited",
+                             "from": parent_exp_id,
+                             "round": current_round}
+
+    # Apply GA mutations (random)
+    if random.random() < 0.5 * amp:
+        child["lr"] = new_lr
+        provenance["lr"] = {"source": "ga_mutation",
+                            "severity": severity,
+                            "round": current_round}
+
+    # Apply diagnostic bias (targeted)
+    if diagnostic_bias:
+        signal, prescription = diagnostic_bias
+        for param, value in prescription.items():
+            child[param] = value
+            provenance[param] = {"source": "diagnostic",
+                                 "signal": signal,
+                                 "round": current_round,
+                                 "prescription": str(prescription)}
+
+    return child, provenance
+```
+
+### Analysis: did diagnostics help?
+
+Query the DB:
+```sql
+-- How often did diagnostic-sourced params lead to improvements?
+SELECT
+    p.signal,
+    COUNT(*) as times_tried,
+    SUM(CASE WHEN l.accuracy > l.best_accuracy THEN 1 ELSE 0 END) as wins
+FROM lineage l
+JOIN json_each(l.provenance) p
+WHERE p.value LIKE '%diagnostic%'
+GROUP BY p.signal
+```
+
+This answers: "dead_grad diagnostic was prescribed 5 times,
+led to improvement 2 times (40% win rate)."
+
+Compare to GA mutations:
+```sql
+-- How often did random GA mutations lead to improvements?
+SELECT
+    COUNT(*) as times_tried,
+    SUM(CASE WHEN accuracy > best_accuracy THEN 1 ELSE 0 END) as wins
+FROM lineage
+WHERE mutation LIKE '%ga_mutation%'
+```
+
+If diagnostics have a higher win rate than random GA, the system
+is working. If not, the diagnostics need recalibration.
+
+### Dashboard implication
+
+The mutation timeline can color-code entries by source:
+- Gray: inherited (no change)
+- Orange: GA mutation (random exploration)
+- Blue: diagnostic prescription (targeted intervention)
+- Green: teacher-inherited (from breeding)
+
+A model card on the UI would show:
+```
+arithmetic_next — round 12
+  d_model: 64        ← inherited from seed
+  layers: 3          ← inherited from seed
+  lr: 0.002          ← GA mutation (round 7, severity 2.0)
+  noise: 0.005       ← diagnostic: dead_grad (round 8)
+  teacher: mathstral  ← GA mutation (round 9, severity 1.5)
+  wd: 0.0            ← diagnostic: overconfidence (round 6)
+```
+
+This makes the lineage READABLE. Not just "what config" but
+"why this config" — every decision traceable to its origin.
+
+---
+
 ## Architecture
 
 ```
