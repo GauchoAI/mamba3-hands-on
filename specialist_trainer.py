@@ -519,6 +519,10 @@ if __name__ == "__main__":
     parser.add_argument("--steps-per-cycle", type=int, default=200)
     parser.add_argument("--max-cycles", type=int, default=500)
     parser.add_argument("--target-acc", type=float, default=0.95)
+    parser.add_argument("--mode", type=str, default="champion",
+                       choices=["champion", "challenger"],
+                       help="champion: normal training. challenger: compare against champion best.")
+    parser.add_argument("--run-dir", type=str, default=None)
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else ("mps" if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else "cpu")
@@ -534,7 +538,34 @@ if __name__ == "__main__":
     }
 
     if args.task:
-        train_specialist(args.task, config, device, max_cycles=args.max_cycles,
-                        target_acc=args.target_acc)
+        acc = train_specialist(args.task, config, device, max_cycles=args.max_cycles,
+                              target_acc=args.target_acc, run_dir=args.run_dir)
+
+        # Challenger mode: compare against champion and restore if lost
+        if args.mode == "challenger" and acc is not None:
+            try:
+                from state_db import StateDB
+                import shutil
+                _db = StateDB("three_pop/training.db")
+                status = _db.get_task_status(args.task)
+                champion_best = status["best_accuracy"] if status else 0
+
+                ckpt_path = Path("checkpoints/specialists") / f"{args.task}.pt"
+                champion_ckpt = Path("checkpoints/specialists") / f"{args.task}_champion.pt"
+
+                if acc > champion_best:
+                    print(f"  ✓ Challenger wins: {acc:.0%} > {champion_best:.0%}", flush=True)
+                    _db.update_task_status(args.task, "training", config, acc)
+                    _db.log_diagnostic(args.task, 0, "challenger_result",
+                                       "win", config, acc, champion_best, True)
+                else:
+                    print(f"  ✗ Champion holds: {champion_best:.0%} >= {acc:.0%}", flush=True)
+                    if champion_ckpt.exists():
+                        shutil.copy2(champion_ckpt, ckpt_path)
+                    _db.log_diagnostic(args.task, 0, "challenger_result",
+                                       "loss", config, acc, champion_best, False)
+                _db.close()
+            except Exception as e:
+                print(f"  Challenger comparison error: {e}", flush=True)
     else:
         train_all_specialists(config, device)
