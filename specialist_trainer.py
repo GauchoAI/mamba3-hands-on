@@ -387,17 +387,27 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
             print(f"  ★ [{task}] MASTERED at {acc:.0%} in {cycle} cycles!", flush=True)
             break
 
-    # Log lineage + clear active run (worker writes its own lineage
-    # so no data is lost if orchestrator dies mid-batch)
+    # Log lineage + update task_status + clear active run
+    # Worker writes its own state so nothing is lost if orchestrator dies
     try:
         from state_db import StateDB
         _db = StateDB("three_pop/training.db")
+        ckpt_str = str(Path("checkpoints/specialists") / f"{task}.pt")
         _db.log_lineage(
-            task=task, round_num=cycle,  # use cycle as round for worker-logged entries
+            task=task, round_num=cycle,
             accuracy=best_acc, best_accuracy=best_acc,
             config=config, role="worker",
-            checkpoint_path=str(Path("checkpoints/specialists") / f"{task}.pt"),
+            checkpoint_path=ckpt_str,
         )
+        if best_acc >= target_acc:
+            _db.update_task_status(task, "mastered", config, best_acc,
+                                   total_cycles=cycle)
+            _db.register_teacher(task, best_acc, cycle, config,
+                                checkpoint_path=ckpt_str)
+            print(f"  Worker registered teacher: {task} ({best_acc:.0%})", flush=True)
+        else:
+            _db.update_task_status(task, "training", config, best_acc,
+                                   total_cycles=cycle)
         _db.clear_active_run(task)
         _db.close()
     except Exception:
