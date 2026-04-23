@@ -423,8 +423,37 @@ def run(args):
                     severity = min(3.0, rounds_stuck / 3)
                     base_cfg = task_config.get(task, BASE_CONFIG.copy())
                     base_cfg["task"] = task
+
+                    # Run diagnostician — get mutation bias if any signal detected
+                    diagnostic_bias = None
+                    _diag_signal = None
+                    try:
+                        from diagnostician import Diagnostician
+                        diag = Diagnostician(db)
+                        signals = diag.diagnose(task)
+                        if signals:
+                            _diag_signal = signals[0]
+                            rx = diag.prescribe(signals[0], task, base_cfg)
+                            if rx:
+                                diagnostic_bias = rx
+                                # Check if prescription says "protect" or "wait"
+                                applied = diag.apply_prescription(base_cfg, rx)
+                                if applied is None:
+                                    if rx["type"] == "protect":
+                                        print(f"  🛡 PROTECTING {task} — {signals[0]['signal']} "
+                                              f"(no mutation)", flush=True)
+                                    elif rx["type"] == "wait":
+                                        print(f"  ⏳ WAITING on {task} — {signals[0]['signal']}",
+                                              flush=True)
+                                    continue  # skip mutation for this task
+                                print(f"  🔬 DIAGNOSTIC for {task}: {signals[0]['signal']} "
+                                      f"→ {rx['type']}", flush=True)
+                    except Exception as e:
+                        print(f"  Diagnostic error: {e}", flush=True)
+
                     challenger_cfg, challenger_provenance = mutate_config(
-                        base_cfg, plateau_severity=severity)
+                        base_cfg, plateau_severity=severity,
+                        diagnostic_bias=diagnostic_bias)
                     challenger_cfg.pop("task", None)
 
                     changes = {k: challenger_cfg[k] for k in challenger_cfg
@@ -519,7 +548,8 @@ def run(args):
                         parent_exp=f"{task}_r{round_num}",
                     )
 
-                    if challenger_acc and challenger_acc > best:
+                    won = challenger_acc and challenger_acc > best
+                    if won:
                         print(f"  ✓ Challenger wins: {challenger_acc:.0%} > {best:.0%}",
                               flush=True)
                         task_config[task] = challenger_cfg
@@ -531,6 +561,18 @@ def run(args):
                         if champion_ckpt.exists():
                             shutil.copy2(champion_ckpt, ckpt_path)
                         task_config[task] = base_cfg
+
+                    # Log diagnostic outcome (if diagnostic was involved)
+                    if _diag_signal and diagnostic_bias:
+                        db.log_diagnostic(
+                            task=task, round_num=round_num,
+                            signal=_diag_signal["signal"],
+                            prescription_type=diagnostic_bias["type"],
+                            prescription_params=diagnostic_bias["params"],
+                            challenger_acc=challenger_acc or 0,
+                            champion_acc=best,
+                            won=won,
+                        )
 
                     db.export_lineage_markdown(task, lineage_dir / f"{task}.md")
 
