@@ -408,15 +408,19 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
             config=config, role="worker",
             checkpoint_path=ckpt_str,
         )
+        # Only update task_status if our accuracy is actually better
+        existing = _db.get_task_status(task)
+        existing_best = existing["best_accuracy"] if existing else 0
         if best_acc >= target_acc:
             _db.update_task_status(task, "mastered", config, best_acc,
                                    total_cycles=cycle)
             _db.register_teacher(task, best_acc, cycle, config,
                                 checkpoint_path=ckpt_str)
             print(f"  Worker registered teacher: {task} ({best_acc:.0%})", flush=True)
-        else:
+        elif best_acc > existing_best:
             _db.update_task_status(task, "training", config, best_acc,
                                    total_cycles=cycle)
+        # else: don't overwrite — DB has a better result than us
         _db.clear_active_run(task)
         _db.close()
     except Exception:
