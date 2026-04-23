@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mamba-platform": {
+      "command": "python3",
+      "args": ["mcp/server.py"],
+      "cwd": "/Volumes/TB4/mac-mini-storage/air-home/Desktop/mamba3-hands-on"
+    }
+  }
+}

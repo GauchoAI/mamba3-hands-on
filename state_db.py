@@ -550,16 +550,45 @@ class StateDB:
         # Diagnostic stats for this task
         diag_stats = self.get_diagnostic_stats(task)
 
+        # Hardware provenance: which device/backend won, total training time
+        hardware = {}
+        if best_cfg:
+            hardware["device"] = best_cfg.get("device", "cuda")
+            hardware["scan_backend"] = best_cfg.get("scan_backend", "triton")
+            hardware["backend"] = best_cfg.get("backend", "pytorch")
+
+        # Compute total training time from cycle_history
+        cycles = self.get_cycle_history(task)
+        if cycles:
+            total_time_s = sum(
+                (c.get("forward_ms", 0) or 0) + (c.get("backward_ms", 0) or 0) + (c.get("eval_ms", 0) or 0)
+                for c in cycles
+            ) / 1000.0
+            hardware["total_cycles"] = len(cycles)
+            hardware["total_time_s"] = round(total_time_s, 1)
+
+        # Confidence score
+        conf_score, conf_mean, conf_std, conf_n = self.get_confidence_score(task)
+        status = self.get_task_status(task)
+
         return {
             "task": task,
             "config": best_cfg or {},
             "best_accuracy": best_acc,
+            "confidence": {
+                "score": conf_score,
+                "mean": conf_mean,
+                "std": conf_std,
+                "n_samples": conf_n,
+            },
             "teachers": teachers,
             "provenance": latest_provenance,
+            "hardware": hardware,
             "diagnostics": {
                 "stats": diag_stats,
             },
             "total_rounds": len(lineage),
+            "node_id": status.get("node_id") if status else None,
         }
 
     def get_all_lineage(self):

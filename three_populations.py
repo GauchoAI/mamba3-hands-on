@@ -25,9 +25,20 @@ from state_db import StateDB
 from registry.problem_registry import ProblemRegistry
 
 # Discover tasks from YAML manifests — no hardcoded list
+_problems_dir = "problems"  # default, overridden by --problems-dir CLI arg
 _problem_registry = ProblemRegistry()
-_problem_registry.discover(["problems/"])
+_problem_registry.discover([_problems_dir])
 ALL_TASKS = _problem_registry.list_problems()
+
+
+def reload_problems(problems_dir="problems"):
+    """Re-discover problems from a different directory."""
+    global _problems_dir, ALL_TASKS
+    _problems_dir = problems_dir
+    _problem_registry.problems.clear()
+    _problem_registry._generators.clear()
+    _problem_registry.discover([problems_dir])
+    ALL_TASKS[:] = _problem_registry.list_problems()
 
 BASE_CONFIG = {
     "d_model": 64, "d_state": 16, "headdim": 16, "n_kernel_layers": 3,
@@ -78,6 +89,8 @@ def spawn_worker(task, config, mode="champion", cycles=10, target_acc=0.95):
         cmd.extend(["--scan-backend", cfg["scan_backend"]])
     if cfg.get("device"):
         cmd.extend(["--device", cfg["device"]])
+    if _problems_dir != "problems":
+        cmd.extend(["--problems-dir", _problems_dir])
     return subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         cwd=str(Path(__file__).parent),
@@ -323,5 +336,14 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", default="three_pop")
+    parser.add_argument("--problems-dir", default="problems",
+                       help="Directory containing problem YAML manifests")
+    parser.add_argument("--job-id", default=None,
+                       help="Job ID for tracking (set by mamba submit)")
     args = parser.parse_args()
+
+    # Re-discover problems if custom dir specified
+    if args.problems_dir != "problems":
+        reload_problems(args.problems_dir)
+
     run(args)
