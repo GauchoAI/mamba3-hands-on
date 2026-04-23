@@ -1839,3 +1839,43 @@ This is why observability matters. Without the CPU vs CUDA comparison,
 we would have blamed the byte encoding, the model size, the learning
 rate. The actual cause was invisible at the training level — it's in
 the kernel implementation, below the abstraction layer.
+
+### This is a known problem in the Mamba community
+
+Research confirmed this is not unique to our implementation:
+
+- **Tri Dao** (Mamba's creator) documented that SSM dynamics are
+  "very sensitive to numerical precision" — cumulative sums can be
+  large, and without the right implementation, "the basic SSD
+  algorithm produces NaNs immediately during training."
+  (Source: tridao.me/blog/2024/mamba2-part3-algorithm)
+
+- **PyTorch/IBM** documented that fused Triton kernels "internally
+  use fp16 for some computations that the original kernels used fp32
+  for" and there are "slight differences in output between the fused
+  kernel and reference solution that depend on the GPU."
+  (Source: pytorch.org/blog/accelerating-mamba2-with-kernel-fusion)
+
+- **The standard fix**: "accumulate partial sums in higher precision
+  (fp32) for numerical stability." Our kernel likely accumulates
+  the state `h = decay * h + inp` without sufficient precision,
+  or the fused silu gate introduces compounding rounding errors.
+
+### What we're doing about it
+
+**Immediate (deployed):** `scan_backend` as a GA mutation. The GA
+tries JIT vs Triton per task. JIT is mathematically correct, Triton
+is fast. The champion-challenger decides. Already live — the GA
+tried JIT for alternating_next (which graduated at 100%).
+
+**Next:** Fix the Triton kernel itself. The audit path:
+1. Check if the state accumulation loop uses fp32 throughout
+2. Check if the silu gate is fused in a way that loses precision
+3. Compare intermediate values (h at each timestep) between
+   JIT and Triton for the same input
+4. Fix and verify: parity must hit 100% on CUDA
+
+**Community contribution:** Once fixed, this kernel is valuable.
+The Mamba community on Hugging Face (kernels-community/mamba-ssm)
+is building community kernels. A correct, tested kernel with a
+parity regression test would be a real contribution.
