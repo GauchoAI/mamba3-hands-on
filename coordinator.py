@@ -257,6 +257,13 @@ def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0,
 
     _sev = round(plateau_severity, 1)
 
+    # Mutate scan backend — 50/50 chance, JIT is precise, Triton is fast
+    if random.random() < 0.5:
+        current = child.get("scan_backend", "triton")
+        child["scan_backend"] = "jit" if current == "triton" else "triton"
+        provenance["scan_backend"] = {"source": "ga_mutation", "severity": _sev,
+                                      "value": child["scan_backend"]}
+
     # Mutate learning rate (log-scale)
     if random.random() < min(0.5 * amp, 0.95):
         if "lr" not in provenance or provenance["lr"]["source"] == "inherited":

@@ -86,6 +86,13 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     If teachers is provided (list of {model, weight}), blends distillation
     loss from each teacher with the task loss each cycle.
     """
+    # Set scan backend from config (jit vs triton)
+    scan_backend = config.get("scan_backend")
+    if scan_backend:
+        import ssm_triton
+        ssm_triton.FORCE_BACKEND = scan_backend
+        print(f"  Scan backend: {scan_backend}", flush=True)
+
     load_generators()
     gen_fn = GENERATORS.get(task)
     if not gen_fn:
@@ -763,6 +770,9 @@ if __name__ == "__main__":
                        choices=["champion", "challenger"],
                        help="champion: normal training. challenger: compare against champion best.")
     parser.add_argument("--run-dir", type=str, default=None)
+    parser.add_argument("--scan-backend", type=str, default=None,
+                       choices=["jit", "triton"],
+                       help="SSM scan backend: jit (precise) or triton (fast)")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else ("mps" if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() else "cpu")
@@ -776,6 +786,8 @@ if __name__ == "__main__":
         "batch_size": args.batch_size, "steps_per_cycle": args.steps_per_cycle,
         "use_perp": args.weight_decay == 0.0,
     }
+    if args.scan_backend:
+        config["scan_backend"] = args.scan_backend
 
     if args.task:
         acc = train_specialist(args.task, config, device, max_cycles=args.max_cycles,

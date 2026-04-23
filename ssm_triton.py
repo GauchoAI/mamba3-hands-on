@@ -52,10 +52,21 @@ def ssm_scan_jit(
     return y
 
 
+# Backend override: set to "jit" to force JIT even on CUDA.
+# Controlled by config["scan_backend"] via specialist_trainer.
+FORCE_BACKEND = None  # None = auto, "jit" = force JIT, "triton" = force Triton
+
+
 def ssm_scan(inp, decay, C, x, z, D):
     """
     Dispatch to Triton (CUDA) or JIT (MPS/CPU).
+    Respects FORCE_BACKEND when set.
     """
+    if FORCE_BACKEND == "jit":
+        return ssm_scan_jit(inp, decay, C, x, z, D)
+    if FORCE_BACKEND == "triton" and inp.is_cuda and HAS_TRITON:
+        return ssm_scan_triton(inp, decay, C, x, z, D)
+    # Auto: Triton on CUDA if available, else JIT
     if inp.is_cuda and HAS_TRITON:
         try:
             return ssm_scan_triton(inp, decay, C, x, z, D)

@@ -62,8 +62,7 @@ def _acquire_lock():
 def spawn_worker(task, config, mode="champion", cycles=10, target_acc=0.95):
     """Spawn a specialist_trainer subprocess. Returns Popen."""
     cfg = config if isinstance(config, dict) else {}
-    return subprocess.Popen(
-        [sys.executable, "-u", "specialist_trainer.py",
+    cmd = [sys.executable, "-u", "specialist_trainer.py",
          "--task", task,
          "--mode", mode,
          "--d-model", str(cfg.get("d_model", 64)),
@@ -77,8 +76,11 @@ def spawn_worker(task, config, mode="champion", cycles=10, target_acc=0.95):
          "--batch-size", str(cfg.get("batch_size", 256)),
          "--steps-per-cycle", str(cfg.get("steps_per_cycle", 200)),
          "--max-cycles", str(cycles),
-         "--target-acc", str(target_acc)],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+         "--target-acc", str(target_acc)]
+    if cfg.get("scan_backend"):
+        cmd.extend(["--scan-backend", cfg["scan_backend"]])
+    return subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         cwd=str(Path(__file__).parent),
     )
 
