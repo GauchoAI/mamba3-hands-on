@@ -80,7 +80,9 @@ def probe_capabilities() -> dict:
         import torch
         if torch.cuda.is_available():
             caps["backends"].append("cuda")
-            caps["vram_mb"] = int(torch.cuda.get_device_properties(0).total_mem / 1024 / 1024)
+            total = getattr(torch.cuda.get_device_properties(0), "total_memory",
+                torch.cuda.get_device_properties(0).total_mem if hasattr(torch.cuda.get_device_properties(0), "total_mem") else 0)
+            caps["vram_mb"] = int(total / 1024 / 1024)
             caps["gpu_name"] = torch.cuda.get_device_name(0)
             # Check Triton
             try:
