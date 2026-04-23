@@ -1429,15 +1429,109 @@ Only teachers that surpass our current best for a task are eligible.
 
 ---
 
+## Entry 21: Teacher-as-Mutation Hypothesis
+
+**Date:** 2026-04-22
+
+### The hypothesis
+
+External teachers (LLMs, our own specialists) can be offered as a
+mutation option in the genetic algorithm. The GA discovers which
+teacher helps which task, automatically. No manual selection needed.
+
+### Why we believe this will work
+
+1. **Mathstral 7B scores 87% on arithmetic_next.** Our specialist is
+   stuck at 30%. The LLM genuinely understands number sequences better
+   than our 100K-param model. Its output distributions encode math
+   knowledge our model can't discover on its own.
+
+2. **Cross-specialist transfer is real.** run_length_next loaded
+   same_different's weights and scored 100% on first cycle (Entry 18).
+   Related tasks share representations. A specialist that mastered
+   logic_gate might help logic_chain through distillation.
+
+3. **The cache makes it free.** Teacher evaluation is expensive (30
+   forward passes per task). But once cached, the GA can check
+   instantly whether a teacher is worth trying. Bad teachers get
+   rejected from cache — zero wasted compute on repeat evaluations.
+
+4. **Champion-challenger protects against bad teachers.** If Mathstral's
+   output distributions confuse more than help, the challenger loses
+   and the champion's checkpoint is restored. No damage.
+
+### The mechanism
+
+```
+Task plateaus → GA mutation fires
+  ↓
+15% chance: teacher_model = random([
+    "specialist:same_different",
+    "specialist:logic_gate",
+    "mathstral-7b",
+    "qwen-math-1.5b",
+    ...
+])
+  ↓
+Check cache: does this teacher beat our current best?
+  ├─ Cached at 0% → skip instantly
+  ├─ Cached at 87% > our 30% → use it!
+  └─ Not cached → evaluate (30 examples), cache result
+  ↓
+Train challenger with teacher guidance
+  ↓
+Champion-challenger comparison
+  ├─ Challenger wins → new config with teacher
+  └─ Champion holds → teacher wasn't helpful in practice
+```
+
+### What we expect to see
+
+- **arithmetic_next**: Mathstral teacher should push past 30% ceiling.
+  This is our strongest prediction — the LLM has genuine math knowledge
+  our small model lacks.
+- **logic_gate/logic_chain**: Cross-specialist teaching might help.
+  Both are logic tasks, shared representations likely.
+- **parity**: No teacher can help (both LLMs score 0%, specialists
+  for other tasks don't transfer). Parity needs the curriculum
+  approach (progressive difficulty), not a teacher.
+- **same_different**: Already at 87%, close to self-graduating.
+  External teachers unlikely to help at this level.
+
+### How to verify
+
+Monitor the lineage files. When a teacher_model mutation fires,
+the lineage entry will show it:
+```
+| 8 | C | 45% | 30% | ... | severity=2.0 changes={'teacher_model': 'mathstral-7b'} |
+```
+
+If arithmetic_next breaks past 30% with a Mathstral teacher, the
+hypothesis is confirmed. If it doesn't improve, the champion holds
+and we learn that raw distillation from LLM logits doesn't transfer
+to byte-level SSM architectures (also valuable knowledge).
+
+### Current scoreboard
+
+| Task | Our Best | Mathstral 7B | Qwen 1.5B | Best Available Teacher |
+|------|----------|-------------|-----------|----------------------|
+| arithmetic_next | 30% | **87%** | 0% | Mathstral |
+| logic_gate | 100% (teacher) | 70% | 43% | Our specialist |
+| same_different | 87% | 50% | 47% | Our specialist |
+| binary_pattern_next | 94% | 33% | 47% | Our specialist |
+| mirror_detection | 90% | — | — | Our specialist |
+| parity | 63% | 0% | 0% | None — needs curriculum |
+
+---
+
 ## Open threads
 
-- **binary_pattern_next at 94%.** One percent from graduation. Next round?
-- **Mathstral as teacher.** 87% on arithmetic_next — integrate as mutation.
-- **Teacher evaluation cache.** Benchmark all available teachers per task,
-  cache results, only offer teachers that beat current specialist.
-- **Parity ceiling at 63%.** No config, no mutation, no LLM can break it.
-  The old curriculum run reached 80% in 130K steps. Specialists plateau
-  at 63% in 100 cycles. Multi-task training may be required.
-- **Distillation.** 5 teachers ready. Student can start learning.
+- **binary_pattern_next at 94%.** One percent from graduation.
+- **mirror_detection at 90%.** New high — checkpoint resume is paying off.
+- **Teacher-as-mutation deployed.** Waiting for GA to try it on stuck tasks.
+- **Parity ceiling at 63%.** No external teacher can help. Curriculum
+  approach (progressive difficulty) is the only path that worked (80%
+  in 130K steps on the overnight run).
+- **Distillation.** 5+ teachers ready. Student can start learning.
 - **Cortex development.** Still waiting.
 - **Boss tasks.** 18 unseen tasks for generalization eval.
