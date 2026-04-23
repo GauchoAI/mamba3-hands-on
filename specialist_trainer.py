@@ -482,6 +482,15 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     }, ckpt_path)
     print(f"  Saved specialist → {ckpt_path} ({best_acc:.0%})", flush=True)
 
+    # Run register inspection and push to Firebase
+    try:
+        from register_inspector import inspect_model, save_and_push
+        report = inspect_model(task, n_examples=5, device=device)
+        if report:
+            save_and_push(task, report, push_firebase=True)
+    except Exception as e:
+        print(f"  Inspection error: {e}", flush=True)
+
     # Precompute teacher outputs for distillation (only if mastered)
     if best_acc < target_acc:
         return best_acc
