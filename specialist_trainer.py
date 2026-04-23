@@ -423,6 +423,47 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         # else: don't overwrite — DB has a better result than us
         _db.clear_active_run(task)
         _db.close()
+
+        # Push lineage node + state to Firebase (worker does it, not orchestrator)
+        import firebase_push as fb
+        node_id = f"{task}_c{cycle}_w"
+        cfg_summary = {
+            "d": config.get("d_model", 64),
+            "L": config.get("n_kernel_layers", 3),
+            "lr": config.get("lr", 1e-3),
+            "wd": config.get("weight_decay", 0.1),
+            "opt": config.get("optimizer", "adamw"),
+            "loss": config.get("loss_fn", "ce"),
+        }
+        if config.get("use_perp"): cfg_summary["perp"] = True
+        if config.get("warm_restarts"): cfg_summary["wr"] = True
+        if config.get("teacher_model"): cfg_summary["teacher"] = config["teacher_model"]
+
+        fb._put(f"mamba3/snapshot/lineage/{node_id}", {
+            "task": task,
+            "round": cycle,
+            "acc": round(best_acc, 3),
+            "best": round(max(best_acc, existing_best), 3),
+            "role": "worker",
+            "won": best_acc > existing_best,
+            "config": cfg_summary,
+            "teachers": [],
+        })
+
+        # Push task status to Firebase
+        fb._put(f"mamba3/state/task_status/{task}", {
+            "status": "mastered" if best_acc >= target_acc else "training",
+            "best": round(max(best_acc, existing_best), 3),
+            "cycles": cycle,
+        })
+
+        # Push teacher matrix entries (if any cached scores exist)
+        _db2 = StateDB("three_pop/training.db")
+        teacher_scores = _db2.get_best_teachers_for_task(task)
+        if teacher_scores:
+            for t_name, t_score in teacher_scores:
+                fb._put(f"mamba3/state/teacher_matrix/{t_name}/{task}", round(t_score, 3))
+        _db2.close()
     except Exception:
         pass
 

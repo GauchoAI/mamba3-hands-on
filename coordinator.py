@@ -322,31 +322,34 @@ def mutate_config(parent_config, mutation_strength=0.3, plateau_severity=0.0,
     if random.random() < min(0.1 * amp, 0.5):
         child["use_perp"] = not child.get("use_perp", child.get("weight_decay", 0) == 0)
 
-    # Mutate teacher_model — try an external or specialist teacher
-    # Higher chance when stuck, picks from available teachers for this task
+    # Mutate teacher_model — only teachers that beat current baseline
     if random.random() < min(0.15 * amp, 0.7):
         task = child.get("task", "")
-        available_teachers = []
+        if task:
+            # Get current best accuracy for this task from DB
+            try:
+                from state_db import StateDB
+                _tdb = StateDB("three_pop/training.db")
+                task_status = _tdb.get_task_status(task)
+                current_best = task_status["best_accuracy"] if task_status else 0
 
-        # Our own specialists as teachers
-        from pathlib import Path
-        for ckpt in Path("checkpoints/specialists").glob("*.pt"):
-            name = ckpt.stem
-            if name != task and "_cache" not in name and "_champion" not in name and "_meta" not in name:
-                available_teachers.append(f"specialist:{name}")
+                # Only offer teachers that beat our current best (from cache)
+                qualified = _tdb.get_best_teachers_for_task(task, min_accuracy=current_best)
+                _tdb.close()
 
-        # External LLM teachers
-        available_teachers.extend(["mathstral-7b", "qwen-math-1.5b"])
-
-        if available_teachers:
-            if child.get("teacher_model"):
-                # 50% chance to remove teacher (go back to self-training)
-                if random.random() < 0.5:
-                    child.pop("teacher_model", None)
+                if qualified:
+                    if child.get("teacher_model"):
+                        if random.random() < 0.5:
+                            child.pop("teacher_model", None)
+                        else:
+                            child["teacher_model"] = random.choice(qualified)[0]
+                    else:
+                        child["teacher_model"] = random.choice(qualified)[0]
                 else:
-                    child["teacher_model"] = random.choice(available_teachers)
-            else:
-                child["teacher_model"] = random.choice(available_teachers)
+                    # No teacher can help — remove if present
+                    child.pop("teacher_model", None)
+            except Exception:
+                pass
 
     # When severely stuck: radical mutation — completely random config
     if plateau_severity >= 2.0 and random.random() < 0.3:
