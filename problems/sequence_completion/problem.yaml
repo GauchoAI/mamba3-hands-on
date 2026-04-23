@@ -4,3 +4,7 @@ generator: generators.level0_patterns:gen_sequence_completion
 target_accuracy: 0.95
 tags: [pattern, sequence, level0]
 description: "Complete a repeating sequence pattern"
+curriculum:
+  - {stage: 1, max_alpha: 5, max_period: 3, min_repeats: 2, max_repeats: 4, advance_at: 0.90}
+  - {stage: 2, max_alpha: 10, max_period: 5, min_repeats: 2, max_repeats: 6, advance_at: 0.90}
+  - {stage: 3, max_alpha: 15, max_period: 7, min_repeats: 3, max_repeats: 8, advance_at: 0.95}

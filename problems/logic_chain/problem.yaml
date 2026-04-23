@@ -4,3 +4,7 @@ generator: generators.level0_patterns:gen_logic_chain
 target_accuracy: 0.95
 tags: [logic, binary, level0]
 description: "Evaluate chained logic operations"
+curriculum:
+  - {stage: 1, max_depth: 1, advance_at: 0.90}
+  - {stage: 2, max_depth: 2, advance_at: 0.90}
+  - {stage: 3, max_depth: 3, advance_at: 0.95}

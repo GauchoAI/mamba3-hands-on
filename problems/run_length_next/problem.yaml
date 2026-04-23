@@ -4,3 +4,7 @@ generator: generators.level0_patterns:gen_run_length_next
 target_accuracy: 0.95
 tags: [pattern, sequence, level0]
 description: "Predict the next value in a run-length sequence"
+curriculum:
+  - {stage: 1, max_run: 3, max_val: 2, advance_at: 0.90}
+  - {stage: 2, max_run: 5, max_val: 3, advance_at: 0.90}
+  - {stage: 3, max_run: 7, max_val: 4, advance_at: 0.95}

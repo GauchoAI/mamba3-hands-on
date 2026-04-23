@@ -4,3 +4,7 @@ generator: generators.level0_patterns:gen_parity
 target_accuracy: 0.95
 tags: [binary, counting, level0]
 description: "Count 1s in binary sequence, even=S odd=D"
+curriculum:
+  - {stage: 1, min_len: 2, max_len: 4, advance_at: 0.90}
+  - {stage: 2, min_len: 3, max_len: 8, advance_at: 0.90}
+  - {stage: 3, min_len: 4, max_len: 16, advance_at: 0.95}

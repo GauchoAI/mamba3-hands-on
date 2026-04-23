@@ -4,3 +4,7 @@ generator: generators.level0_patterns:gen_pattern_period
 target_accuracy: 0.95
 tags: [pattern, counting, level0]
 description: "Identify the period length of a repeating pattern"
+curriculum:
+  - {stage: 1, max_alpha: 4, max_period: 3, min_repeats: 2, max_repeats: 3, advance_at: 0.90}
+  - {stage: 2, max_alpha: 8, max_period: 5, min_repeats: 2, max_repeats: 4, advance_at: 0.90}
+  - {stage: 3, max_alpha: 12, max_period: 7, min_repeats: 3, max_repeats: 5, advance_at: 0.95}

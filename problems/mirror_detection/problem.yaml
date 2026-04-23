@@ -4,3 +4,7 @@ generator: generators.level0_patterns:gen_mirror_detection
 target_accuracy: 0.95
 tags: [pattern, comparison, level0]
 description: "Detect if sequence is a palindrome, M or N"
+curriculum:
+  - {stage: 1, max_val: 5, min_len: 3, max_len: 5, advance_at: 0.90}
+  - {stage: 2, max_val: 10, min_len: 3, max_len: 7, advance_at: 0.90}
+  - {stage: 3, max_val: 15, min_len: 4, max_len: 10, advance_at: 0.95}

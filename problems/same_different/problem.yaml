@@ -4,3 +4,7 @@ generator: generators.level0_patterns:gen_same_different
 target_accuracy: 0.95
 tags: [comparison, level0]
 description: "Compare two numbers, S if equal D if different"
+curriculum:
+  - {stage: 1, max_val: 5, advance_at: 0.90}
+  - {stage: 2, max_val: 20, advance_at: 0.90}
+  - {stage: 3, max_val: 50, advance_at: 0.95}

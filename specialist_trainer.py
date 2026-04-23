@@ -88,6 +88,22 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         print(f"Unknown task: {task}")
         return None
 
+    # Curriculum: get current stage and bind generator to stage params
+    _current_stage = 1
+    _problem_spec = _REGISTRY.problems.get(task) if _REGISTRY else None
+    try:
+        from state_db import StateDB as _StageDB
+        _sdb = _StageDB("three_pop/training.db")
+        _current_stage = _sdb.get_current_stage(task)
+        _sdb.close()
+    except Exception:
+        pass
+    if _problem_spec and _problem_spec.curriculum:
+        gen_fn = _REGISTRY.get_generator(task, stage=_current_stage)
+        stage_info = _problem_spec.get_stage(_current_stage)
+        if stage_info:
+            print(f"  Curriculum stage {_current_stage}: {stage_info.params} (advance at {stage_info.advance_at:.0%})", flush=True)
+
     tok = ByteTokenizer()
 
     # Model
@@ -386,6 +402,23 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 fb._put("mamba3/snapshot/timestamp", time.time())
             except Exception:
                 pass
+
+        # Curriculum ratchet: advance stage if accuracy sustains
+        if _problem_spec and _problem_spec.curriculum:
+            stage_info = _problem_spec.get_stage(_current_stage)
+            if stage_info and acc >= stage_info.advance_at and _current_stage < _problem_spec.max_stage:
+                _current_stage += 1
+                try:
+                    from state_db import StateDB as _StageDB2
+                    _sdb2 = _StageDB2("three_pop/training.db")
+                    _sdb2.advance_stage(task, _current_stage)
+                    _sdb2.close()
+                except Exception:
+                    pass
+                gen_fn = _REGISTRY.get_generator(task, stage=_current_stage)
+                new_stage = _problem_spec.get_stage(_current_stage)
+                if new_stage:
+                    print(f"  ★ [{task}] Stage {_current_stage}: {new_stage.params} (advance at {new_stage.advance_at:.0%})", flush=True)
 
         # Mastered!
         if acc >= target_acc:

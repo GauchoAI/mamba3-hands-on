@@ -4,3 +4,7 @@ generator: generators.level0_patterns:gen_repeat_count
 target_accuracy: 0.95
 tags: [counting, level0]
 description: "Count occurrences of a target element"
+curriculum:
+  - {stage: 1, max_alpha: 4, min_len: 4, max_len: 6, advance_at: 0.90}
+  - {stage: 2, max_alpha: 8, min_len: 5, max_len: 12, advance_at: 0.90}
+  - {stage: 3, max_alpha: 12, min_len: 6, max_len: 16, advance_at: 0.95}

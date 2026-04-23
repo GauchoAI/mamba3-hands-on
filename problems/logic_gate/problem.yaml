@@ -4,3 +4,6 @@ generator: generators.level0_patterns:gen_logic_gate
 target_accuracy: 0.95
 tags: [logic, binary, level0]
 description: "Evaluate AND/OR/XOR/NOT logic gates"
+curriculum:
+  - {stage: 1, max_inputs: 2, advance_at: 0.90}
+  - {stage: 2, max_inputs: 3, advance_at: 0.95}

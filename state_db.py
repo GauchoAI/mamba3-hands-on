@@ -48,6 +48,7 @@ class StateDB:
                 confidence_score REAL DEFAULT 0,
                 confidence_mean REAL DEFAULT 0,
                 confidence_std REAL DEFAULT 0,
+                current_stage INTEGER DEFAULT 1,
                 updated_at REAL
             );
 
@@ -162,6 +163,13 @@ class StateDB:
             self.conn.commit()
         except Exception:
             pass  # columns already exist
+
+        # Curriculum stage column
+        try:
+            self.conn.execute("ALTER TABLE task_status ADD COLUMN current_stage INTEGER DEFAULT 1")
+            self.conn.commit()
+        except Exception:
+            pass
 
         # Populate task_status from existing data if empty
         count = self.conn.execute("SELECT COUNT(*) FROM task_status").fetchone()[0]
@@ -318,6 +326,24 @@ class StateDB:
         if status:
             return status["current_config"]
         return None
+
+    def get_current_stage(self, task) -> int:
+        """Get the current curriculum stage for a task. Monotonic — only goes up."""
+        status = self.get_task_status(task)
+        return status.get("current_stage", 1) if status else 1
+
+    def advance_stage(self, task, new_stage: int):
+        """Advance curriculum stage. RATCHET: only goes up, never down."""
+        current = self.get_current_stage(task)
+        if new_stage <= current:
+            return current  # refuse to go backwards
+        self.conn.execute(
+            "UPDATE task_status SET current_stage=?, updated_at=? WHERE task=?",
+            (new_stage, __import__("time").time(), task)
+        )
+        self.conn.commit()
+        print(f"  ★ {task}: curriculum advanced to stage {new_stage}", flush=True)
+        return new_stage
 
     def get_tasks_needing_training(self):
         """Return tasks that are not mastered."""
