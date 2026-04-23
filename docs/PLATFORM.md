@@ -170,6 +170,50 @@ mamba3-hands-on/
 └── pyproject.toml           # Package config, `mamba` CLI entry point
 ```
 
+## Unified Namespace — Transparent Model Access
+
+Nodes don't reference each other by name to access models. The `ModelRegistry`
+provides a unified view: "here are all the teachers" — regardless of which
+node trained them. When a student needs a teacher, the registry transparently
+fetches it from whatever node has it.
+
+```python
+from registry.model_registry import ModelRegistry
+
+reg = ModelRegistry()
+
+# What teachers exist? (from any node, via Firebase index)
+reg.available()        # → ["parity", "logic_gate", "cumulative_sum", ...]
+
+# Get the parity teacher — fetched transparently
+model, config, acc = reg.get_teacher("parity", device="cpu")
+logits = model(input_tokens)
+
+# Sync all teachers locally (for offline use)
+reg.sync_all()         # → fetches any missing checkpoints
+```
+
+### How it works
+
+1. **Firebase is the index**: `/mamba3/three_pop/teachers` lists all teachers
+   with their accuracy, config, and which node trained them
+2. **Checkpoints live on nodes**: each node stores `.pt` files locally
+3. **Transparent fetch**: when a node needs a teacher it doesn't have,
+   `ModelRegistry` finds a node that has it (from Firebase) and rsyncs it
+4. **Cached locally**: once fetched, the checkpoint is local — no re-fetch
+
+### Distillation flow
+
+When `specialist_trainer.py` starts training a task:
+1. Asks `ModelRegistry`: "is there a teacher for this task?"
+2. If yes: fetches checkpoint (transparently, from wherever it lives)
+3. Loads teacher model, runs inference every 5th step
+4. Blends KL divergence on soft targets into the training loss
+5. Logs `distilled_from` in lineage for provenance
+
+This means: a teacher trained on the H100 automatically helps students
+training on the Mac Mini, with zero manual intervention.
+
 ## Node Setup
 
 ### Quick start (any machine)

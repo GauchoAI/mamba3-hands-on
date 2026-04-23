@@ -164,35 +164,20 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     print(f"\n[{task}] d={config.get('d_model')}, L={config.get('n_kernel_layers')}, "
           f"{n_params:,} params", flush=True)
 
-    # Load teacher model for distillation — if a same-task teacher checkpoint exists,
-    # load it directly and use its outputs as soft targets during training
+    # Load teacher for distillation — transparently from any node via ModelRegistry
     teacher_model_for_distill = None
-    teacher_ckpt_path = ckpt_dir / f"{task}_champion.pt"
-    if not teacher_ckpt_path.exists():
-        teacher_ckpt_path = ckpt_dir / f"{task}.pt"
-    # Only use teacher if it's from a DIFFERENT config (don't self-distill)
-    if teacher_ckpt_path.exists():
-        try:
-            _teacher_ckpt = torch.load(teacher_ckpt_path, map_location=device, weights_only=False)
-            _teacher_task = _teacher_ckpt.get("task", "")
-            _teacher_acc = _teacher_ckpt.get("accuracy", 0)
-            if _teacher_task == task and _teacher_acc >= 0.80:
-                # Build teacher model with its own architecture
-                _t_cfg = _teacher_ckpt.get("config", {})
-                _teacher_m = ProgressiveModel(
-                    d_model=_t_cfg.get("d_model", 64),
-                    d_state=_t_cfg.get("d_state", 16),
-                    expand=2,
-                    headdim=_t_cfg.get("headdim", 16),
-                ).to(device)
-                for _ in range(_t_cfg.get("n_kernel_layers", 1)):
-                    _teacher_m.add_kernel_layer()
-                _teacher_m.load_state_dict(_teacher_ckpt["model"])
-                _teacher_m.eval()
-                teacher_model_for_distill = _teacher_m
-                print(f"  Distilling from teacher ({_teacher_acc:.0%}, d={_t_cfg.get('d_model')} L={_t_cfg.get('n_kernel_layers')})", flush=True)
-        except Exception as e:
-            print(f"  Teacher load failed: {e}", flush=True)
+    teacher_ckpt_path = None
+    try:
+        from registry.model_registry import ModelRegistry
+        _model_reg = ModelRegistry()
+        if _model_reg.has_teacher(task):
+            result = _model_reg.get_teacher(task, device=device)
+            if result:
+                teacher_model_for_distill, _t_cfg, _t_acc = result
+                teacher_ckpt_path = _model_reg.local_dir / f"{task}.pt"
+                print(f"  Distilling from teacher ({_t_acc:.0%}, d={_t_cfg.get('d_model')} L={_t_cfg.get('n_kernel_layers')})", flush=True)
+    except Exception as e:
+        print(f"  Teacher discovery: {e}", flush=True)
 
     _hit_target = False
     for cycle in range(cycle_start + 1, cycle_start + max_cycles + 1):
