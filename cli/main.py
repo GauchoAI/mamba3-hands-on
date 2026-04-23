@@ -329,6 +329,85 @@ def cmd_pull(args):
         print("Pull failed.")
 
 
+def cmd_sync(args):
+    """Sync teacher checkpoints between nodes for cross-node distillation."""
+    import subprocess
+
+    source = _resolve_node(args.source)
+    if not source:
+        return
+
+    ssh_src = source.get("ssh")
+    if not ssh_src:
+        print(f"Source node has no SSH info.")
+        return
+
+    src_host = ssh_src["host"]
+    src_port = ssh_src.get("port", 22)
+    src_user = ssh_src.get("user", "root")
+    src_dir = source.get("working_dir", "/root/mamba3-hands-on")
+
+    if args.dest:
+        dest = _resolve_node(args.dest)
+        if not dest:
+            return
+        ssh_dst = dest.get("ssh")
+        if not ssh_dst:
+            print("Dest node has no SSH info.")
+            return
+        dst_host = ssh_dst["host"]
+        dst_port = ssh_dst.get("port", 22)
+        dst_user = ssh_dst.get("user", "root")
+        dst_dir = dest.get("working_dir", "/root/mamba3-hands-on")
+
+        # Pull from source to local temp, then push to dest
+        local_tmp = "/tmp/mamba_sync_checkpoints/"
+        os.makedirs(local_tmp, exist_ok=True)
+
+        print(f"Syncing teachers: {source['node_id']} → {dest['node_id']}")
+        # Pull
+        pull_cmd = [
+            "rsync", "-avz",
+            "-e", f"ssh -p {src_port} -o StrictHostKeyChecking=no",
+            f"{src_user}@{src_host}:{src_dir}/checkpoints/specialists/",
+            local_tmp
+        ]
+        r = subprocess.run(pull_cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"  Pull failed: {r.stderr}")
+            return
+        n_files = len([f for f in os.listdir(local_tmp) if f.endswith(".pt")])
+        print(f"  Pulled {n_files} checkpoints")
+
+        # Push
+        push_cmd = [
+            "rsync", "-avz",
+            "-e", f"ssh -p {dst_port} -o StrictHostKeyChecking=no",
+            local_tmp,
+            f"{dst_user}@{dst_host}:{dst_dir}/checkpoints/specialists/"
+        ]
+        r = subprocess.run(push_cmd, capture_output=True, text=True)
+        if r.returncode == 0:
+            print(f"  Pushed to {dest['node_id']}. Teachers available for distillation.")
+        else:
+            print(f"  Push failed: {r.stderr}")
+    else:
+        # Pull to local
+        local_dir = args.output or "checkpoints/specialists/"
+        os.makedirs(local_dir, exist_ok=True)
+        print(f"Pulling teachers from {source['node_id']} → {local_dir}")
+        pull_cmd = [
+            "rsync", "-avz",
+            "-e", f"ssh -p {src_port} -o StrictHostKeyChecking=no",
+            f"{src_user}@{src_host}:{src_dir}/checkpoints/specialists/",
+            f"{local_dir}/"
+        ]
+        r = subprocess.run(pull_cmd, text=True)
+        if r.returncode == 0:
+            n = len([f for f in os.listdir(local_dir) if f.endswith(".pt")])
+            print(f"  Done. {n} checkpoints available locally.")
+
+
 def main():
 
     parser = argparse.ArgumentParser(
@@ -365,6 +444,12 @@ def main():
     p_stop = sub.add_parser("stop", help="Stop training on a node")
     p_stop.add_argument("--node", type=str, required=True)
 
+    # sync
+    p_sync = sub.add_parser("sync", help="Sync teacher checkpoints between nodes")
+    p_sync.add_argument("--source", type=str, required=True, help="Source node ID")
+    p_sync.add_argument("--dest", type=str, default=None, help="Destination node (omit for local)")
+    p_sync.add_argument("--output", type=str, default=None, help="Local output dir")
+
     args = parser.parse_args()
 
     if args.command == "nodes":
@@ -379,6 +464,8 @@ def main():
         cmd_pull(args)
     elif args.command == "stop":
         cmd_stop(args)
+    elif args.command == "sync":
+        cmd_sync(args)
     else:
         parser.print_help()
 

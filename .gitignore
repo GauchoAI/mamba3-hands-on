@@ -7,3 +7,24 @@ official-mamba/
 .DS_Store
 data/
 .env
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.pid
+*.zip
+checkpoints/
+three_pop/
+three_pop_local/
+runs/
+node_agent.log
+Uachanger*
+Mamba\ Laboratory*
+image.png
+index.html
+metrics.db
+survey*
+comparison.log
+dashboard_local/
+logs/
+*.tar.gz
