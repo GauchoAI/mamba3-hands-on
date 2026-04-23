@@ -181,19 +181,49 @@ def run(args):
 
             gpu_pct, mem_pct = get_gpu_usage()
 
-            # Build lineage from DB for mutation timeline
+            # Build rich lineage from DB
             lineage_data = {}
             try:
                 all_lin = db.get_all_lineage()
                 for t, entries in all_lin.items():
+                    best_so_far = 0
                     for i, e in enumerate(entries):
-                        node_id = f"{t}_r{e['round']}_{e.get('role','c')[0]}"
-                        parent_id = f"{t}_r{entries[i-1]['round']}_{entries[i-1].get('role','c')[0]}" if i > 0 else None
+                        role_char = e.get("role", "champion")[0]
+                        node_id = f"{t}_r{e['round']}_{role_char}"
+                        parent_id = f"{t}_r{entries[i-1]['round']}_{entries[i-1].get('role','champion')[0]}" if i > 0 else None
+
+                        # Did this entry improve the best?
+                        improved = e["accuracy"] > best_so_far
+                        if e["accuracy"] > best_so_far:
+                            best_so_far = e["accuracy"]
+
+                        # Config summary
+                        cfg = e.get("config", {})
+                        config_summary = {
+                            "d": cfg.get("d_model", 64),
+                            "L": cfg.get("n_kernel_layers", 3),
+                            "lr": cfg.get("lr", 1e-3),
+                            "wd": cfg.get("weight_decay", 0.1),
+                            "opt": cfg.get("optimizer", "adamw"),
+                            "loss": cfg.get("loss_fn", "ce"),
+                        }
+                        if cfg.get("use_perp"):
+                            config_summary["perp"] = True
+                        if cfg.get("warm_restarts"):
+                            config_summary["wr"] = True
+                        if cfg.get("teacher_model"):
+                            config_summary["teacher"] = cfg["teacher_model"]
+
                         lineage_data[node_id] = {
                             "parent": parent_id,
                             "task": t,
-                            "acc": round(e["accuracy"], 2),
+                            "round": e["round"],
+                            "acc": round(e["accuracy"], 3),
+                            "best": round(best_so_far, 3),
                             "role": e.get("role", "champion"),
+                            "won": improved,
+                            "config": config_summary,
+                            "teachers": e.get("teachers", []),
                             "mutation": e.get("mutation"),
                         }
             except Exception:

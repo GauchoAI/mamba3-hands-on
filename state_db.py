@@ -297,7 +297,7 @@ class StateDB:
     # ── Firebase sync ──────────────────────────────────────────────
 
     def sync_to_firebase(self):
-        """Push teachers + latest lineage to Firebase for redundancy."""
+        """Push full state to Firebase: teachers, lineage, model cards, knowledge flow."""
         try:
             import firebase_push as fb
 
@@ -314,17 +314,52 @@ class StateDB:
                 }
             fb._put("mamba3/state/teachers", fb_teachers)
 
-            # Push lineage summary (latest entry per task)
+            # Push lineage summary with model cards
             all_lineage = self.get_all_lineage()
             fb_lineage = {}
             for task, entries in all_lineage.items():
+                card = self.build_model_card(task)
+                champions = [e for e in entries if e.get("role") == "champion"]
+                challengers = [e for e in entries if e.get("role") == "challenger"]
+                wins = sum(1 for i, e in enumerate(entries)
+                          if i > 0 and e["accuracy"] > entries[i-1].get("best_accuracy", 0))
                 fb_lineage[task] = {
                     "rounds": len(entries),
-                    "best": max(e["best_accuracy"] for e in entries) if entries else 0,
+                    "best": max((e["best_accuracy"] for e in entries), default=0),
                     "latest_config": entries[-1]["config"] if entries else {},
                     "latest_round": entries[-1]["round"] if entries else 0,
+                    "n_champions": len(champions),
+                    "n_challengers": len(challengers),
+                    "n_improvements": wins,
+                    "teachers": card.get("teachers", []),
                 }
             fb._put("mamba3/state/lineage", fb_lineage)
+
+            # Push teacher eval matrix (who can teach what)
+            all_evals = self.get_all_teacher_scores()
+            eval_matrix = {}
+            for e in all_evals:
+                teacher = e["teacher"]
+                task = e["task"]
+                if teacher not in eval_matrix:
+                    eval_matrix[teacher] = {}
+                eval_matrix[teacher][task] = round(e["accuracy"], 3)
+            fb._put("mamba3/state/teacher_matrix", eval_matrix)
+
+            # Push knowledge flow: which teachers are actively helping which tasks
+            knowledge_flow = []
+            for task, entries in all_lineage.items():
+                for e in entries:
+                    for t in e.get("teachers", []):
+                        if t.get("model") and t.get("weight", 0) > 0.1:
+                            knowledge_flow.append({
+                                "from": t["model"],
+                                "to": task,
+                                "weight": t["weight"],
+                                "round": e["round"],
+                            })
+            if knowledge_flow:
+                fb._put("mamba3/state/knowledge_flow", knowledge_flow)
 
             return True
         except Exception:

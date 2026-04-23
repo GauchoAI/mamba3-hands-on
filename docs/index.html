@@ -297,15 +297,19 @@ db.ref('mamba3/snapshot').on('value', s=>{
   updMini('gpuChart',gpuH,'#1a5276','rgba(26,82,118,0.1)',100);
   updMini('workersChart',wkH,'#27ae60','rgba(39,174,96,0.1)',null);
   // Tree
-  // Mutation timeline — file-tree style, grouped by task
+  // Rich mutation timeline — config evolution, teachers, win/loss
   const mt=document.getElementById('mutationTimeline');
   if(mt && d.lineage){
     const byTask={};
     Object.entries(d.lineage).forEach(([id,info])=>{
       const t=info.task||id.split('_r')[0];
       if(!byTask[t])byTask[t]=[];
-      const round=id.match(/_r(\d+)/)?.[1]||'0';
-      byTask[t].push({round:parseInt(round),acc:info.acc||0,role:info.role||'champion',mutation:info.mutation});
+      byTask[t].push({
+        round:info.round||parseInt(id.match(/_r(\d+)/)?.[1]||'0'),
+        acc:info.acc||0, best:info.best||0, role:info.role||'champion',
+        won:info.won, config:info.config||{}, teachers:info.teachers||[],
+        mutation:info.mutation,
+      });
     });
     let html='';
     const isTeacher=t=>d.three_pop?.teachers?.[t];
@@ -319,14 +323,33 @@ db.ref('mamba3/snapshot').on('value', s=>{
       const icon=isTeacher(task)?'🎓':best>=0.85?'🔥':best>=0.5?'🔄':'⏳';
       const bestPct=(best*100).toFixed(0);
       const taskName=task.replace(/_/g,' ');
-      html+=`<div class="mt-1"><div class="font-semibold text-gray-700">${icon} ${taskName} <span class="font-normal text-gray-400">${bestPct}%</span></div>`;
+      const nWins=entries.filter(e=>e.won).length;
+      const nChall=entries.filter(e=>e.role==='challenger').length;
+      html+=`<div class="mt-1.5"><div class="font-semibold text-gray-700">${icon} ${taskName} <span class="font-normal text-gray-400">${bestPct}%</span> <span class="text-[9px] text-gray-300">${entries.length}r ${nChall}c ${nWins}w</span></div>`;
       entries.forEach((e,i)=>{
         const last=i===entries.length-1;
-        const branch=last?'└─':'├─';
+        const branch=last?'└':'├';
         const pct=(e.acc*100).toFixed(0);
-        const bar='█'.repeat(Math.round(e.acc*10))+'░'.repeat(10-Math.round(e.acc*10));
-        const roleTag=e.role==='challenger'?'<span class="text-purple-500">challenger</span>':'';
-        html+=`<div class="text-gray-500 ml-2"><span class="text-gray-300">${branch}</span> r${e.round} <span class="tabular-nums">${bar}</span> ${pct}% ${roleTag}</div>`;
+        const barLen=10;
+        const filled=Math.round(e.acc*barLen);
+        const bar='█'.repeat(filled)+'░'.repeat(barLen-filled);
+        const isChallenger=e.role==='challenger';
+        const wonMark=e.won?'<span class="text-green-500">▲</span>':'';
+        const lostChall=isChallenger&&!e.won?'<span class="text-red-400">✗</span>':'';
+        // Config changes
+        const cfg=e.config||{};
+        const cfgStr=`d${cfg.d||'?'}L${cfg.L||'?'}`;
+        const stratParts=[];
+        if(cfg.opt&&cfg.opt!=='adamw')stratParts.push(cfg.opt);
+        if(cfg.loss&&cfg.loss!=='ce')stratParts.push(cfg.loss);
+        if(cfg.perp)stratParts.push('perp');
+        if(cfg.wr)stratParts.push('WR');
+        const strat=stratParts.length?stratParts.join('+'):'';
+        // Teachers
+        const tList=(e.teachers||[]).map(t=>`<span class="text-blue-500">${t.model?.replace('specialist:','')?.replace(/_/g,' ')}</span>`).join(', ');
+        const tTag=tList?` ← ${tList}`:'';
+        const roleColor=isChallenger?'text-purple-400':'text-gray-500';
+        html+=`<div class="${roleColor} ml-2 leading-tight"><span class="text-gray-300">${branch}─</span> <span class="tabular-nums">${bar}</span> ${pct}% ${wonMark}${lostChall} <span class="text-[9px] text-gray-400">${cfgStr} ${strat}</span>${tTag}</div>`;
       });
       html+=`</div>`;
     });
