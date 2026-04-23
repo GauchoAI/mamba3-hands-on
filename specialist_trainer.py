@@ -405,9 +405,12 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
             checkpoint_path=ckpt_str,
         )
         # Use confidence-based scoring: mean - k*std, not raw best
+        # IMPORTANT: use last_n=cycle (THIS run's cycles only) to avoid
+        # contamination from challenger cycles mixed into cycle_history
         existing = _db.get_task_status(task)
         existing_best = existing["best_accuracy"] if existing else 0
-        conf_score, conf_mean, conf_std, conf_n = _db.get_confidence_score(task)
+        conf_score, conf_mean, conf_std, conf_n = _db.get_confidence_score(
+            task, last_n=max(max_cycles, 5), k=1.0)
         # Mastery requires BOTH a spike above target AND reliable score above 90%
         if best_acc >= target_acc and conf_score >= 0.90:
             _db.update_task_status(task, "mastered", config, best_acc,
