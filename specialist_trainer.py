@@ -353,6 +353,15 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                                    length_correlation=round(_len_corr, 4),
                                    output_bias=round(_out_bias, 4),
                                    overconfidence=round(_overconf, 4))
+            # Run diagnostician on self — store signals for orchestrator
+            try:
+                from diagnostician import Diagnostician
+                _diag = Diagnostician(_db)
+                _signals = _diag.diagnose(task)
+                if _signals:
+                    _db.update_task_status(task, diagnostic_signals=_signals)
+            except Exception:
+                pass
             _db.close()
         except Exception:
             pass
