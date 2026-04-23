@@ -460,30 +460,41 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 if old != new:
                     mutation_diff[k] = {"from": old, "to": new}
 
+        # Compute generation (how many rounds this task has been through)
+        generation = len([e for e in lineage if e.get("role") in ("champion", "worker")])
+
         fb._put(f"mamba3/lineage/{node_id}", {
             "task": task,
             "round": cycle,
             "acc": round(best_acc, 3),
             "best": round(max(best_acc, existing_best), 3),
             "role": "worker",
+            "status": "champion",  # workers are always champion runs
             "won": best_acc > existing_best,
             "config": cfg_full,
             "parent_id": f"{task}_c{lineage[-2]['round']}_{lineage[-2].get('role','w')[0]}" if len(lineage) >= 2 else "seed",
             "mutation_diff": mutation_diff,
             "teachers": config.get("teachers", []),
             "n_params": n_params,
+            "generation": generation,
             "timestamp": time.time(),
         })
 
-        # 2. Task status with full detail
+        # 2. Task status + plateau state + diagnostic signals
+        best_ever_cfg, best_ever_acc = _db2.get_best_config(task)
         status_data = {
             "status": "mastered" if best_acc >= target_acc else "training",
             "best": round(max(best_acc, existing_best), 3),
             "cycles": cycle,
             "config": cfg_full,
             "best_config": cfg_full if best_acc >= existing_best else None,
+            "champion_config": cfg_full,
+            "best_ever_config": best_ever_cfg,
+            "best_ever_acc": round(best_ever_acc, 3),
+            "generation": generation,
+            "n_params": n_params,
         }
-        # Add diagnostic signals if any
+        # Diagnostic signals + plateau state
         try:
             from diagnostician import Diagnostician
             diag = Diagnostician(_db2)
@@ -493,6 +504,25 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                     {"signal": s["signal"], "evidence": s["evidence"]}
                     for s in signals
                 ]
+            # Plateau state
+            recent = _db2.get_cycle_history(task, last_n=20)
+            if recent:
+                recent.sort(key=lambda r: r.get("cycle", 0))
+                accs = [r["accuracy"] for r in recent if r.get("accuracy") is not None]
+                if len(accs) >= 5:
+                    improving = accs[-1] > accs[0] + 0.02
+                    stuck_cycles = 0
+                    for i in range(len(accs)-1, -1, -1):
+                        if accs[i] >= max(accs) - 0.01:
+                            stuck_cycles = len(accs) - i
+                            break
+                    fb._put(f"mamba3/state/plateau/{task}", {
+                        "active": not improving and stuck_cycles > 10,
+                        "stuck_cycles": stuck_cycles,
+                        "severity": round(min(stuck_cycles / 30, 1.0), 2),
+                        "best_ever": round(max(best_acc, existing_best), 3),
+                        "since": recent[-stuck_cycles]["timestamp"] if stuck_cycles < len(recent) else time.time(),
+                    })
         except Exception:
             pass
         fb._put(f"mamba3/state/task_status/{task}", status_data)
@@ -512,18 +542,34 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
             "n_challengers": len(challengers),
             "n_improvements": improvements,
             "teachers": model_card.get("teachers", []),
+            "champion_config": cfg_full,
+            "best_ever_config": best_ever_cfg,
+            "best_ever_acc": round(best_ever_acc, 3),
             "challengers": [{
                 "round": c["round"],
                 "acc": round(c["accuracy"], 3),
                 "config": c.get("config", {}),
                 "mutation": c.get("mutation", ""),
                 "won": c["accuracy"] > c.get("best_accuracy", 0),
-            } for c in challengers[-10:]],  # last 10 challengers
+                "status": "retired",
+                "timestamp": c.get("timestamp", 0),
+            } for c in challengers[-20:]],  # last 20 challengers (retention)
         })
 
-        # 4. Diagnostic history
+        # 4. Diagnostic history with timestamps
         diag_stats = _db2.get_diagnostic_stats(task)
         if diag_stats:
+            # Add last_tried timestamp from DB
+            for ds in diag_stats:
+                cur = _db2.conn.execute(
+                    "SELECT MAX(timestamp) FROM diagnostic_history "
+                    "WHERE task=? AND signal=? AND prescription_type=?",
+                    (task, ds["signal"], ds["prescription"])
+                )
+                row = cur.fetchone()
+                ds["last_tried"] = row[0] if row and row[0] else None
+                # Is this the currently active prescription?
+                ds["active"] = ds["tries"] > 0 and ds["wins"] == 0 and ds["tries"] < 3
             fb._put(f"mamba3/state/diagnostics/{task}", diag_stats)
 
         # 5. Teacher matrix
@@ -532,8 +578,23 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
             for t_name, t_score in teacher_scores:
                 fb._put(f"mamba3/state/teacher_matrix/{t_name}/{task}", round(t_score, 3))
 
-        # 6. Events (rich types the UI wants)
+        # 6. Rich events (full vocabulary the UI wants)
+        ts = time.time()
+
+        # challenger_spawned — every run is a new config being tried
+        fb._put(f"mamba3/events/{node_id}_spawned", {
+            "type": "challenger_spawned",
+            "task": task,
+            "exp_id": node_id,
+            "parent_id": f"{task}_c{lineage[-2]['round']}_{lineage[-2].get('role','w')[0]}" if len(lineage) >= 2 else "seed",
+            "config": cfg_full,
+            "mutation_diff": mutation_diff,
+            "generation": generation,
+            "timestamp": ts,
+        })
+
         if best_acc > existing_best:
+            # improvement — any accuracy increase over previous best
             fb._put(f"mamba3/events/{node_id}_improved", {
                 "type": "improvement",
                 "task": task,
@@ -541,17 +602,52 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 "from_acc": round(existing_best, 3),
                 "to_acc": round(best_acc, 3),
                 "config": cfg_full,
-                "timestamp": time.time(),
+                "timestamp": ts,
             })
+            # new_best — only if this is the all-time high for this task
+            if best_acc >= best_ever_acc:
+                fb._put(f"mamba3/events/{node_id}_new_best", {
+                    "type": "new_best",
+                    "task": task,
+                    "exp_id": node_id,
+                    "acc": round(best_acc, 3),
+                    "previous_best": round(best_ever_acc, 3),
+                    "config": cfg_full,
+                    "timestamp": ts,
+                })
+
         if best_acc >= target_acc:
+            # mastery — task graduated, with timestamp
             fb._put(f"mamba3/events/{node_id}_mastery", {
                 "type": "mastery",
                 "task": task,
                 "exp_id": node_id,
                 "acc": round(best_acc, 3),
                 "cycles": cycle,
-                "timestamp": time.time(),
+                "config": cfg_full,
+                "timestamp": ts,
             })
+
+        # 7. Teachers with graduation timestamps
+        teachers = _db2.get_teachers()
+        fb._put("mamba3/three_pop/teachers", {
+            t: {"exp_id": info.get("exp_id", t),
+                "accuracy": round(info["accuracy"], 3),
+                "graduated_at": info.get("graduated_at", 0)}
+            for t, info in teachers.items()
+        })
+
+        # 8. Meta (run info for reproducibility)
+        fb._put("mamba3/meta", {
+            "run_name": "three_populations_v2",
+            "start_timestamp": _db2.conn.execute(
+                "SELECT MIN(timestamp) FROM lineage").fetchone()[0],
+            "tasks": 15,
+            "base_config": {
+                "d_model": 64, "n_kernel_layers": 3, "d_state": 16,
+                "lr": 1e-3, "weight_decay": 0.1,
+            },
+        })
 
         _db2.close()
     except Exception:
