@@ -37,6 +37,17 @@ class StateDB:
 
     def _create_tables(self):
         self.conn.executescript("""
+            CREATE TABLE IF NOT EXISTS task_status (
+                task TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'waiting',
+                current_config TEXT DEFAULT '{}',
+                best_accuracy REAL DEFAULT 0,
+                best_round INTEGER DEFAULT 0,
+                total_cycles INTEGER DEFAULT 0,
+                diagnostic_signals TEXT DEFAULT '[]',
+                updated_at REAL
+            );
+
             CREATE TABLE IF NOT EXISTS teachers (
                 task TEXT PRIMARY KEY,
                 accuracy REAL NOT NULL,
@@ -140,6 +151,11 @@ class StateDB:
             self.conn.execute("ALTER TABLE lineage ADD COLUMN provenance TEXT DEFAULT '{}'")
             self.conn.commit()
 
+        # Populate task_status from existing data if empty
+        count = self.conn.execute("SELECT COUNT(*) FROM task_status").fetchone()[0]
+        if count == 0:
+            self._seed_task_status()
+
         # All tables — CREATE IF NOT EXISTS is idempotent
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS active_runs (
@@ -202,6 +218,110 @@ class StateDB:
             );
         """)
         self.conn.commit()
+
+    def _seed_task_status(self):
+        """Populate task_status from existing lineage + teachers."""
+        # From teachers
+        teachers = self.get_teachers()
+        for task, info in teachers.items():
+            self.update_task_status(task, "mastered", info["config"],
+                                    info["accuracy"])
+
+        # From lineage (non-mastered tasks)
+        all_lineage = self.get_all_lineage()
+        for task, entries in all_lineage.items():
+            if task in teachers:
+                continue
+            if entries:
+                best = max(e["best_accuracy"] for e in entries)
+                best_cfg, _ = self.get_best_config(task)
+                self.update_task_status(task, "training", best_cfg, best)
+
+    # ── Task status (source of truth for orchestrator) ──────────
+
+    def update_task_status(self, task, status=None, config=None,
+                           best_accuracy=None, best_round=None,
+                           total_cycles=None, diagnostic_signals=None):
+        """Update task status. Creates if not exists."""
+        # Read existing
+        cur = self.conn.execute("SELECT * FROM task_status WHERE task=?", (task,))
+        existing = cur.fetchone()
+
+        if existing:
+            cols = [d[0] for d in cur.description]
+            row = dict(zip(cols, existing))
+            self.conn.execute(
+                "UPDATE task_status SET status=?, current_config=?, best_accuracy=?, "
+                "best_round=?, total_cycles=?, diagnostic_signals=?, updated_at=? "
+                "WHERE task=?",
+                (status or row["status"],
+                 json.dumps(config) if config else row["current_config"],
+                 best_accuracy if best_accuracy is not None else row["best_accuracy"],
+                 best_round if best_round is not None else row["best_round"],
+                 total_cycles if total_cycles is not None else row["total_cycles"],
+                 json.dumps(diagnostic_signals) if diagnostic_signals is not None else row["diagnostic_signals"],
+                 time.time(), task)
+            )
+        else:
+            self.conn.execute(
+                "INSERT INTO task_status (task, status, current_config, best_accuracy, "
+                "best_round, total_cycles, diagnostic_signals, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (task, status or "waiting",
+                 json.dumps(config) if config else "{}",
+                 best_accuracy or 0, best_round or 0, total_cycles or 0,
+                 json.dumps(diagnostic_signals) if diagnostic_signals else "[]",
+                 time.time())
+            )
+        self.conn.commit()
+
+    def get_task_status(self, task):
+        cur = self.conn.execute("SELECT * FROM task_status WHERE task=?", (task,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cur.description]
+        d = dict(zip(cols, row))
+        try:
+            d["current_config"] = json.loads(d["current_config"])
+        except (json.JSONDecodeError, TypeError):
+            d["current_config"] = {}
+        try:
+            d["diagnostic_signals"] = json.loads(d["diagnostic_signals"])
+        except (json.JSONDecodeError, TypeError):
+            d["diagnostic_signals"] = []
+        return d
+
+    def get_task_config(self, task):
+        """Get current config for a task from task_status."""
+        status = self.get_task_status(task)
+        if status:
+            return status["current_config"]
+        return None
+
+    def get_tasks_needing_training(self):
+        """Return tasks that are not mastered."""
+        cur = self.conn.execute(
+            "SELECT task FROM task_status WHERE status != 'mastered' ORDER BY best_accuracy DESC"
+        )
+        return [r[0] for r in cur.fetchall()]
+
+    def get_all_task_status(self):
+        cur = self.conn.execute("SELECT * FROM task_status ORDER BY best_accuracy DESC")
+        cols = [d[0] for d in cur.description]
+        results = []
+        for row in cur.fetchall():
+            d = dict(zip(cols, row))
+            try:
+                d["current_config"] = json.loads(d["current_config"])
+            except (json.JSONDecodeError, TypeError):
+                d["current_config"] = {}
+            try:
+                d["diagnostic_signals"] = json.loads(d["diagnostic_signals"])
+            except (json.JSONDecodeError, TypeError):
+                d["diagnostic_signals"] = []
+            results.append(d)
+        return results
 
     # ── Active runs (real-time, overwritten each cycle) ────────────
 
