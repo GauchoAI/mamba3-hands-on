@@ -1,0 +1,10 @@
+name: modular_arithmetic
+type: generator
+generator: generators.level1_reasoning:gen_modular_arithmetic
+target_accuracy: 0.95
+tags: [arithmetic, logic, level1]
+description: "Compute a mod b"
+curriculum:
+  - {stage: 1, max_val: 10, max_mod: 5, advance_at: 0.90}
+  - {stage: 2, max_val: 20, max_mod: 10, advance_at: 0.90}
+  - {stage: 3, max_val: 50, max_mod: 15, advance_at: 0.95}

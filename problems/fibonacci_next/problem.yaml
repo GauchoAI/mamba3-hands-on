@@ -1,0 +1,10 @@
+name: fibonacci_next
+type: generator
+generator: generators.level1_reasoning:gen_fibonacci_next
+target_accuracy: 0.95
+tags: [arithmetic, sequence, level1]
+description: "Predict next number in Fibonacci-like sequence"
+curriculum:
+  - {stage: 1, min_terms: 3, max_terms: 5, advance_at: 0.90}
+  - {stage: 2, min_terms: 4, max_terms: 8, advance_at: 0.90}
+  - {stage: 3, min_terms: 5, max_terms: 10, advance_at: 0.95}

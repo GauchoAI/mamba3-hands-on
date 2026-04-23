@@ -1,0 +1,10 @@
+name: duplicate_detect
+type: generator
+generator: generators.level1_reasoning:gen_duplicate_detect
+target_accuracy: 0.95
+tags: [counting, comparison, level1]
+description: "Detect if sequence contains duplicate elements"
+curriculum:
+  - {stage: 1, max_val: 5, min_len: 3, max_len: 5, advance_at: 0.90}
+  - {stage: 2, max_val: 10, min_len: 3, max_len: 8, advance_at: 0.90}
+  - {stage: 3, max_val: 15, min_len: 4, max_len: 10, advance_at: 0.95}

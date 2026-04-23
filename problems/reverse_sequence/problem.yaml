@@ -1,0 +1,10 @@
+name: reverse_sequence
+type: generator
+generator: generators.level1_reasoning:gen_reverse_sequence
+target_accuracy: 0.95
+tags: [sequence, transformation, level1]
+description: "Reverse a sequence of numbers"
+curriculum:
+  - {stage: 1, max_val: 5, min_len: 2, max_len: 4, advance_at: 0.90}
+  - {stage: 2, max_val: 10, min_len: 3, max_len: 6, advance_at: 0.90}
+  - {stage: 3, max_val: 15, min_len: 4, max_len: 8, advance_at: 0.95}

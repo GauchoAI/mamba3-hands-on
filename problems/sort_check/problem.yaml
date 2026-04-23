@@ -1,0 +1,10 @@
+name: sort_check
+type: generator
+generator: generators.level1_reasoning:gen_sort_check
+target_accuracy: 0.95
+tags: [comparison, pattern, level1]
+description: "Check if sequence is sorted ascending"
+curriculum:
+  - {stage: 1, max_val: 10, min_len: 3, max_len: 4, advance_at: 0.90}
+  - {stage: 2, max_val: 15, min_len: 3, max_len: 7, advance_at: 0.90}
+  - {stage: 3, max_val: 20, min_len: 4, max_len: 10, advance_at: 0.95}

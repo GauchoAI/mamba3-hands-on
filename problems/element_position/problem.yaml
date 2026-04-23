@@ -1,0 +1,10 @@
+name: element_position
+type: generator
+generator: generators.level1_reasoning:gen_element_position
+target_accuracy: 0.95
+tags: [counting, search, level1]
+description: "Find position of target element in sequence"
+curriculum:
+  - {stage: 1, max_val: 5, min_len: 4, max_len: 5, advance_at: 0.90}
+  - {stage: 2, max_val: 10, min_len: 4, max_len: 8, advance_at: 0.90}
+  - {stage: 3, max_val: 15, min_len: 5, max_len: 10, advance_at: 0.95}
