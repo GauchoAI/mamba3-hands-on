@@ -33,6 +33,7 @@ class StateDB:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self._create_tables()
+        self._migrate()
 
     def _create_tables(self):
         self.conn.executescript("""
@@ -56,7 +57,8 @@ class StateDB:
                 mutation TEXT,
                 role TEXT DEFAULT 'champion',
                 timestamp REAL NOT NULL,
-                checkpoint_path TEXT
+                checkpoint_path TEXT,
+                teachers TEXT DEFAULT '[]'
             );
 
             CREATE TABLE IF NOT EXISTS experiments (
@@ -92,6 +94,14 @@ class StateDB:
             );
         """)
         self.conn.commit()
+
+    def _migrate(self):
+        """Add columns to existing tables if missing."""
+        try:
+            self.conn.execute("SELECT teachers FROM lineage LIMIT 1")
+        except Exception:
+            self.conn.execute("ALTER TABLE lineage ADD COLUMN teachers TEXT DEFAULT '[]'")
+            self.conn.commit()
 
     # ── Teachers (append-only) ─────────────────────────────────────
 
@@ -133,28 +143,90 @@ class StateDB:
     # ── Lineage (append-only) ──────────────────────────────────────
 
     def log_lineage(self, task, round_num, accuracy, best_accuracy, config,
-                    mutation=None, role="champion", checkpoint_path=None):
+                    mutation=None, role="champion", checkpoint_path=None,
+                    teachers=None):
         """Log one training round. Append-only."""
         self.conn.execute(
             "INSERT INTO lineage (task, round, accuracy, best_accuracy, config, "
-            "mutation, role, timestamp, checkpoint_path) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "mutation, role, timestamp, checkpoint_path, teachers) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (task, round_num, accuracy, best_accuracy,
-             json.dumps(config), mutation, role, time.time(), checkpoint_path)
+             json.dumps(config), mutation, role, time.time(), checkpoint_path,
+             json.dumps(teachers or []))
         )
         self.conn.commit()
 
     def get_lineage(self, task):
         cur = self.conn.execute(
-            "SELECT round, accuracy, best_accuracy, config, mutation, role, timestamp "
+            "SELECT round, accuracy, best_accuracy, config, mutation, role, "
+            "timestamp, teachers "
             "FROM lineage WHERE task = ? ORDER BY round, id",
             (task,)
         )
-        return [{
-            "round": r[0], "accuracy": r[1], "best_accuracy": r[2],
-            "config": json.loads(r[3]), "mutation": r[4], "role": r[5],
-            "timestamp": r[6],
-        } for r in cur.fetchall()]
+        results = []
+        for r in cur.fetchall():
+            teachers_raw = r[7] if r[7] else "[]"
+            try:
+                teachers = json.loads(teachers_raw)
+            except (json.JSONDecodeError, TypeError):
+                teachers = []
+            results.append({
+                "round": r[0], "accuracy": r[1], "best_accuracy": r[2],
+                "config": json.loads(r[3]), "mutation": r[4], "role": r[5],
+                "timestamp": r[6], "teachers": teachers,
+            })
+        return results
+
+    def build_model_card(self, task, decay=0.8):
+        """Walk lineage, collect inherited teachers, compute weights.
+
+        Returns dict with task, config, and teachers list sorted by weight.
+        Teachers accumulate across generations — each ancestor's teacher
+        is inherited with weight decaying by generation distance.
+        """
+        lineage = self.get_lineage(task)
+        if not lineage:
+            return {"task": task, "config": {}, "teachers": []}
+
+        teachers = []
+        seen = set()
+
+        # Walk backwards — most recent first
+        for i, entry in enumerate(reversed(lineage)):
+            # Check config for teacher_model
+            cfg = entry.get("config", {})
+            teacher = cfg.get("teacher_model")
+            if teacher and teacher not in seen:
+                weight = decay ** i
+                teachers.append({
+                    "model": teacher,
+                    "weight": round(weight, 3),
+                    "from_round": entry["round"],
+                })
+                seen.add(teacher)
+
+            # Also check teachers field (accumulated from breeding)
+            for t in entry.get("teachers", []):
+                if t.get("model") and t["model"] not in seen:
+                    # Extra decay for teachers inherited from ancestors
+                    weight = t.get("weight", 1.0) * (decay ** i)
+                    teachers.append({
+                        "model": t["model"],
+                        "weight": round(weight, 3),
+                        "from_round": t.get("from_round", entry["round"]),
+                    })
+                    seen.add(t["model"])
+
+        # Sort by weight descending
+        teachers.sort(key=lambda t: -t["weight"])
+
+        best_cfg, best_acc = self.get_best_config(task)
+        return {
+            "task": task,
+            "config": best_cfg or {},
+            "best_accuracy": best_acc,
+            "teachers": teachers,
+        }
 
     def get_all_lineage(self):
         cur = self.conn.execute("SELECT DISTINCT task FROM lineage")

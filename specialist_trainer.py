@@ -77,10 +77,14 @@ def get_loss_fn(name):
         return stable_cross_entropy
 
 
-def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_cycle=None):
+def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
+                     on_cycle=None, teachers=None):
     """Train one specialist on one task. Returns when mastered or max cycles.
 
     Resumes from checkpoints/specialists/{task}.pt if it exists (same task only).
+
+    If teachers is provided (list of {model, weight}), blends distillation
+    loss from each teacher with the task loss each cycle.
     """
     load_generators()
     gen_fn = GENERATORS.get(task)
@@ -143,6 +147,27 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
     print(f"\n[{task}] d={config.get('d_model')}, L={config.get('n_kernel_layers')}, "
           f"{n_params:,} params", flush=True)
 
+    # Load teacher models for distillation
+    teacher_models = []
+    if teachers:
+        try:
+            from external_teacher import ExternalTeacher
+            for t_info in teachers:
+                t_name = t_info.get("model", "")
+                t_weight = t_info.get("weight", 1.0)
+                if t_weight < 0.1:
+                    continue  # too weak, skip
+                try:
+                    ext = ExternalTeacher(t_name, device=device)
+                    teacher_models.append({"ext": ext, "weight": t_weight, "name": t_name})
+                    print(f"  Teacher: {t_name} (weight={t_weight:.2f})", flush=True)
+                except Exception as e:
+                    print(f"  Teacher {t_name} failed: {e}", flush=True)
+        except ImportError:
+            pass
+    if teacher_models:
+        print(f"  Distilling from {len(teacher_models)} teachers", flush=True)
+
     for cycle in range(cycle_start + 1, cycle_start + max_cycles + 1):
         t0 = time.time()
         model.train()
@@ -186,6 +211,27 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95, on_c
                 mask_flat = pred_mask.reshape(-1)
                 loss_all = loss_fn(logits_flat, targets_flat, reduction='none')
                 loss = (loss_all * mask_flat).sum() / (mask_flat.sum() + 1e-8)
+
+                # Blend distillation loss from teachers
+                if teacher_models and step % 10 == 0:  # every 10th step (amortize cost)
+                    for t_info in teacher_models:
+                        try:
+                            ext = t_info["ext"]
+                            w = t_info["weight"]
+                            if ext.specialist_model is not None:
+                                with torch.no_grad():
+                                    t_logits = ext.specialist_model(token_tensor)
+                                # KL divergence on output positions
+                                t_flat = t_logits[:, :L-1].reshape(-1, t_logits.shape[-1])
+                                soft_teacher = torch.nn.functional.softmax(t_flat / 3.0, dim=-1)
+                                soft_student = torch.nn.functional.log_softmax(logits_flat / 3.0, dim=-1)
+                                kl = torch.nn.functional.kl_div(
+                                    soft_student, soft_teacher, reduction='none'
+                                ).sum(-1)
+                                distill_loss = (kl * mask_flat).sum() / (mask_flat.sum() + 1e-8) * 9.0
+                                loss = loss + w * 0.3 * distill_loss
+                        except Exception:
+                            pass
 
                 opt.zero_grad(set_to_none=True)
                 loss.backward()

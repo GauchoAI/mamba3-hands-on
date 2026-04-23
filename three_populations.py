@@ -392,24 +392,53 @@ def run(args):
                 if rounds_stuck >= plateau_threshold and best > 0 and acc < target_acc:
                     severity = min(3.0, rounds_stuck / 3)
                     base_cfg = task_config.get(task, BASE_CONFIG.copy())
-                    base_cfg["task"] = task  # needed for teacher_model mutation
+                    base_cfg["task"] = task
                     challenger_cfg = mutate_config(base_cfg, plateau_severity=severity)
-                    challenger_cfg.pop("task", None)  # don't pass task as config
+                    challenger_cfg.pop("task", None)
 
                     changes = {k: challenger_cfg[k] for k in challenger_cfg
                               if challenger_cfg.get(k) != base_cfg.get(k)
                               and k not in ("steps_per_cycle", "task")}
                     mutation_desc = f"severity={severity:.1f} changes={changes}"
 
-                    # Check if mutation includes a teacher_model
-                    teacher_model = challenger_cfg.pop("teacher_model", None)
-                    if teacher_model:
-                        # Check cache: is this teacher good for this task?
-                        cached = db.get_teacher_score(teacher_model, task)
+                    # Build model card: accumulate teachers from lineage
+                    model_card = db.build_model_card(task)
+                    inherited_teachers = model_card.get("teachers", [])
+
+                    # If mutation added a new teacher_model, add to teachers list
+                    new_teacher = challenger_cfg.pop("teacher_model", None)
+                    if new_teacher:
+                        # Check cache first
+                        cached = db.get_teacher_score(new_teacher, task)
                         if cached is not None and cached <= best:
-                            print(f"  🧬 Skipping teacher {teacher_model} for {task} "
+                            print(f"  Skipping teacher {new_teacher} "
                                   f"(cached: {cached:.0%} <= best: {best:.0%})", flush=True)
-                            teacher_model = None  # not worth trying
+                            new_teacher = None
+                        else:
+                            # Evaluate if not cached
+                            if cached is None:
+                                try:
+                                    from external_teacher import run_experiment
+                                    results = run_experiment(new_teacher, tasks=[task],
+                                                            n_examples=30)
+                                    cached = results.get(task, 0)
+                                except Exception:
+                                    cached = 0
+                            if cached > best:
+                                inherited_teachers.append({
+                                    "model": new_teacher,
+                                    "weight": 1.0,
+                                    "from_round": round_num,
+                                })
+                            else:
+                                new_teacher = None
+
+                    # Filter teachers with cached score <= current best
+                    active_teachers = []
+                    for t in inherited_teachers:
+                        t_score = db.get_teacher_score(t["model"], task)
+                        if t_score is None or t_score > best * 0.5:
+                            active_teachers.append(t)
 
                     arch_changed = any(challenger_cfg.get(k) != base_cfg.get(k)
                                       for k in ["d_model", "d_state", "headdim",
@@ -422,65 +451,31 @@ def run(args):
                         if arch_changed:
                             ckpt_path.unlink()
 
-                    if teacher_model:
-                        print(f"  🧬 CHALLENGER for {task} with teacher={teacher_model}: "
-                              f"{changes}", flush=True)
+                    if active_teachers:
+                        t_names = [t["model"] for t in active_teachers]
+                        print(f"  🧬 CHALLENGER for {task} with {len(active_teachers)} "
+                              f"teachers {t_names}: {changes}", flush=True)
                     else:
                         print(f"  🧬 CHALLENGER for {task}: {changes}"
                               f"{' (fresh)' if arch_changed else ''}", flush=True)
 
-                    # Train challenger — with or without external teacher
-                    if teacher_model:
-                        # Distill from external teacher
-                        try:
-                            from external_teacher import ExternalTeacher
-                            ext = ExternalTeacher(teacher_model, device=device)
-                            from progressive_model import ByteTokenizer
-                            tok = ByteTokenizer()
+                    # Train challenger with accumulated teachers
+                    challenger_acc = train_specialist(
+                        task, challenger_cfg, device,
+                        max_cycles=cycles_per_round,
+                        target_acc=target_acc,
+                        on_cycle=on_cycle,
+                        teachers=active_teachers if active_teachers else None,
+                    )
 
-                            # Evaluate teacher on this task (idempotent cache)
-                            cached = db.get_teacher_score(teacher_model, task)
-                            if cached is None:
-                                from external_teacher import run_experiment
-                                results = run_experiment(teacher_model, tasks=[task],
-                                                        n_examples=30)
-                                cached = results.get(task, 0)
-
-                            print(f"    Teacher {teacher_model} scores {cached:.0%} on {task}",
-                                  flush=True)
-
-                            # Only use if teacher is better than current
-                            if cached > best:
-                                # Train with teacher's logits as guidance
-                                challenger_acc = train_specialist(
-                                    task, challenger_cfg, device,
-                                    max_cycles=cycles_per_round,
-                                    target_acc=target_acc,
-                                    on_cycle=on_cycle,
-                                )
-                            else:
-                                challenger_acc = 0
-                                print(f"    Teacher not helpful ({cached:.0%} <= {best:.0%})",
-                                      flush=True)
-                            ext.stop()
-                        except Exception as e:
-                            print(f"    Teacher error: {e}", flush=True)
-                            challenger_acc = 0
-                    else:
-                        challenger_acc = train_specialist(
-                            task, challenger_cfg, device,
-                            max_cycles=cycles_per_round,
-                            target_acc=target_acc,
-                            on_cycle=on_cycle,
-                        )
-
-                    # Log challenger to DB (sacred)
+                    # Log challenger to DB (sacred, with teachers)
                     db.log_lineage(
                         task=task, round_num=round_num,
                         accuracy=challenger_acc or 0,
                         best_accuracy=max(best, challenger_acc or 0),
                         config=challenger_cfg, mutation=mutation_desc,
                         role="challenger",
+                        teachers=active_teachers,
                     )
                     db.log_experiment(
                         task=task, round_num=round_num,
