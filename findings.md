@@ -1660,3 +1660,71 @@ represent" — 60,000 steps and still struggling.
 The architecture — the SSM with its registers and gates — is the piano.
 It's a beautiful instrument. The question is how to teach someone to
 play it efficiently.
+
+### How the SSM actually solves parity (the three-level lock)
+
+When we say "the model learns parity," what physically happens in the
+weights is three coupled optimization problems solved simultaneously:
+
+**Level 1 — The B matrix (routing):**
+The B projection matrix controls which registers receive which input.
+The model cannot say "put this bit in register 7." It has to learn
+weight values such that when input 1 arrives, the matrix multiplication
+HAPPENS to route a signal to a specific register. With raw bits
+(vocab=2), B is a 2×32 matrix — 64 numbers to optimize. With bytes
+(vocab=260), B is 260×64 — 16,640 numbers, and 258 of the 260 input
+channels are noise the model must learn to ignore.
+
+**Level 2 — The A matrix (decay/memory):**
+The A parameter controls how fast each register forgets. The model
+must learn that the XOR register should have HIGH decay (close to 1.0,
+meaning "hold this value") while scratch registers should have LOW
+decay (forget quickly). This is baked into the weights — not a runtime
+decision. The model discovers the right decay values through gradient
+descent.
+
+**Level 3 — The C matrix (reading):**
+The C projection matrix controls which registers contribute to the
+output prediction. The model must learn to read from the XOR register
+and ignore the other 2,047. If it reads from the wrong register, the
+output is noise regardless of whether B and A are correct.
+
+**The coupling problem:**
+These three matrices INTERACT. Changing B (routing) changes which
+register receives the signal, which changes what A (decay) is relevant,
+which changes what C needs to read. It's a coupled optimization over
+three matrices simultaneously. With 3 layers, the output of layer 1's
+C feeds into layer 2's B — creating a pipeline of
+routing→decay→reading→routing→decay→reading where all weight matrices
+across all layers must align.
+
+**The phase transition:**
+This coupling explains the "flat then sudden" learning pattern we
+observe. same_different had zero gradients for 400+ cycles, then
+spiked to 9.3, then mastered. The model was wandering in a flat
+landscape where B, A, and C were misaligned — no combination of small
+adjustments improved the output. Then the tumblers clicked: B learned
+to route, A learned to hold, C learned to read, all at once. The
+gradient spike IS the moment of alignment.
+
+### The ridiculousness quantified
+
+|                          | Parity (raw bits) | same_different (bytes) |
+|--------------------------|-------------------|----------------------|
+| Vocab size               | 2                 | 260                  |
+| B matrix size            | 2×32 = 64         | 260×64 = 16,640      |
+| Noise channels           | 0                 | 258 (97% noise)      |
+| Params                   | 8,074             | 103,539              |
+| Steps to mastery         | 400               | ~60,000+             |
+| Time on H100             | <1 second         | ~6,000 seconds       |
+| Accuracy                 | 100.0%            | 95% (just graduated) |
+
+The same architecture. The same mathematical capability. The same
+registers and gates. 400 steps vs 60,000 steps. The only difference:
+how many useless byte channels the B matrix has to learn to ignore.
+
+And yet — same_different DID graduate. 6,000 seconds of an H100
+burning through gradient descent, 400 cycles of zero progress, one
+glorious spike to 9.3, and then mastery. The model taught itself to
+fly a 2,048-knob cockpit with no manual, no labels, starting from
+random noise. That's simultaneously ridiculous and magnificent.
