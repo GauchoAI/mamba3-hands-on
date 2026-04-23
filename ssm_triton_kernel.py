@@ -47,38 +47,38 @@ def _ssm_scan_fwd_kernel(
     h = tl.zeros((hD, dS), dtype=tl.float32)
 
     for t in range(L):
-        # Load decay: scalar per (batch, step, head)
-        dec = tl.load(decay_ptr + b * dec_stride_b + t * dec_stride_l + head * dec_stride_h)
+        # Load decay: scalar per (batch, step, head) — cast to fp32
+        dec = tl.load(decay_ptr + b * dec_stride_b + t * dec_stride_l + head * dec_stride_h).to(tl.float32)
 
-        # Load inp[b, t, head, :, :] — (hD, dS)
+        # Load inp[b, t, head, :, :] — (hD, dS) — cast to fp32
         inp_base = b * inp_stride_b + t * inp_stride_l + head * inp_stride_h
         inp_block = tl.load(
             inp_ptr + inp_base +
             p_offs[:, None] * inp_stride_p +
             n_offs[None, :] * inp_stride_n
-        )
+        ).to(tl.float32)
 
-        # State update
+        # State update — ALL in fp32
         h = dec * h + inp_block
 
-        # Load C[b, t, head, :] — (dS,)
+        # Load C[b, t, head, :] — (dS,) — cast to fp32
         C_base = b * C_stride_b + t * C_stride_l + head * C_stride_h
-        C_vec = tl.load(C_ptr + C_base + n_offs * C_stride_n)
+        C_vec = tl.load(C_ptr + C_base + n_offs * C_stride_n).to(tl.float32)
 
-        # Output: y_t[p] = sum_n h[p, n] * C[n]
+        # Output: y_t[p] = sum_n h[p, n] * C[n] — fp32 accumulation
         y_t = tl.sum(h * C_vec[None, :], axis=1)  # (hD,)
 
-        # Load x and z
+        # Load x and z — cast to fp32
         xz_base_x = b * x_stride_b + t * x_stride_l + head * x_stride_h
         xz_base_z = b * z_stride_b + t * z_stride_l + head * z_stride_h
-        x_vec = tl.load(x_ptr + xz_base_x + p_offs * x_stride_p)
-        z_vec = tl.load(z_ptr + xz_base_z + p_offs * z_stride_p)
+        x_vec = tl.load(x_ptr + xz_base_x + p_offs * x_stride_p).to(tl.float32)
+        z_vec = tl.load(z_ptr + xz_base_z + p_offs * z_stride_p).to(tl.float32)
 
         # Skip + gate: y = (y + D*x) * silu(z)
+        # Compute silu as single expression to match JIT behavior
         y_t = y_t + D_val * x_vec
-        z_sig = 1.0 / (1.0 + tl.exp(-z_vec))
-        y_t = y_t * z_vec * z_sig
+        y_t = y_t * (z_vec * (1.0 / (1.0 + tl.exp(-z_vec))))
 
-        # Store y[b, t, head, :]
+        # Store y[b, t, head, :] — cast back to output dtype
         y_base = b * y_stride_b + t * y_stride_l + head * y_stride_h
         tl.store(y_ptr + y_base + p_offs * y_stride_p, y_t)
