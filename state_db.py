@@ -125,13 +125,22 @@ class StateDB:
         self.conn.commit()
 
     def _migrate(self):
-        """Add columns/tables to existing DB if missing."""
+        """Add columns/tables to existing DB if missing. Fully idempotent."""
+        # Lineage teachers column
         try:
             self.conn.execute("SELECT teachers FROM lineage LIMIT 1")
         except Exception:
             self.conn.execute("ALTER TABLE lineage ADD COLUMN teachers TEXT DEFAULT '[]'")
             self.conn.commit()
-        # Ensure new tables exist (idempotent — CREATE IF NOT EXISTS)
+
+        # Lineage provenance column
+        try:
+            self.conn.execute("SELECT provenance FROM lineage LIMIT 1")
+        except Exception:
+            self.conn.execute("ALTER TABLE lineage ADD COLUMN provenance TEXT DEFAULT '{}'")
+            self.conn.commit()
+
+        # All tables — CREATE IF NOT EXISTS is idempotent
         self.conn.executescript("""
             CREATE TABLE IF NOT EXISTS active_runs (
                 task TEXT PRIMARY KEY,
@@ -144,6 +153,7 @@ class StateDB:
                 started_at REAL,
                 updated_at REAL NOT NULL
             );
+
             CREATE TABLE IF NOT EXISTS cycle_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task TEXT NOT NULL,
@@ -158,6 +168,36 @@ class StateDB:
                 eval_ms REAL,
                 gpu_mem_mb REAL,
                 param_norm REAL,
+                timestamp REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS diagnostic_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task TEXT NOT NULL,
+                round INTEGER NOT NULL,
+                signal TEXT NOT NULL,
+                prescription_type TEXT NOT NULL,
+                prescription_params TEXT NOT NULL,
+                challenger_acc REAL,
+                champion_acc REAL,
+                won INTEGER NOT NULL,
+                timestamp REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS error_analysis (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task TEXT NOT NULL,
+                cycle INTEGER NOT NULL,
+                n_correct INTEGER,
+                n_total INTEGER,
+                accuracy REAL,
+                errors_by_length TEXT,
+                errors_by_output TEXT,
+                avg_confidence_correct REAL,
+                avg_confidence_wrong REAL,
+                length_correlation REAL,
+                output_bias REAL,
+                overconfidence REAL,
                 timestamp REAL NOT NULL
             );
         """)
@@ -257,15 +297,15 @@ class StateDB:
 
     def log_lineage(self, task, round_num, accuracy, best_accuracy, config,
                     mutation=None, role="champion", checkpoint_path=None,
-                    teachers=None):
+                    teachers=None, provenance=None):
         """Log one training round. Append-only."""
         self.conn.execute(
             "INSERT INTO lineage (task, round, accuracy, best_accuracy, config, "
-            "mutation, role, timestamp, checkpoint_path, teachers) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "mutation, role, timestamp, checkpoint_path, teachers, provenance) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (task, round_num, accuracy, best_accuracy,
              json.dumps(config), mutation, role, time.time(), checkpoint_path,
-             json.dumps(teachers or []))
+             json.dumps(teachers or []), json.dumps(provenance or {}))
         )
         self.conn.commit()
 
@@ -477,6 +517,75 @@ class StateDB:
             return True
         except Exception:
             return False
+
+    # ── Diagnostic history ───────────────────────────────────────
+
+    def log_diagnostic(self, task, round_num, signal, prescription_type,
+                       prescription_params, challenger_acc, champion_acc, won):
+        self.conn.execute(
+            "INSERT INTO diagnostic_history "
+            "(task, round, signal, prescription_type, prescription_params, "
+            "challenger_acc, champion_acc, won, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (task, round_num, signal, prescription_type,
+             json.dumps(prescription_params), challenger_acc, champion_acc,
+             1 if won else 0, time.time())
+        )
+        self.conn.commit()
+
+    def should_prescribe(self, task, signal, prescription_type, max_failures=3):
+        """Check if this prescription has failed too many times."""
+        cur = self.conn.execute(
+            "SELECT COUNT(*) as tries, COALESCE(SUM(won), 0) as wins "
+            "FROM diagnostic_history "
+            "WHERE task=? AND signal=? AND prescription_type=?",
+            (task, signal, prescription_type)
+        )
+        tries, wins = cur.fetchone()
+        return tries < max_failures or wins > 0
+
+    def get_diagnostic_stats(self, task=None):
+        """Get win rates per signal and prescription type."""
+        where = "WHERE task=?" if task else ""
+        params = (task,) if task else ()
+        cur = self.conn.execute(
+            f"SELECT signal, prescription_type, COUNT(*) as tries, "
+            f"COALESCE(SUM(won), 0) as wins "
+            f"FROM diagnostic_history {where} "
+            f"GROUP BY signal, prescription_type ORDER BY signal",
+            params
+        )
+        return [{"signal": r[0], "prescription": r[1], "tries": r[2],
+                 "wins": r[3], "rate": r[3]/max(r[2],1)} for r in cur.fetchall()]
+
+    # ── Error analysis ─────────────────────────────────────────────
+
+    def log_error_analysis(self, task, cycle, n_correct, n_total, accuracy,
+                           errors_by_length=None, errors_by_output=None,
+                           avg_confidence_correct=None, avg_confidence_wrong=None,
+                           length_correlation=None, output_bias=None,
+                           overconfidence=None):
+        self.conn.execute(
+            "INSERT INTO error_analysis "
+            "(task, cycle, n_correct, n_total, accuracy, errors_by_length, "
+            "errors_by_output, avg_confidence_correct, avg_confidence_wrong, "
+            "length_correlation, output_bias, overconfidence, timestamp) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (task, cycle, n_correct, n_total, accuracy,
+             json.dumps(errors_by_length) if errors_by_length else None,
+             json.dumps(errors_by_output) if errors_by_output else None,
+             avg_confidence_correct, avg_confidence_wrong,
+             length_correlation, output_bias, overconfidence, time.time())
+        )
+        self.conn.commit()
+
+    def get_error_analysis(self, task, last_n=5):
+        cur = self.conn.execute(
+            "SELECT * FROM error_analysis WHERE task=? ORDER BY cycle DESC LIMIT ?",
+            (task, last_n)
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
 
     # ── Teacher evaluation cache (idempotent) ────────────────────
 
