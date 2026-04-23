@@ -185,7 +185,66 @@ SQLite (source of truth)         Firebase (real-time UI feed)
 
 ### Tier 3: Ambitious (new Firebase data needed)
 
-#### 3.1 Knowledge Flow Graph
+#### 3.1 Live Genetic Tree
+
+**Data:** `/snapshot/lineage` (already has parent pointers, config, won/lost, provenance)
+**What:** Interactive tree per task showing the full evolution of configs.
+
+```
+parity — Genetic Tree
+                                    
+  [seed]──────────────────────────────────────────
+  d64 L3 adamw CE wd=0.1                         
+  round 0, 60%                                    
+     │                                            
+     ├──[champion r1] 62% ▲                       
+     │     │                                      
+     │     ├──[challenger r4] Lion+label_smooth    
+     │     │   62% ✗ (champion held)              
+     │     │                                      
+     │     ├──[challenger r5] lr=9e-4             
+     │     │   62% ✗                              
+     │     │                                      
+     │     └──[challenger r6] L=2, lr=9e-4        
+     │         62% ✗ (arch change, fresh start)   
+     │                                            
+     └──[diagnostic r8] noise_scale=0.005 🔬       
+         55% ✗ (dead_grad prescription failed)    
+```
+
+- **D3.js tree layout** — horizontal, scrollable
+- **Node = one experiment** (champion or challenger)
+- **Node color:**
+  - Green = improved (won)
+  - Red = lost (champion held)
+  - Blue = diagnostic prescription
+  - Gold = mastered (graduated)
+  - Gray = inherited (no change)
+- **Node size** = accuracy (bigger = better)
+- **Edge label** = what changed (mutation diff)
+- **Click node** = expand model card with full provenance
+- **Live updates** — new nodes appear as challengers are tried
+- **Filter:** show only winners, only diagnostics, only teacher mutations
+- **Per-task tabs** — switch between tasks to see their individual trees
+- **Cross-task view** — when `specialist:same_different` teaches `arithmetic_next`,
+  draw a dashed edge between the two task trees
+
+**Firebase data needed (already available):**
+```javascript
+db.ref('mamba3/snapshot/lineage').on('value', s => {
+  // Each node has: parent, task, round, acc, best, role,
+  // won, config, teachers, mutation, provenance
+  drawGeneticTree(s.val());
+});
+```
+
+The lineage data already has everything: parent pointers for the tree
+structure, config for the node labels, won/lost for the colors,
+provenance for the source tags, teachers for the cross-task edges.
+
+---
+
+#### 3.2 Knowledge Flow Graph (Cross-Task)
 **Data:** `/state/knowledge_flow`
 **What:** Interactive graph showing how knowledge flows between tasks.
 ```
