@@ -263,12 +263,9 @@ impl PtxTrainer {
                 self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
                 nh,
             )?;
-            launch_adamw(&stream, &ptx,
-                &mut layer.dt_bias, &self.train_scratch.d_dt_bias[li],
-                &mut self.m_dt_bias[li], &mut self.v_dt_bias[li],
-                self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
-                nh,
-            )?;
+            // dt_bias optimizer disabled (see note in layer_backward).
+            let _ = &self.m_dt_bias[li];
+            let _ = &self.v_dt_bias[li];
         }
         // Final norm
         launch_adamw(&stream, &ptx,
@@ -470,40 +467,13 @@ impl PtxTrainer {
             unsafe { lb.launch(cfg)? };
         }
 
-        // Step E.5: ssm_param_grads — d_dt_bias + d_proj[dt_off/a_off]
-        // Uses decay-path d_dt only (inp-path d_dt_from_inp is zeroed by
-        // ssm_scan_bwd_full for numerical stability).
-        {
-            let proj_off = li * self.train_scratch.layer_proj_stride;
-            let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
-            let dc_off = li * self.train_scratch.layer_decay_stride;
-            let dc_view = self.train_scratch.layer_decays.slice(dc_off..dc_off + l * nh);
-            let dt_view = self.train_scratch.layer_dts.slice(dc_off..dc_off + l * nh);
-            let dt_bias_ref: &CudaSlice<f32> = &self.model.layers[li].dt_bias;
-
-            let l_i = l as i32;
-            let h_i = nh as i32;
-            let dip_i = dip as i32;
-            let di_i = di as i32;
-            let ds_i = ds as i32;
-
-            let mut lb = stream.launch_builder(&ptx.k.ssm_param_grads);
-            lb.arg(&proj_view);
-            lb.arg(dt_bias_ref);
-            lb.arg(&dt_view);
-            lb.arg(&dc_view);
-            lb.arg(&self.train_scratch.d_decay);
-            lb.arg(&self.train_scratch.d_dt_from_inp);
-            lb.arg(&mut self.train_scratch.d_proj);
-            lb.arg(&mut self.train_scratch.d_dt_bias[li]);
-            lb.arg(&l_i); lb.arg(&h_i); lb.arg(&dip_i); lb.arg(&di_i); lb.arg(&ds_i);
-            let cfg = LaunchConfig {
-                grid_dim: (l as u32, 1, 1),
-                block_dim: (nh.max(32) as u32, 1, 1),
-                shared_mem_bytes: 0,
-            };
-            unsafe { lb.launch(cfg)? };
-        }
+        // Step E.5: ssm_param_grads DISABLED again.
+        // Decay-path d_dt_bias (with d_dt_from_inp=0) actively hurt training:
+        // parity 72%→58% vs the d_d_param-only baseline. The gradient sign/
+        // magnitude pushes the model into a worse basin. Whichever path we
+        // use for d_dt (decay vs inp vs both), the numerics need more care.
+        // Revisit with either per-weight LR scaling or gradient-clip by norm.
+        let _ = (dip, ds, di);
 
         // Step F: bx_bwd — atomic adds into d_proj[bp] and d_proj[x]
         {
