@@ -5,8 +5,10 @@ pub mod model;
 pub mod runtime;
 pub mod scratch;
 pub mod train_scratch;
+pub mod trainer;
 
 pub use model::PtxModel;
 pub use runtime::PtxContext;
 pub use scratch::PtxScratch;
 pub use train_scratch::TrainScratch;
+pub use trainer::PtxTrainer;

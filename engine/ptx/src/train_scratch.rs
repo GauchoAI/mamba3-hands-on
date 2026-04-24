@@ -41,10 +41,25 @@ pub struct TrainScratch {
 
     // x after the final norm — for LM-head backward.  (L, d_model)
     pub x_before_head: CudaSlice<f32>,
+    // x BEFORE the final norm — for final-norm backward. (L, d_model)
+    pub x_before_final_norm: CudaSlice<f32>,
     // Single-float accumulator for cross-entropy loss.
     pub loss: CudaSlice<f32>,
     // Gradient of logits.  (L, vocab)
     pub d_logits: CudaSlice<f32>,
+    // Gradient of x (residual stream), flowing through layers backward
+    pub d_x: CudaSlice<f32>,      // (L, d)
+    pub d_y_out: CudaSlice<f32>,  // (L, d), per layer (overwritten)
+    pub d_y_inner: CudaSlice<f32>,// (L, d_inner)
+    pub d_proj: CudaSlice<f32>,   // (L, max_dip)
+    pub d_y_pregate: CudaSlice<f32>,// (L, d_inner)
+    pub d_scan_inp: CudaSlice<f32>, // (L, H, hd, ds)
+    // Gradient tensors for weights (accumulated by backward)
+    pub d_embed: CudaSlice<f32>,    // (vocab, d)
+    pub d_fnorm_w: CudaSlice<f32>,  // (d,)
+    pub d_fnorm_b: CudaSlice<f32>,  // (d,)
+    pub d_in_proj_w: Vec<CudaSlice<f32>>,   // per layer, (dip, d)
+    pub d_out_proj_w: Vec<CudaSlice<f32>>,  // per layer, (d, di)
 }
 
 impl TrainScratch {
@@ -68,6 +83,13 @@ impl TrainScratch {
         let ld = max_seq * n_heads;
         let ls = (max_seq + 1) * n_heads * headdim * d_state;
 
+        let mut d_in_proj_w = Vec::with_capacity(n_layers);
+        let mut d_out_proj_w = Vec::with_capacity(n_layers);
+        for _ in 0..n_layers {
+            d_in_proj_w.push(stream.alloc_zeros::<f32>(max_dip * d_model)?);
+            d_out_proj_w.push(stream.alloc_zeros::<f32>(d_model * d_inner)?);
+        }
+
         Ok(Self {
             max_seq,
             n_layers,
@@ -84,8 +106,20 @@ impl TrainScratch {
             layer_decays: stream.alloc_zeros::<f32>(n_layers * ld)?,
             layer_states: stream.alloc_zeros::<f32>(n_layers * ls)?,
             x_before_head: stream.alloc_zeros::<f32>(max_seq * d_model)?,
+            x_before_final_norm: stream.alloc_zeros::<f32>(max_seq * d_model)?,
             loss: stream.alloc_zeros::<f32>(1)?,
             d_logits: stream.alloc_zeros::<f32>(max_seq * vocab_size)?,
+            d_x: stream.alloc_zeros::<f32>(max_seq * d_model)?,
+            d_y_out: stream.alloc_zeros::<f32>(max_seq * d_model)?,
+            d_y_inner: stream.alloc_zeros::<f32>(max_seq * d_inner)?,
+            d_proj: stream.alloc_zeros::<f32>(max_seq * max_dip)?,
+            d_y_pregate: stream.alloc_zeros::<f32>(max_seq * d_inner)?,
+            d_scan_inp: stream.alloc_zeros::<f32>(max_seq * n_heads * headdim * d_state)?,
+            d_embed: stream.alloc_zeros::<f32>(vocab_size * d_model)?,
+            d_fnorm_w: stream.alloc_zeros::<f32>(d_model)?,
+            d_fnorm_b: stream.alloc_zeros::<f32>(d_model)?,
+            d_in_proj_w,
+            d_out_proj_w,
         })
     }
 }

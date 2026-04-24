@@ -520,13 +520,31 @@ impl PtxModel {
             }
         }
 
-        // 4. Final norm
+        // 4. Save x BEFORE final norm (for backward)
+        {
+            let n_copy = l * d;
+            let src = scratch.x.slice(0..n_copy);
+            let mut dst = train_scratch.x_before_final_norm.slice_mut(0..n_copy);
+            let n_i = n_copy as i32;
+            let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+            lb.arg(&src);
+            lb.arg(&mut dst);
+            lb.arg(&n_i);
+            let cfg = LaunchConfig {
+                grid_dim: ((n_copy as u32 + 255) / 256, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+
+        // 4b. Final norm (in-place on scratch.x)
         launch_layer_norm(
             &stream, &self.ptx,
             &mut scratch.x, &self.final_norm_w, &self.final_norm_b, l, d,
         )?;
 
-        // 4b. Save x_before_head
+        // 4c. Save x AFTER final norm (for LM head backward)
         {
             let n_copy = l * d;
             let src = scratch.x.slice(0..n_copy);

@@ -1281,6 +1281,356 @@ extern "C" __launch_bounds__(256, 2) __global__ void mamba3_forward_coop(
 //                              TRAINING KERNELS
 // ============================================================================
 
+// ---------- fill_zero -------------------------------------------------------
+extern "C" __global__ void fill_zero(float* __restrict__ buf, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) buf[i] = 0.0f;
+}
+
+// ---------- matmul_ab_tiled -------------------------------------------------
+// C = A @ B.  A(M, K), B(K, N), C(M, N).  Standard (non-transpose) matmul.
+// Grid: (ceil(N/16), ceil(M/16)), Block: (16, 16).
+extern "C" __global__ void matmul_ab_tiled(
+    const float* __restrict__ A,
+    const float* __restrict__ B,
+    float* __restrict__ C,
+    int M, int N, int K
+) {
+    __shared__ float As[16 * 16];
+    __shared__ float Bs[16 * 16];
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    int col = blockIdx.x * 16 + tx;
+    int row = blockIdx.y * 16 + ty;
+    float acc = 0.0f;
+    for (int k_tile = 0; k_tile < K; k_tile += 16) {
+        int a_k = k_tile + tx;
+        As[ty * 16 + tx] = (row < M && a_k < K) ? A[row * K + a_k] : 0.0f;
+        int b_k = k_tile + ty;
+        Bs[ty * 16 + tx] = (col < N && b_k < K) ? B[b_k * N + col] : 0.0f;
+        __syncthreads();
+        #pragma unroll
+        for (int k = 0; k < 16; k++) {
+            acc = __fmaf_rn(As[ty * 16 + k], Bs[k * 16 + tx], acc);
+        }
+        __syncthreads();
+    }
+    if (row < M && col < N) C[row * N + col] = acc;
+}
+
+// ---------- matmul_atb_tiled ------------------------------------------------
+// C = A^T @ B.  A(K, M), B(K, N), C(M, N).
+// C[m, n] = sum_k A[k, m] * B[k, n]
+extern "C" __global__ void matmul_atb_tiled(
+    const float* __restrict__ A,
+    const float* __restrict__ B,
+    float* __restrict__ C,
+    int M, int N, int K
+) {
+    __shared__ float As[16 * 16];
+    __shared__ float Bs[16 * 16];
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    int m_col = blockIdx.y * 16 + tx;  // M dimension at tx (for load)
+    int n_col = blockIdx.x * 16 + tx;  // N dimension at tx (for load)
+    int row = blockIdx.y * 16 + ty;    // output m index (for compute)
+    int col = blockIdx.x * 16 + tx;    // output n index (for compute)
+    float acc = 0.0f;
+    for (int k_tile = 0; k_tile < K; k_tile += 16) {
+        int k = k_tile + ty;
+        As[ty * 16 + tx] = (k < K && m_col < M) ? A[k * M + m_col] : 0.0f;
+        Bs[ty * 16 + tx] = (k < K && n_col < N) ? B[k * N + n_col] : 0.0f;
+        __syncthreads();
+        #pragma unroll
+        for (int kk = 0; kk < 16; kk++) {
+            // A[k_tile+kk, row] is As[kk, ty]
+            // B[k_tile+kk, col] is Bs[kk, tx]
+            acc = __fmaf_rn(As[kk * 16 + ty], Bs[kk * 16 + tx], acc);
+        }
+        __syncthreads();
+    }
+    if (row < M && col < N) C[row * N + col] = acc;
+}
+
+// ---------- layer_norm_bwd --------------------------------------------------
+// For each row t of x (L, d): compute d_x, accumulate d_w, d_b via atomics.
+// Matches mamba3_engine::backward::layer_norm_backward exactly.
+// Grid: (L,), Block: (64,) — or (32,) single warp.
+extern "C" __global__ void layer_norm_bwd(
+    const float* __restrict__ d_out,   // (L, d)
+    const float* __restrict__ x,       // (L, d) - input saved from forward
+    const float* __restrict__ w,       // (d,)
+    float* __restrict__ d_x,           // (L, d)
+    float* __restrict__ d_w,           // (d,) - accumulated via atomicAdd
+    float* __restrict__ d_b,           // (d,) - accumulated via atomicAdd
+    int L, int d
+) {
+    int t = blockIdx.x;
+    if (t >= L) return;
+    int tid = threadIdx.x;
+    int off = t * d;
+    const float eps = 1e-5f;
+    int wid = tid >> 5;
+    int lid = tid & 31;
+
+    __shared__ float s_mean, s_var, s_dvar, s_dmean;
+    __shared__ float warp_buf[8];
+
+    // mean
+    float v = 0.0f;
+    for (int i = tid; i < d; i += blockDim.x) v += x[off + i];
+    v = warp_reduce_sum(v);
+    if (lid == 0) warp_buf[wid] = v;
+    __syncthreads();
+    if (wid == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        v = (lid < nw) ? warp_buf[lid] : 0.0f;
+        v = warp_reduce_sum(v);
+        if (lid == 0) s_mean = v / (float)d;
+    }
+    __syncthreads();
+    float mean = s_mean;
+
+    // var
+    float vs = 0.0f;
+    for (int i = tid; i < d; i += blockDim.x) {
+        float diff = x[off + i] - mean;
+        vs = __fmaf_rn(diff, diff, vs);
+    }
+    vs = warp_reduce_sum(vs);
+    if (lid == 0) warp_buf[wid] = vs;
+    __syncthreads();
+    if (wid == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        vs = (lid < nw) ? warp_buf[lid] : 0.0f;
+        vs = warp_reduce_sum(vs);
+        if (lid == 0) s_var = vs / (float)d;
+    }
+    __syncthreads();
+    float var = s_var;
+    float inv_std = rsqrtf(var + eps);
+
+    // d_var, d_mean reductions
+    float my_dvar = 0.0f;
+    float my_dmean_a = 0.0f;
+    float my_dmean_b = 0.0f;
+    for (int i = tid; i < d; i += blockDim.x) {
+        float x_mm = x[off + i] - mean;
+        float d_x_norm = d_out[off + i] * w[i];
+        my_dvar += d_x_norm * x_mm * (-0.5f) * inv_std * inv_std * inv_std;
+        my_dmean_a += -d_x_norm * inv_std;
+        my_dmean_b += -2.0f * x_mm;
+    }
+    my_dvar    = warp_reduce_sum(my_dvar);
+    my_dmean_a = warp_reduce_sum(my_dmean_a);
+    my_dmean_b = warp_reduce_sum(my_dmean_b);
+
+    __shared__ float wb_dvar[8], wb_dmean_a[8], wb_dmean_b[8];
+    if (lid == 0) {
+        wb_dvar[wid]    = my_dvar;
+        wb_dmean_a[wid] = my_dmean_a;
+        wb_dmean_b[wid] = my_dmean_b;
+    }
+    __syncthreads();
+    if (wid == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        my_dvar    = (lid < nw) ? wb_dvar[lid]    : 0.0f;
+        my_dmean_a = (lid < nw) ? wb_dmean_a[lid] : 0.0f;
+        my_dmean_b = (lid < nw) ? wb_dmean_b[lid] : 0.0f;
+        my_dvar    = warp_reduce_sum(my_dvar);
+        my_dmean_a = warp_reduce_sum(my_dmean_a);
+        my_dmean_b = warp_reduce_sum(my_dmean_b);
+        if (lid == 0) {
+            s_dvar  = my_dvar;
+            s_dmean = my_dmean_a + my_dvar * my_dmean_b / (float)d;
+        }
+    }
+    __syncthreads();
+    float d_var  = s_dvar;
+    float d_mean = s_dmean;
+
+    // final d_x write + atomic d_w, d_b accumulation
+    for (int i = tid; i < d; i += blockDim.x) {
+        float x_mm = x[off + i] - mean;
+        float x_norm = x_mm * inv_std;
+        float d_x_norm = d_out[off + i] * w[i];
+
+        d_x[off + i] = d_x_norm * inv_std
+            + d_var * 2.0f * x_mm / (float)d
+            + d_mean / (float)d;
+
+        atomicAdd(&d_w[i], d_out[off + i] * x_norm);
+        atomicAdd(&d_b[i], d_out[off + i]);
+    }
+}
+
+// ---------- gate_bwd --------------------------------------------------------
+// Matches the gate-backward section in train.rs backward_analytical.
+//   d_y_pregate[t, i] = d_y_inner[t, i] * z_silu(z_raw)
+//   d_proj[t, i]      = d_y_inner[t, i] * y_pregate(z_raw, y_inner) * dsilu_dz(z_raw)
+// where z_silu = z_raw * sigmoid(z_raw), dsilu_dz = sigmoid + z*sigmoid*(1-sigmoid).
+// Grid: (ceil(L*di/256),), Block: (256,)
+extern "C" __global__ void gate_bwd(
+    const float* __restrict__ d_y_inner,
+    const float* __restrict__ y_inner,
+    const float* __restrict__ proj,       // z_raw in first di per row
+    float* __restrict__ d_proj,           // writes z slice [0..di]
+    float* __restrict__ d_y_pregate,
+    int L, int di, int dip
+) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = L * di;
+    if (idx >= total) return;
+    int t = idx / di;
+    int i = idx - t * di;
+
+    float z_raw = proj[t * dip + i];
+    float s = sigmoid_f(z_raw);
+    float z_silu = z_raw * s;
+
+    float yi = y_inner[idx];
+    float y_pregate = (fabsf(z_silu) > 1e-8f) ? yi / z_silu : 0.0f;
+
+    float dy = d_y_inner[idx];
+    d_y_pregate[idx] = dy * z_silu;
+
+    float dsilu_dz = s + z_raw * s * (1.0f - s);
+    d_proj[t * dip + i] = dy * y_pregate * dsilu_dz;
+}
+
+// ---------- ssm_scan_bwd ----------------------------------------------------
+// Adjoint scan: reverse over t.  One block per head. Each thread owns (p, n).
+// Inputs:   d_y_pregate, proj, cp_saved, decay_saved, states, d_param
+// Outputs:  d_proj (atomicAdd to x_skip slice and cp slice), d_scan_inp
+// NOTE: d_proj must be pre-zeroed (except the z-slice from gate_bwd which is
+// a non-accumulating assignment).  Different slices of d_proj are written by
+// different kernels; all use atomicAdd except gate_bwd which assigns the z
+// slice exclusively.  Zero d_proj first, then run gate_bwd, then ssm_scan_bwd,
+// then bx_bwd.
+extern "C" __global__ void ssm_scan_bwd(
+    const float* __restrict__ d_y_pregate,
+    const float* __restrict__ proj,
+    const float* __restrict__ cp,
+    const float* __restrict__ decay,
+    const float* __restrict__ states,
+    const float* __restrict__ d_param,
+    float* __restrict__ d_proj,
+    float* __restrict__ d_scan_inp,
+    int L, int H, int hd, int ds, int di, int dip
+) {
+    int h = blockIdx.x;
+    int tid = threadIdx.x;
+    if (h >= H || tid >= hd * ds) return;
+    int p = tid / ds;
+    int n = tid - p * ds;
+
+    float dh = 0.0f;
+
+    for (int t = L - 1; t >= 0; t--) {
+        float dy_pre = d_y_pregate[t * di + h * hd + p];
+        float cp_tn = cp[t * ds + n];
+
+        // Step 1: dh += dy_pre * cp
+        dh = __fmaf_rn(dy_pre, cp_tn, dh);
+
+        // Step 2: d_proj[x_skip + h*hd+p] += dy_pre * d_param[h] (only n=0 writes)
+        if (n == 0) {
+            atomicAdd(&d_proj[t * dip + di + h * hd + p],
+                      dy_pre * d_param[h]);
+        }
+
+        // Step 3: d_cp[t, n] += sum_p(dy_pre * state[t+1, h, p, n])
+        float state_tp1 = states[(((t + 1) * H + h) * hd + p) * ds + n];
+        atomicAdd(&d_proj[t * dip + 2 * di + ds + n],
+                  dy_pre * state_tp1);
+
+        // Step 4: d_scan_inp[t, h, p, n] = dh (current value)
+        d_scan_inp[((t * H + h) * hd + p) * ds + n] = dh;
+
+        // Step 5: propagate adjoint state
+        float dec = decay[t * H + h];
+        dh *= dec;
+    }
+}
+
+// ---------- bx_bwd ----------------------------------------------------------
+// From d_scan_inp, produce d_proj[bp_off] (atomic) and d_proj[x_off] (atomic).
+// Per timestep/head/p: d_bx[n] = d_scan_inp[n] / (dt*trap + 1e-8);
+//                      d_proj[bp_off + n] += d_bx[n] * x_raw[h*hd+p]
+//                      d_proj[x_off + h*hd+p] += sum_n(d_bx[n] * bp_raw[n])
+// Grid: (H,), Block: (hd*ds,) — same layout as ssm_scan_bwd.
+extern "C" __global__ void bx_bwd(
+    const float* __restrict__ d_scan_inp,
+    const float* __restrict__ proj,
+    const float* __restrict__ dt_bias,
+    float* __restrict__ d_proj,
+    int L, int H, int hd, int ds, int di, int dip
+) {
+    int h = blockIdx.x;
+    int tid = threadIdx.x;
+    if (h >= H || tid >= hd * ds) return;
+    int p = tid / ds;
+    int n = tid - p * ds;
+
+    int dt_off = 2 * di + 2 * ds;
+    int a_off = dt_off + H;
+    int tr_off = a_off + H;
+    int bp_off = 2 * di;
+
+    extern __shared__ float smem[];
+    // Tree-reduce buffer per (h, p) for d_x_val sum over n.
+    // smem size = hd*ds
+
+    for (int t = 0; t < L; t++) {
+        float dt_raw = proj[t * dip + dt_off + h] + dt_bias[h];
+        float dt_v = softplus_f(dt_raw);
+        float tr_raw = proj[t * dip + tr_off + h];
+        float tr = sigmoid_f(tr_raw);
+        float denom = dt_v * tr + 1e-8f;
+
+        float d_bx = d_scan_inp[((t * H + h) * hd + p) * ds + n] / denom;
+        float x_val = proj[t * dip + di + h * hd + p];
+        float bp_raw = proj[t * dip + bp_off + n];
+
+        // d_Bp[n] += d_bx * x_val   (x_val same for all n in thread's (h, p))
+        atomicAdd(&d_proj[t * dip + bp_off + n], d_bx * x_val);
+
+        // d_x[h*hd+p] partial: d_bx * bp_raw; sum over n in p-group
+        smem[tid] = d_bx * bp_raw;
+        __syncthreads();
+
+        // Tree reduce across n for each p-group of ds threads
+        for (int stride = ds >> 1; stride > 0; stride >>= 1) {
+            if (n < stride) smem[tid] += smem[tid + stride];
+            __syncthreads();
+        }
+
+        if (n == 0) {
+            atomicAdd(&d_proj[t * dip + di + h * hd + p], smem[p * ds]);
+        }
+        __syncthreads();
+    }
+}
+
+// ---------- embed_scatter_bwd -----------------------------------------------
+// For each token t: atomicAdd d_embed[token[t], :] += d_x[t, :]
+// Grid: (L,), Block: (min(d, 256),)
+extern "C" __global__ void embed_scatter_bwd(
+    const float* __restrict__ d_x,
+    const unsigned int* __restrict__ tokens,
+    float* __restrict__ d_embed,
+    int L, int d, int vocab
+) {
+    int t = blockIdx.x;
+    if (t >= L) return;
+    unsigned int tok = tokens[t];
+    if (tok >= (unsigned int)vocab) return;
+    for (int i = threadIdx.x; i < d; i += blockDim.x) {
+        atomicAdd(&d_embed[tok * d + i], d_x[t * d + i]);
+    }
+}
+
+
 // ---------- adamw_step ------------------------------------------------------
 // Elementwise AdamW update. Matches mamba3_engine::backward::adamw_step exactly.
 //   p *= 1 - lr*wd

@@ -28,6 +28,14 @@ pub struct Kernels {
     pub mamba3_forward_coop: CudaFunction,
     pub adamw_step: CudaFunction,
     pub cross_entropy_fwd_bwd: CudaFunction,
+    pub fill_zero: CudaFunction,
+    pub matmul_ab_tiled: CudaFunction,
+    pub matmul_atb_tiled: CudaFunction,
+    pub layer_norm_bwd: CudaFunction,
+    pub gate_bwd: CudaFunction,
+    pub ssm_scan_bwd: CudaFunction,
+    pub bx_bwd: CudaFunction,
+    pub embed_scatter_bwd: CudaFunction,
 }
 
 pub struct PtxContext {
@@ -99,6 +107,14 @@ impl PtxContext {
             mamba3_forward_coop: module.load_function("mamba3_forward_coop")?,
             adamw_step: module.load_function("adamw_step")?,
             cross_entropy_fwd_bwd: module.load_function("cross_entropy_fwd_bwd")?,
+            fill_zero: module.load_function("fill_zero")?,
+            matmul_ab_tiled: module.load_function("matmul_ab_tiled")?,
+            matmul_atb_tiled: module.load_function("matmul_atb_tiled")?,
+            layer_norm_bwd: module.load_function("layer_norm_bwd")?,
+            gate_bwd: module.load_function("gate_bwd")?,
+            ssm_scan_bwd: module.load_function("ssm_scan_bwd")?,
+            bx_bwd: module.load_function("bx_bwd")?,
+            embed_scatter_bwd: module.load_function("embed_scatter_bwd")?,
         };
 
         Ok(Self {
