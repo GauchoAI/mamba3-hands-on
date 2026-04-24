@@ -2105,3 +2105,43 @@ than the Triton fp16 bug, but real.
   via stdin/stdout): wired up, works. Once Track 1 closes the gradient
   gap, ptxd becomes a drop-in replacement for `specialist_trainer.py` in
   `three_populations.py`, with PTX forward at 2.75× CPU.
+
+### First iteration of gradient closure — one win, one stall
+
+**Added:** `d_d_param` kernel (atomic sum over (t, p) inside `ssm_scan_bwd_full`),
+`d_decay[t, h]` via block-reduce, `d_dt_from_inp[t, h]` (inp-path contribution
+to `d_dt`). Fixed two earlier bugs along the way:
+
+- `ssm_scan_bwd_full` reduction used fixed stride=128, which reads uninitialized
+  shared memory when `hd*ds < 256`. Changed to `stride = (hd*ds)/2`.
+- `bx_bwd`'s formula was dividing by `dt*trap` where it should multiply — the
+  CPU reference `train.rs` has the same math bug. Fixed to `d_bx = d_scan_inp * dt * trap`.
+
+**Result on parity (d=64 L=4 dS=8, 5000 steps, batch=64):**
+- Baseline (only `in_proj`, `out_proj`, `embed`, `fnorm` grads): **61% best**
+- With `d_d_param` enabled: **72% best**, status "LEARNING"
+- No NaN, stable throughout
+
+**Stalled on d_dt_bias.** Added `ssm_param_grads` kernel (computes `d_dt_bias`
+from `d_decay + d_dt_from_inp` through softplus derivatives). Even with AdamW
+gradient clipping to [-1, 1], training NaNs within the first 200 steps.
+Suspect the `blended = inp_val / dt` division produces pathologically large
+values when `dt ≈ 0.05` (typical after initialization), compounded across
+(p, n) reductions. Currently disabled; kernel definition remains in
+`kernels.cu` for later fix. Possible fixes:
+- Tighter gradient clipping on `d_dt_bias` path specifically (not uniform)
+- Reformulate `d_dt_from_inp` to avoid the division
+- Per-weight-group learning rate (smaller LR for dt_bias)
+
+**Next items in gradient closure (unordered):**
+- Stabilize `d_dt_bias` (above)
+- `d_b_norm_w/b`, `d_c_norm_w/b` via `layer_norm_bwd` on the bp/cp chain
+- `d_layer_norm_w/b` per layer via `layer_norm_bwd` on the pre-norm path
+- `d_scale[l]` via `scale = Σ_i d_x[i] · y_out[l, i]`
+- RoPE backward and `d_angles`
+- Correct bx backward with the `bx_prev` timestep coupling (current uses
+  single-timestep approximation; may underweight gradient propagation through
+  the recurrence)
+
+Each should push `best_acc` higher. Parity hitting ≥95% is the stopping
+condition for Track 1.
