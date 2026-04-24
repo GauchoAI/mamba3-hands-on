@@ -156,18 +156,20 @@ impl PtxModel {
     /// contains kernel launches, not the memcpy.
     pub fn capture_graph(&self, l: usize) -> Result<CudaGraph, Box<dyn Error>> {
         let stream = self.ptx.ctx.default_stream();
-        // Warm up the kernels once (NVRTC cache, JIT) before capture.
+        // Warm JIT once (kernels compiled / resolved on first launch).
         let dummy: Vec<u32> = vec![0; l];
         self.upload_tokens(&stream, &dummy)?;
         self.record_compute(&stream, l)?;
         stream.synchronize()?;
 
-        // Capture.
-        stream.begin_capture(CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
-        self.record_compute(&stream, l)?;
-        let graph = stream
-            .end_capture(CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH)?
-            .ok_or("Graph capture returned None")?;
+        // Capture. THREAD_LOCAL mode ensures our stream is isolated; RELAXED
+        // permits the widest set of kernel launches without sync ops.
+        stream.begin_capture(CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)?;
+        let capture_result = self.record_compute(&stream, l);
+        let graph_result = stream
+            .end_capture(CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH);
+        capture_result?;
+        let graph = graph_result?.ok_or("Graph capture returned None")?;
         Ok(graph)
     }
 
