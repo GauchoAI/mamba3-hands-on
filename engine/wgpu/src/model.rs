@@ -252,7 +252,8 @@ impl Mamba3Model {
         layer_norm(&mut cp, &lw.c_norm_w, &lw.c_norm_b, l, ds);
 
         // DT, decay, trap
-        let mut dt = vec![0.0f32; l * nh];
+        // Stack-allocated arrays for small fixed-size intermediates
+        let mut dt = vec![0.0f32; l * nh];     // 7*8=56
         let mut decay = vec![0.0f32; l * nh];
         let mut trap = vec![0.0f32; l * nh];
         for t in 0..l {
@@ -346,29 +347,42 @@ impl Mamba3Model {
         let ds = self.d_state;
         let dip = lw.d_in_proj;
 
-        // Split: z, x, Bp, Cp, dd_dt, dd_A, trap_raw, angles
-        let mut off = 0;
-        let z_raw = &proj_slice(&proj, l, dip, off, di); off += di;
-        let x_raw = &proj_slice(&proj, l, dip, off, di); off += di;
-        let bp_raw = &proj_slice(&proj, l, dip, off, ds); off += ds;
-        let cp_raw = &proj_slice(&proj, l, dip, off, ds); off += ds;
-        let dd_dt = &proj_slice(&proj, l, dip, off, nh); off += nh;
-        let dd_a = &proj_slice(&proj, l, dip, off, nh); off += nh;
-        let trap_raw = &proj_slice(&proj, l, dip, off, nh); off += nh;
-        let angles = &proj_slice(&proj, l, dip, off, lw.num_rope_angles);
+        // Zero-copy: define offsets into proj, access directly as proj[t * dip + OFF + i]
+        let z_off = 0usize;
+        let x_off = di;
+        let bp_off = 2 * di;
+        let cp_off = 2 * di + ds;
+        let dt_off = 2 * di + 2 * ds;
+        let a_off = dt_off + nh;
+        let trap_off = a_off + nh;
+        let ang_off = trap_off + nh;
 
-        // Layer-norm B and C
-        let mut bp = bp_raw.clone();
+        // Helper: read from proj at (t, field_offset + i)
+        #[inline(always)]
+        fn pv(proj: &[f32], t: usize, dip: usize, off: usize, i: usize) -> f32 {
+            proj[t * dip + off + i]
+        }
+
+        // B and C need norm — extract only these two (small: L * dS)
+        let mut bp = Vec::with_capacity(l * ds);
+        let mut cp = Vec::with_capacity(l * ds);
+        unsafe { bp.set_len(l * ds); cp.set_len(l * ds); }
+        for t in 0..l {
+            for n in 0..ds {
+                bp[t * ds + n] = pv(proj, t, dip, bp_off, n);
+                cp[t * ds + n] = pv(proj, t, dip, cp_off, n);
+            }
+        }
+
+        // Layer-norm B and C (bp/cp already extracted above)
         layer_norm(&mut bp, &lw.b_norm_w, &lw.b_norm_b, l, ds);
-        let mut cp = cp_raw.clone();
         layer_norm(&mut cp, &lw.c_norm_w, &lw.c_norm_b, l, ds);
 
-        // DT = softplus(dd_dt + dt_bias)
+        // DT = softplus(dd_dt + dt_bias) — read dd_dt directly from proj
         let mut dt = vec![0.0f32; l * nh];
         for t in 0..l {
             for h in 0..nh {
-                let v = dd_dt[t * nh + h] + lw.dt_bias[h];
-                dt[t * nh + h] = softplus(v);
+                dt[t * nh + h] = softplus(pv(proj, t, dip, dt_off, h) + lw.dt_bias[h]);
             }
         }
 
@@ -376,9 +390,8 @@ impl Mamba3Model {
         let mut decay = vec![0.0f32; l * nh];
         for t in 0..l {
             for h in 0..nh {
-                // A = (-softplus(dd_A)).clamp(max=-A_floor) — A is always negative
-                let a_raw = -softplus(dd_a[t * nh + h]);
-                let a = if a_raw > -1e-4 { -1e-4 } else { a_raw }; // clamp to ≤ -A_floor
+                let ar = -softplus(pv(proj, t, dip, a_off, h));
+                let a = if ar > -1e-4 { -1e-4 } else { ar };
                 decay[t * nh + h] = (a * dt[t * nh + h]).exp();
             }
         }
@@ -395,34 +408,32 @@ impl Mamba3Model {
         let mut cumphase = vec![0.0f32; n_angles];
         for t in 0..l {
             for k in 0..n_angles {
-                cumphase[k] += angles[t * n_angles + k] * dt_mean[t];
+                cumphase[k] += pv(proj, t, dip, ang_off, k) * dt_mean[t];
                 phase[t * n_angles + k] = cumphase[k];
             }
         }
         apply_rope(&mut bp, &phase, l, ds, n_angles);
         apply_rope(&mut cp, &phase, l, ds, n_angles);
 
-        // Trap = sigmoid(trap_raw)
+        // Trap = sigmoid(trap_raw) — read directly from proj
         let mut trap = vec![0.0f32; l * nh];
         for t in 0..l {
             for h in 0..nh {
-                trap[t * nh + h] = sigmoid(trap_raw[t * nh + h]);
+                trap[t * nh + h] = sigmoid(pv(proj, t, dip, trap_off, h));
             }
         }
 
-        // Reshape x to (L, H, hD) and compute Bx = outer(x, Bp): (L, H, hD, dS)
-        // Then inp = trap * Bx + (1-trap) * Bx_prev, scaled by dt
+        // Bx = outer(x, Bp), inp = (trap * Bx + (1-trap) * Bx_prev) * dt
         let mut inp = vec![0.0f32; l * nh * hd * ds];
-        let mut bx_prev = vec![0.0f32; nh * hd * ds]; // zero for t=0
+        let mut bx_prev = vec![0.0f32; nh * hd * ds];
 
         for t in 0..l {
             for h in 0..nh {
-                // Current Bx
-                let mut bx_cur = vec![0.0f32; hd * ds];
-                for p in 0..hd {
-                    let x_val = x_raw[t * di + h * hd + p];
+                let mut bx_cur = [0.0f32; 256];
+                for pp in 0..hd {
+                    let x_val = pv(proj, t, dip, x_off, h * hd + pp); // x directly from proj
                     for n in 0..ds {
-                        bx_cur[p * ds + n] = x_val * bp[t * ds + n]; // Bp broadcast across heads
+                        bx_cur[pp * ds + n] = x_val * bp[t * ds + n];
                     }
                 }
 
@@ -449,11 +460,13 @@ impl Mamba3Model {
         let mut state = vec![0.0f32; nh * hd * ds];
         let mut y = vec![0.0f32; l * nh * hd];
 
-        // Precompute silu(z) — OUTSIDE the scan loop
+        // Precompute silu(z) — read z directly from proj, no copy
         let mut z_silu = vec![0.0f32; l * di];
-        for i in 0..l * di {
-            let z = z_raw[i];
-            z_silu[i] = z * sigmoid(z);
+        for t in 0..l {
+            for i in 0..di {
+                let z = pv(proj, t, dip, z_off, i);
+                z_silu[t * di + i] = z * sigmoid(z);
+            }
         }
 
         for t in 0..l {
@@ -487,8 +500,8 @@ impl Mamba3Model {
                     }
                     let mut sum = s0 + s1 + s2 + s3;
                     while n < ds { sum += state[s_off + n] * cp_slice[n]; n += 1; }
-                    // Skip
-                    sum += lw.d_param[h] * x_raw[t * di + h * hd + p];
+                    // Skip — read x directly from proj
+                    sum += lw.d_param[h] * pv(proj, t, dip, x_off, h * hd + p);
                     // Gate
                     sum *= z_silu[t * di + h * hd + p];
                     y[(t * nh + h) * hd + p] = sum;
@@ -797,12 +810,16 @@ fn matmul_t(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize)
 }
 
 /// Extract a slice from a packed projection: (L, total_dim) → (L, slice_dim)
+/// For small L (≤64) and small dim (≤320), total size ≤ 20480 floats.
+#[inline]
 fn proj_slice(proj: &[f32], l: usize, total: usize, offset: usize, dim: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; l * dim];
+    let n = l * dim;
+    let mut out = Vec::with_capacity(n);
+    unsafe { out.set_len(n); }
     for t in 0..l {
-        for i in 0..dim {
-            out[t * dim + i] = proj[t * total + offset + i];
-        }
+        let src = t * total + offset;
+        let dst = t * dim;
+        out[dst..dst + dim].copy_from_slice(&proj[src..src + dim]);
     }
     out
 }
