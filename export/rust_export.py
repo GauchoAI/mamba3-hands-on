@@ -71,12 +71,16 @@ def export_to_bin(checkpoint_path: str, output_path: str) -> str:
 
             # Layer norm (outside block in progressive_model)
             if not write(f"kernel_layers.{i}.norm.weight", required=False):
-                # Fallback: write ones
                 f.write(struct.pack(f"<{d_model}f", *([1.0] * d_model)))
                 total_floats += d_model
+            if not write(f"kernel_layers.{i}.norm.bias", required=False):
+                f.write(struct.pack(f"<{d_model}f", *([0.0] * d_model)))
+                total_floats += d_model
 
-            # Scale
-            scale_key = f"kernel_layers.{i}.scale"
+            # Scale (stored as ParameterList: scale.0)
+            scale_key = f"kernel_layers.{i}.scale.0"
+            if scale_key not in state_dict:
+                scale_key = f"kernel_layers.{i}.scale"
             if scale_key in state_dict:
                 f.write(struct.pack("<f", state_dict[scale_key].float().item()))
             else:

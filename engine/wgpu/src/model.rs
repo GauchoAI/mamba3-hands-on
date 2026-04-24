@@ -33,6 +33,7 @@ pub struct LayerWeights {
     pub c_norm_w: Vec<f32>,          // (d_state,)
     pub c_norm_b: Vec<f32>,          // (d_state,)
     pub layer_norm_w: Vec<f32>,      // (d_model,)
+    pub layer_norm_b: Vec<f32>,      // (d_model,)
     pub scale: f32,
     pub num_rope_angles: usize,
 }
@@ -82,6 +83,7 @@ impl Mamba3Model {
                 c_norm_w: vec![1.0f32; d_state],
                 c_norm_b: vec![0.0f32; d_state],
                 layer_norm_w: vec![1.0f32; d_model],
+                layer_norm_b: vec![0.0f32; d_model],
                 scale: 0.01,
                 num_rope_angles,
             });
@@ -134,11 +136,12 @@ impl Mamba3Model {
             let c_norm_w = read_slice(floats, &mut off, d_state);
             let c_norm_b = read_slice(floats, &mut off, d_state);
             let layer_norm_w = read_slice(floats, &mut off, d_model);
+            let layer_norm_b = read_slice(floats, &mut off, d_model);
             let scale = read_slice(floats, &mut off, 1)[0];
             layers.push(LayerWeights {
                 in_proj_w, d_in_proj, out_proj_w, dt_bias, d_param,
                 b_norm_w, b_norm_b, c_norm_w, c_norm_b,
-                layer_norm_w, scale, num_rope_angles,
+                layer_norm_w, layer_norm_b, scale, num_rope_angles,
             });
         }
 
@@ -168,9 +171,12 @@ impl Mamba3Model {
         }
         layer_norm(&mut x, &self.embed_norm_w, &self.embed_norm_b, l, d);
 
-        // 2. SSM layers
+        // 2. SSM layers: x = x + scale * block(norm(x))
         for layer in &self.layers {
-            let y = self.mamba3_block(&x, layer, l);
+            // Pre-norm BEFORE the block (PyTorch: layer["block"](layer["norm"](x)))
+            let mut x_normed = x.clone();
+            layer_norm(&mut x_normed, &layer.layer_norm_w, &layer.layer_norm_b, l, d);
+            let y = self.mamba3_block(&x_normed, layer, l);
             // Residual + scale
             for i in 0..l * d {
                 x[i] += layer.scale * y[i];
@@ -215,7 +221,7 @@ impl Mamba3Model {
         let dd_dt = &proj_slice(&proj, l, dip, off, nh); off += nh;
         let dd_a = &proj_slice(&proj, l, dip, off, nh); off += nh;
         let trap_raw = &proj_slice(&proj, l, dip, off, nh); off += nh;
-        let _angles = &proj_slice(&proj, l, dip, off, lw.num_rope_angles);
+        let angles = &proj_slice(&proj, l, dip, off, lw.num_rope_angles);
 
         // Layer-norm B and C
         let mut bp = bp_raw.clone();
@@ -236,10 +242,31 @@ impl Mamba3Model {
         let mut decay = vec![0.0f32; l * nh];
         for t in 0..l {
             for h in 0..nh {
-                let a = -softplus(dd_a[t * nh + h]).max(0.001); // A_floor
+                // A = (-softplus(dd_A)).clamp(max=-A_floor) — A is always negative
+                let a_raw = -softplus(dd_a[t * nh + h]);
+                let a = if a_raw > -1e-4 { -1e-4 } else { a_raw }; // clamp to ≤ -A_floor
                 decay[t * nh + h] = (a * dt[t * nh + h]).exp();
             }
         }
+
+        // RoPE on B and C
+        let n_angles = lw.num_rope_angles;
+        let mut dt_mean = vec![0.0f32; l];
+        for t in 0..l {
+            let mut s = 0.0f32;
+            for h in 0..nh { s += dt[t * nh + h]; }
+            dt_mean[t] = s / nh as f32;
+        }
+        let mut phase = vec![0.0f32; l * n_angles];
+        let mut cumphase = vec![0.0f32; n_angles];
+        for t in 0..l {
+            for k in 0..n_angles {
+                cumphase[k] += angles[t * n_angles + k] * dt_mean[t];
+                phase[t * n_angles + k] = cumphase[k];
+            }
+        }
+        apply_rope(&mut bp, &phase, l, ds, n_angles);
+        apply_rope(&mut cp, &phase, l, ds, n_angles);
 
         // Trap = sigmoid(trap_raw)
         let mut trap = vec![0.0f32; l * nh];
@@ -334,7 +361,6 @@ impl Mamba3Model {
                 out[t * d + j] = s;
             }
         }
-
         out
     }
 
@@ -363,6 +389,20 @@ impl Mamba3Model {
 
 fn sigmoid(x: f32) -> f32 { 1.0 / (1.0 + (-x).exp()) }
 fn softplus(x: f32) -> f32 { (1.0 + x.exp()).ln() }
+
+fn apply_rope(v: &mut [f32], angles: &[f32], l: usize, s: usize, n: usize) {
+    for t in 0..l {
+        for k in 0..n {
+            let a = angles[t * n + k];
+            let c = a.cos();
+            let s_val = a.sin();
+            let even = v[t * s + 2 * k];
+            let odd = v[t * s + 2 * k + 1];
+            v[t * s + 2 * k] = even * c - odd * s_val;
+            v[t * s + 2 * k + 1] = even * s_val + odd * c;
+        }
+    }
+}
 
 fn layer_norm(x: &mut [f32], w: &[f32], b: &[f32], seq_len: usize, d: usize) {
     let eps = 1e-5f32;

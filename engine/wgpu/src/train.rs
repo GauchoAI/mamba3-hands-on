@@ -392,6 +392,7 @@ impl TrainState {
             lgrads.extend(vec![0.0f32; layer.c_norm_w.len()]); // C norm
             lgrads.extend(vec![0.0f32; layer.c_norm_b.len()]);
             lgrads.extend(vec![0.0f32; layer.layer_norm_w.len()]);
+            lgrads.extend(vec![0.0f32; layer.layer_norm_b.len()]);
             lgrads.push(0.0); // scale
             d_layer_params.push(lgrads);
         }
@@ -437,7 +438,7 @@ impl Mamba3Model {
                 + layer.dt_bias.len() + layer.d_param.len()
                 + layer.b_norm_w.len() + layer.b_norm_b.len()
                 + layer.c_norm_w.len() + layer.c_norm_b.len()
-                + layer.layer_norm_w.len() + 1;
+                + layer.layer_norm_w.len() + layer.layer_norm_b.len() + 1;
         }
         n
     }
@@ -457,6 +458,7 @@ impl Mamba3Model {
             p.extend_from_slice(&layer.c_norm_w);
             p.extend_from_slice(&layer.c_norm_b);
             p.extend_from_slice(&layer.layer_norm_w);
+            p.extend_from_slice(&layer.layer_norm_b);
             p.push(layer.scale);
         }
         p.extend_from_slice(&self.final_norm_w);
@@ -483,6 +485,7 @@ impl Mamba3Model {
             cp(&mut layer.c_norm_w, params, &mut off);
             cp(&mut layer.c_norm_b, params, &mut off);
             cp(&mut layer.layer_norm_w, params, &mut off);
+            cp(&mut layer.layer_norm_b, params, &mut off);
             layer.scale = params[off];
             off += 1;
         }
@@ -506,13 +509,43 @@ impl Mamba3Model {
         let cp_raw = proj_slice(proj, l, dip, off, ds); off += ds;
         let dd_dt = proj_slice(proj, l, dip, off, nh); off += nh;
         let dd_a = proj_slice(proj, l, dip, off, nh); off += nh;
-        let trap_raw = proj_slice(proj, l, dip, off, nh);
+        let trap_raw = proj_slice(proj, l, dip, off, nh); off += nh;
+        let angles = proj_slice(proj, l, dip, off, lw.num_rope_angles);
 
         // Norm B, C
         let mut bp = bp_raw;
         layer_norm_inplace(&mut bp, &lw.b_norm_w, &lw.b_norm_b, l, ds);
         let mut cp = cp_raw;
         layer_norm_inplace(&mut cp, &lw.c_norm_w, &lw.c_norm_b, l, ds);
+
+        // RoPE: data-dependent rotation of B and C
+        // DT needed for phase computation
+        let mut dt_for_rope = vec![0.0f32; l * nh];
+        for t in 0..l {
+            for h in 0..nh {
+                dt_for_rope[t * nh + h] = softplus(dd_dt[t * nh + h] + lw.dt_bias[h]);
+            }
+        }
+        // DT_mean = mean across heads
+        let mut dt_mean = vec![0.0f32; l];
+        for t in 0..l {
+            let mut s = 0.0f32;
+            for h in 0..nh { s += dt_for_rope[t * nh + h]; }
+            dt_mean[t] = s / nh as f32;
+        }
+        // phase_step = angles * dt_mean, phase = cumsum(phase_step)
+        let n_angles = lw.num_rope_angles; // ds / 2
+        let mut phase = vec![0.0f32; l * n_angles];
+        let mut cumphase = vec![0.0f32; n_angles];
+        for t in 0..l {
+            for k in 0..n_angles {
+                cumphase[k] += angles[t * n_angles + k] * dt_mean[t];
+                phase[t * n_angles + k] = cumphase[k];
+            }
+        }
+        // Apply RoPE to Bp and Cp: rotate pairs (v[2k], v[2k+1]) by phase[k]
+        apply_rope_pairs(&mut bp, &phase, l, ds, n_angles);
+        apply_rope_pairs(&mut cp, &phase, l, ds, n_angles);
 
         // DT, decay, trap
         let mut dt = vec![0.0f32; l * nh];
@@ -521,7 +554,8 @@ impl Mamba3Model {
         for t in 0..l {
             for h in 0..nh {
                 dt[t * nh + h] = softplus(dd_dt[t * nh + h] + lw.dt_bias[h]);
-                let a = -softplus(dd_a[t * nh + h]).max(0.001);
+                let a_raw = -softplus(dd_a[t * nh + h]);
+                let a = if a_raw > -1e-4 { -1e-4 } else { a_raw };
                 decay[t * nh + h] = (a * dt[t * nh + h]).exp();
                 trap[t * nh + h] = sigmoid(trap_raw[t * nh + h]);
             }
@@ -630,6 +664,22 @@ fn matmul_t(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize)
                 s += a[i * k + p] * b[j * k + p];
             }
             out[i * n + j] = s;
+        }
+    }
+}
+
+/// Apply pairwise RoPE rotation: pairs (v[2k], v[2k+1]) rotated by angle[k]
+fn apply_rope_pairs(v: &mut [f32], angles: &[f32], l: usize, s: usize, n_angles: usize) {
+    assert!(s % 2 == 0);
+    for t in 0..l {
+        for k in 0..n_angles {
+            let angle = angles[t * n_angles + k];
+            let cos_a = angle.cos();
+            let sin_a = angle.sin();
+            let even = v[t * s + 2 * k];
+            let odd = v[t * s + 2 * k + 1];
+            v[t * s + 2 * k] = even * cos_a - odd * sin_a;
+            v[t * s + 2 * k + 1] = even * sin_a + odd * cos_a;
         }
     }
 }
