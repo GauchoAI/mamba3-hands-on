@@ -324,10 +324,18 @@ impl PtxTrainer {
                 self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
                 nh,
             )?;
-            let _ = &self.m_layer_norm_w[li];
-            let _ = &self.v_layer_norm_w[li];
-            let _ = &self.m_layer_norm_b[li];
-            let _ = &self.v_layer_norm_b[li];
+            launch_adamw(&stream, &ptx,
+                &mut layer.layer_norm_w, &self.train_scratch.d_layer_norm_w[li],
+                &mut self.m_layer_norm_w[li], &mut self.v_layer_norm_w[li],
+                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                d,
+            )?;
+            launch_adamw(&stream, &ptx,
+                &mut layer.layer_norm_b, &self.train_scratch.d_layer_norm_b[li],
+                &mut self.m_layer_norm_b[li], &mut self.v_layer_norm_b[li],
+                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                d,
+            )?;
         }
         launch_adamw(&stream, &ptx,
             &mut self.model.final_norm_w, &self.train_scratch.d_fnorm_w,
@@ -592,18 +600,20 @@ impl PtxTrainer {
         }
 
         // Step G: in_proj backward
-        //   d_in_proj_w[li] = d_proj^T @ x_in   (dip, L) × (L, d) → (dip, d)
-        //   d_x_from_layer = d_proj @ in_proj_w (L, dip) × (dip, d) → (L, d)
+        //   d_in_proj_w[li] = d_proj^T @ x_normed (dip, L) × (L, d) → (dip, d)
+        //   d_x_normed    = d_proj @ in_proj_w   (L, dip) × (dip, d) → (L, d)
+        // (x_normed = post-pre-LN input; the forward feeds x_normed into in_proj,
+        // so the matmul gradient is against x_normed, NOT the raw residual x_in.)
         {
             let input_off = li * self.train_scratch.layer_input_stride;
             let input_len = l * d;
-            let x_in_view = self.train_scratch.layer_inputs.slice(input_off..input_off + input_len);
+            let x_normed_view = self.train_scratch.layer_x_normed.slice(input_off..input_off + input_len);
             let m_i = dip as i32;
             let n_i = d as i32;
             let k_i = l as i32;
             let mut lb = stream.launch_builder(&ptx.k.matmul_atb_tiled);
             lb.arg(&self.train_scratch.d_proj);
-            lb.arg(&x_in_view);
+            lb.arg(&x_normed_view);
             lb.arg(&mut self.train_scratch.d_in_proj_w[li]);
             lb.arg(&m_i);
             lb.arg(&n_i);
@@ -615,7 +625,7 @@ impl PtxTrainer {
             };
             unsafe { lb.launch(cfg)? };
         }
-        // d_x_from_layer = d_proj @ in_proj_w. Skips LN bwd for now.
+        // d_x_normed = d_proj @ in_proj_w (stored in d_y_out as scratch).
         let in_proj_w_ref: &CudaSlice<f32> = &self.model.layers[li].in_proj_w;
         launch_matmul_ab(stream, ptx,
             &self.train_scratch.d_proj,
@@ -624,8 +634,36 @@ impl PtxTrainer {
             l, d, dip,
         )?;
 
-        // Step H: residual combine
-        launch_residual_add(stream, ptx, &mut self.train_scratch.d_x, &self.train_scratch.d_y_out, scale, l * d)?;
+        // Step G2: pre-layer LN backward — d_x_normed → d_x_input (plus
+        // d_layer_norm_w, d_layer_norm_b).  Uses the cached RAW x_input
+        // (pre-LN) that the LN fwd consumed.  Writes d_x_input into
+        // d_y_inner as a scratch target (anything L*d that's free right
+        // now will do; d_y_inner is L*di which holds L*d fine since di>=d).
+        {
+            let input_off = li * self.train_scratch.layer_input_stride;
+            let input_len = l * d;
+            let x_in_view = self.train_scratch.layer_inputs.slice(input_off..input_off + input_len);
+            let l_i = l as i32;
+            let d_i = d as i32;
+            let mut lb = stream.launch_builder(&ptx.k.layer_norm_bwd);
+            lb.arg(&self.train_scratch.d_y_out);       // d_out (= d_x_normed)
+            lb.arg(&x_in_view);                        // x (pre-LN)
+            lb.arg(&self.model.layers[li].layer_norm_w);
+            lb.arg(&mut self.train_scratch.d_y_inner); // d_x (writes d_x_input)
+            lb.arg(&mut self.train_scratch.d_layer_norm_w[li]);
+            lb.arg(&mut self.train_scratch.d_layer_norm_b[li]);
+            lb.arg(&l_i);
+            lb.arg(&d_i);
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (64, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+
+        // Step H: residual combine — d_x += scale * d_x_input
+        launch_residual_add(stream, ptx, &mut self.train_scratch.d_x, &self.train_scratch.d_y_inner, scale, l * d)?;
 
         Ok(())
     }

@@ -315,6 +315,26 @@ impl PtxModel {
                 &mut scratch.x_normed, &layer.layer_norm_w, &layer.layer_norm_b, l, d,
             )?;
 
+            // 3b.5. Save x_normed — used by d_in_proj_w = d_proj^T @ x_normed
+            // and by layer_norm_bwd in the backward pass.
+            {
+                let off = li * train_scratch.layer_input_stride;
+                let n_copy = l * d;
+                let src = scratch.x_normed.slice(0..n_copy);
+                let mut dst = train_scratch.layer_x_normed.slice_mut(off..off + n_copy);
+                let n_i = n_copy as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+                lb.arg(&src);
+                lb.arg(&mut dst);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((n_copy as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+
             // 3c. in_proj matmul → DIRECTLY into train_scratch.layer_projs[li]
             let dip = layer.d_in_proj;
             let proj_off = li * train_scratch.layer_proj_stride;

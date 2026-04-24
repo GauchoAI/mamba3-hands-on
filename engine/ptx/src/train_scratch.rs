@@ -27,6 +27,9 @@ pub struct TrainScratch {
     // x going INTO each layer (after pre-norm has NOT been applied; this is
     // the residual stream state at layer start). Shape per layer: (L, d_model)
     pub layer_inputs: CudaSlice<f32>,
+    // x AFTER the per-layer pre-norm — this is what feeds in_proj, so the
+    // correct operand for the d_in_proj_w matmul. Shape per layer: (L, d_model)
+    pub layer_x_normed: CudaSlice<f32>,
     // In-proj output per layer. Shape: (L, dip)
     pub layer_projs: CudaSlice<f32>,
     // SSM output before out-proj. Shape: (L, d_inner)
@@ -120,6 +123,7 @@ impl TrainScratch {
             layer_decay_stride: ld,
             layer_states_stride: ls,
             layer_inputs: stream.alloc_zeros::<f32>(n_layers * li)?,
+            layer_x_normed: stream.alloc_zeros::<f32>(n_layers * li)?,
             layer_projs: stream.alloc_zeros::<f32>(n_layers * lp)?,
             layer_y_inners: stream.alloc_zeros::<f32>(n_layers * ly)?,
             layer_bps: stream.alloc_zeros::<f32>(n_layers * lc)?,
