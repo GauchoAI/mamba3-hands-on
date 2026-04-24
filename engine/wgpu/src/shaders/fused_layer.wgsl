@@ -40,15 +40,10 @@ struct ScaleParam {
 }
 @group(1) @binding(0) var<uniform> scale_param: ScaleParam;
 
-// Workgroup shared memory — all threads access
-var<workgroup> x_normed: array<f32, 512>;
-var<workgroup> proj_row: array<f32, 1280>;
-var<workgroup> y_full_shared: array<f32, 1024>;
-var<private> bp_n: array<f32, 32>;        // d_state after norm
-var<private> cp_n: array<f32, 32>;        // d_state after norm
-var<private> state: array<f32, 256>;      // hD * dS = 16*16 = 256
-var<private> bx_prev: array<f32, 256>;    // hD * dS
-var<private> y_head: array<f32, 16>;      // headdim output per timestep
+// Scratch storage buffer — pre-allocated, avoids private/shared memory limits
+// Layout: [x_normed(d) | proj_row(dip) | y_full(di) | bp_n(ds) | cp_n(ds) |
+//          state(H*hd*ds) | bx_prev(H*hd*ds) | cum_phase(na)]
+@group(1) @binding(1) var<storage, read_write> scratch: array<f32>;
 
 // One workgroup with multiple threads for parallel matmul.
 // Thread 0 does the SSM scan (sequential), all threads do matmul in parallel.
@@ -70,16 +65,25 @@ fn main(
     let na = params.n_angles;
     let scale = bitcast<f32>(scale_param.scale_bits);
 
-    // Arrays for all heads' states
-    var all_state: array<f32, 2048>;   // max H*hD*dS = 8*16*16
-    var all_bx_prev: array<f32, 2048>;
-    for (var i = 0u; i < nh * hd * ds; i++) { all_state[i] = 0.0; all_bx_prev[i] = 0.0; }
+    // Scratch buffer layout offsets — all large arrays in storage, not private
+    let S_XNORM = 0u;
+    let S_PROJ = d;
+    let S_YFULL = d + dip;
+    let S_BPN = d + dip + di;
+    let S_CPN = d + dip + di + ds;
+    let S_STATE = d + dip + di + 2u * ds;
+    let S_BXPREV = S_STATE + nh * hd * ds;
+    let S_PHASE = S_BXPREV + nh * hd * ds;
 
-    var cum_phase: array<f32, 16>;
-    for (var k = 0u; k < na; k++) { cum_phase[k] = 0.0; }
-
-    // Accumulator for out_proj output per timestep
-    var y_full: array<f32, 1024>;  // max d_inner = 512
+    // Init state, bx_prev, cum_phase to zero
+    if (tid == 0u) {
+        for (var i = 0u; i < nh * hd * ds; i++) {
+            scratch[S_STATE + i] = 0.0;
+            scratch[S_BXPREV + i] = 0.0;
+        }
+        for (var k = 0u; k < na; k++) { scratch[S_PHASE + k] = 0.0; }
+    }
+    workgroupBarrier();
 
     for (var t = 0u; t < L; t++) {
         // 1. Layer norm — thread 0 computes mean/var, all threads normalize
@@ -95,7 +99,7 @@ fn main(
             variance /= f32(d);
             let inv_std = 1.0 / sqrt(variance + 1e-5);
             for (var i = 0u; i < d; i++) {
-                x_normed[i] = (x[t * d + i] - mean) * inv_std * norm_w[i] + norm_b[i];
+                scratch[S_XNORM +i] = (x[t * d + i] - mean) * inv_std * norm_w[i] + norm_b[i];
             }
         }
         workgroupBarrier();
@@ -107,9 +111,9 @@ fn main(
         for (var j = j_start; j < j_end; j++) {
             var s: f32 = 0.0;
             for (var i = 0u; i < d; i++) {
-                s += x_normed[i] * in_proj_w[j * d + i];
+                s += scratch[S_XNORM +i] * in_proj_w[j * d + i];
             }
-            proj_row[j] = s;
+            scratch[S_PROJ +j] = s;
         }
         workgroupBarrier();
 
@@ -125,32 +129,32 @@ fn main(
 
         // B norm
         var mean_b: f32 = 0.0;
-        for (var n = 0u; n < ds; n++) { mean_b += proj_row[bp_off + n]; }
+        for (var n = 0u; n < ds; n++) { mean_b += scratch[S_PROJ +bp_off + n]; }
         mean_b /= f32(ds);
         var var_b: f32 = 0.0;
         for (var n = 0u; n < ds; n++) {
-            let diff = proj_row[bp_off + n] - mean_b;
+            let diff = scratch[S_PROJ +bp_off + n] - mean_b;
             var_b += diff * diff;
         }
         var_b /= f32(ds);
         let inv_b = 1.0 / sqrt(var_b + 1e-5);
         for (var n = 0u; n < ds; n++) {
-            bp_n[n] = (proj_row[bp_off + n] - mean_b) * inv_b * b_norm_w[n] + b_norm_b[n];
+            scratch[S_BPN +n] = (scratch[S_PROJ +bp_off + n] - mean_b) * inv_b * b_norm_w[n] + b_norm_b[n];
         }
 
         // C norm
         var mean_c: f32 = 0.0;
-        for (var n = 0u; n < ds; n++) { mean_c += proj_row[cp_off + n]; }
+        for (var n = 0u; n < ds; n++) { mean_c += scratch[S_PROJ +cp_off + n]; }
         mean_c /= f32(ds);
         var var_c: f32 = 0.0;
         for (var n = 0u; n < ds; n++) {
-            let diff = proj_row[cp_off + n] - mean_c;
+            let diff = scratch[S_PROJ +cp_off + n] - mean_c;
             var_c += diff * diff;
         }
         var_c /= f32(ds);
         let inv_c = 1.0 / sqrt(var_c + 1e-5);
         for (var n = 0u; n < ds; n++) {
-            cp_n[n] = (proj_row[cp_off + n] - mean_c) * inv_c * c_norm_w[n] + c_norm_b[n];
+            scratch[S_CPN +n] = (scratch[S_PROJ +cp_off + n] - mean_c) * inv_c * c_norm_w[n] + c_norm_b[n];
         }
 
         // 3. SSM: thread 0 does all heads (sequential scan)
@@ -158,19 +162,19 @@ fn main(
         // RoPE: cumulative phase (shared across heads, compute once per timestep)
         var dt_mean: f32 = 0.0;
         for (var hh = 0u; hh < nh; hh++) {
-            dt_mean += log(1.0 + exp(proj_row[dt_off + hh] + dt_bias[hh]));
+            dt_mean += log(1.0 + exp(scratch[S_PROJ +dt_off + hh] + dt_bias[hh]));
         }
         dt_mean /= f32(nh);
         for (var k = 0u; k < na; k++) {
-            cum_phase[k] += proj_row[ang_off + k] * dt_mean;
+            scratch[S_PHASE +k] += scratch[S_PROJ +ang_off + k] * dt_mean;
         }
 
         // Apply RoPE to B and C (copies that get rotated)
         var bp_rot: array<f32, 32>;
         var cp_rot: array<f32, 32>;
-        for (var n = 0u; n < ds; n++) { bp_rot[n] = bp_n[n]; cp_rot[n] = cp_n[n]; }
+        for (var n = 0u; n < ds; n++) { bp_rot[n] = scratch[S_BPN +n]; cp_rot[n] = scratch[S_CPN +n]; }
         for (var k = 0u; k < na; k++) {
-            let angle = cum_phase[k];
+            let angle = scratch[S_PHASE +k];
             let cos_a = cos(angle); let sin_a = sin(angle);
             let be = bp_rot[2u*k]; let bo = bp_rot[2u*k+1u];
             bp_rot[2u*k] = be*cos_a - bo*sin_a; bp_rot[2u*k+1u] = be*sin_a + bo*cos_a;
@@ -180,35 +184,35 @@ fn main(
 
         // Process ALL heads — accumulate y into y_full
         for (var h = 0u; h < nh; h++) {
-            let dt_val = log(1.0 + exp(proj_row[dt_off + h] + dt_bias[h]));
-            let a_raw = -log(1.0 + exp(proj_row[a_off + h]));
+            let dt_val = log(1.0 + exp(scratch[S_PROJ +dt_off + h] + dt_bias[h]));
+            let a_raw = -log(1.0 + exp(scratch[S_PROJ +a_off + h]));
             var a_val = a_raw;
             if (a_val > -1e-4) { a_val = -1e-4; }
             let decay_val = exp(a_val * dt_val);
-            let trap_val = 1.0 / (1.0 + exp(-proj_row[trap_off + h]));
+            let trap_val = 1.0 / (1.0 + exp(-scratch[S_PROJ +trap_off + h]));
             let h_off = h * hd * ds;
 
             for (var p = 0u; p < hd; p++) {
-                let x_val = proj_row[x_off + h * hd + p];
+                let x_val = scratch[S_PROJ +x_off + h * hd + p];
                 for (var n = 0u; n < ds; n++) {
                     let bx_cur = x_val * bp_rot[n];
-                    let prev = all_bx_prev[h_off + p * ds + n];
+                    let prev = scratch[S_BXPREV +h_off + p * ds + n];
                     let inp_val = (trap_val * bx_cur + (1.0 - trap_val) * prev) * dt_val;
-                    all_state[h_off + p * ds + n] = decay_val * all_state[h_off + p * ds + n] + inp_val;
-                    all_bx_prev[h_off + p * ds + n] = bx_cur;
+                    scratch[S_STATE +h_off + p * ds + n] = decay_val * scratch[S_STATE +h_off + p * ds + n] + inp_val;
+                    scratch[S_BXPREV +h_off + p * ds + n] = bx_cur;
                 }
                 var s: f32 = 0.0;
                 for (var n = 0u; n < ds; n++) {
-                    s += all_state[h_off + p * ds + n] * cp_rot[n];
+                    s += scratch[S_STATE +h_off + p * ds + n] * cp_rot[n];
                 }
                 s += d_param[h] * x_val;
-                let z = proj_row[z_off + h * hd + p];
-                y_full[h * hd + p] = s * (z / (1.0 + exp(-z)));
+                let z = scratch[S_PROJ +z_off + h * hd + p];
+                scratch[S_YFULL +h * hd + p] = s * (z / (1.0 + exp(-z)));
             }
         }
 
         // Copy y_full to shared memory for parallel out_proj
-            for (var i = 0u; i < di; i++) { y_full_shared[i] = y_full[i]; }
+            for (var i = 0u; i < di; i++) { scratch[S_YFULL +i] = scratch[S_YFULL +i]; }
         } // end tid==0 SSM block
         workgroupBarrier();
 
@@ -219,7 +223,7 @@ fn main(
         for (var j = jj_start; j < jj_end; j++) {
             var s: f32 = 0.0;
             for (var i = 0u; i < di; i++) {
-                s += y_full_shared[i] * out_proj_w[j * di + i];
+                s += scratch[S_YFULL +i] * out_proj_w[j * di + i];
             }
             x[t * d + j] += scale * s;
         }

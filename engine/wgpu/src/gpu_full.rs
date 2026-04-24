@@ -53,6 +53,7 @@ pub struct FullGpuModel {
     fused_pipeline: wgpu::ComputePipeline,
     fused_layout: wgpu::BindGroupLayout,
     fused_scale_layout: wgpu::BindGroupLayout,
+    fused_scratch: wgpu::Buffer,
 
     max_seq: usize,
 
@@ -352,7 +353,7 @@ impl FullGpuModel {
             ],
         });
         let fused_scale_layout = gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None, entries: &[bgl_u(0)],
+            label: None, entries: &[bgl_u(0), bgl_rw(1)],  // scale + scratch buffer
         });
         let fused_pl = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None, bind_group_layouts: &[&fused_layout, &fused_scale_layout], push_constant_ranges: &[],
@@ -362,8 +363,13 @@ impl FullGpuModel {
             entry_point: Some("main"), compilation_options: Default::default(), cache: None,
         });
 
-        eprintln!("  FullGpuModel: {} layers, max_seq={}, pre-built {} bind groups",
-            model.layers.len(), max_seq, 2 + layers.len() * 6 + 1);
+        // Scratch buffer for fused shader — holds all per-layer intermediates
+        let max_dip = model.layers.iter().map(|l| l.d_in_proj).max().unwrap_or(0);
+        let scratch_size = d + max_dip + di + 2 * ds + 2 * nh * hd * ds + ds / 2 + 256; // padding
+        let fused_scratch = buf(scratch_size);
+
+        eprintln!("  FullGpuModel: {} layers, max_seq={}, scratch={}KB, pre-built {} bind groups",
+            model.layers.len(), max_seq, scratch_size * 4 / 1024, 2 + layers.len() * 6 + 1);
 
         Self {
             cpu_model: model, gpu, embed_w, embed_norm_w, embed_norm_b,
@@ -374,7 +380,7 @@ impl FullGpuModel {
             layer_c_norm_w, layer_c_norm_b, layer_d_param,
             norm_pipeline, norm_layout, residual_pipeline, residual_layout,
             ssm_prep_pipeline, ssm_prep_layout,
-            fused_pipeline, fused_layout, fused_scale_layout,
+            fused_pipeline, fused_layout, fused_scale_layout, fused_scratch,
             all_param_bufs: Vec::new(),
             max_seq,
             embed_norm_bg, final_norm_bg, head_matmul_bg,
@@ -553,6 +559,7 @@ impl FullGpuModel {
                 label: None, layout: &self.fused_scale_layout,
                 entries: &[
                     wgpu::BindGroupEntry { binding: 0, resource: sc.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: self.fused_scratch.as_entire_binding() },
                 ],
             });
 
