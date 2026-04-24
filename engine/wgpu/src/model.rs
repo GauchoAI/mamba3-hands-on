@@ -38,6 +38,64 @@ pub struct LayerWeights {
 }
 
 impl Mamba3Model {
+    /// Create a new model with random initialization
+    pub fn new_random(d_model: usize, d_state: usize, headdim: usize, n_layers: usize, vocab_size: usize) -> Self {
+        let d_inner = d_model * 2;
+        let n_heads = d_inner / headdim;
+
+        // Xavier/Glorot initialization
+        let scale = |fan_in: usize, fan_out: usize| -> f32 {
+            (6.0 / (fan_in + fan_out) as f32).sqrt()
+        };
+
+        let rand_vec = |n: usize, s: f32| -> Vec<f32> {
+            // Simple LCG PRNG — deterministic, no dependency
+            use std::cell::Cell;
+            thread_local! { static SEED: Cell<u64> = Cell::new(42); }
+            (0..n).map(|_| {
+                SEED.with(|seed| {
+                    let s_val = seed.get();
+                    let next = s_val.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    seed.set(next);
+                    let bits = ((next >> 33) as u32) as f32 / u32::MAX as f32;
+                    (bits * 2.0 - 1.0) * s
+                })
+            }).collect()
+        };
+
+        let embed_w = rand_vec(vocab_size * d_model, scale(vocab_size, d_model));
+        let embed_norm_w = vec![1.0f32; d_model];
+        let embed_norm_b = vec![0.0f32; d_model];
+
+        let mut layers = Vec::new();
+        for _ in 0..n_layers {
+            let num_rope_angles = d_state / 2;
+            let d_in_proj = 2 * d_inner + 2 * d_state + 3 * n_heads + num_rope_angles;
+            layers.push(LayerWeights {
+                in_proj_w: rand_vec(d_in_proj * d_model, scale(d_model, d_in_proj)),
+                d_in_proj,
+                out_proj_w: rand_vec(d_model * d_inner, scale(d_inner, d_model) * 0.01), // near-zero init
+                dt_bias: vec![-3.0f32; n_heads], // softplus(-3) ≈ 0.05
+                d_param: vec![1.0f32; n_heads],
+                b_norm_w: vec![1.0f32; d_state],
+                b_norm_b: vec![0.0f32; d_state],
+                c_norm_w: vec![1.0f32; d_state],
+                c_norm_b: vec![0.0f32; d_state],
+                layer_norm_w: vec![1.0f32; d_model],
+                scale: 0.01,
+                num_rope_angles,
+            });
+        }
+
+        let final_norm_w = vec![1.0f32; d_model];
+        let final_norm_b = vec![0.0f32; d_model];
+
+        Self {
+            d_model, d_state, d_inner, headdim, n_heads, n_layers, vocab_size,
+            embed_w, embed_norm_w, embed_norm_b, layers, final_norm_w, final_norm_b,
+        }
+    }
+
     /// Load from exported binary (see export/rust_export.py)
     pub fn from_bin(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let data = std::fs::read(path)?;

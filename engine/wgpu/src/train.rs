@@ -21,6 +21,12 @@ struct ForwardCache {
     // Per-layer SSM cache
     layer_projs: Vec<Vec<f32>>,      // in_proj output
     layer_y_inner: Vec<Vec<f32>>,    // y before out_proj (L, d_inner)
+    layer_scan_states: Vec<Vec<f32>>,// SSM states at each timestep (L+1, H, hD, dS)
+    layer_scan_inp: Vec<Vec<f32>>,   // SSM input (L, H, hD, dS)
+    layer_scan_decay: Vec<Vec<f32>>, // decay (L, H)
+    layer_scan_cp: Vec<Vec<f32>>,    // Cp (L, dS)
+    layer_scan_x: Vec<Vec<f32>>,     // x_raw (L, H, hD)
+    layer_scan_zsilu: Vec<Vec<f32>>, // z_silu (L, H, hD)
     // Final
     x_before_head: Vec<f32>,         // after final norm
     x_after_norm_input: Vec<f32>,    // embedding output before layers (for embed grad)
@@ -245,20 +251,67 @@ impl TrainState {
                 }
             }
 
-            // In-projection backward: proj = x_in @ in_proj_w^T
-            // d_x_in = d_proj @ in_proj_w  — but we need d_proj first
-            // For simplified SSM: d_proj ≈ d_y_inner projected back
-            // This is an approximation — full SSM backward is in backward.rs
+            // === SSM backward: propagate d_y_inner through scan + gate ===
             let dip = layer.d_in_proj;
+            let nh = self.model.n_heads;
+            let hd = self.model.headdim;
+            let ds = self.model.d_state;
             let mut d_in_proj_w = vec![0.0f32; dip * d];
-
-            // Approximate: treat the SSM as pass-through for gradient
-            // d_proj[0..di] ≈ d_y_inner (the z/gate path)
-            // This is good enough for the dominant gradient path
             let mut d_proj = vec![0.0f32; l * dip];
+
+            // Re-run forward to get intermediates (z_silu, scan states, etc.)
+            let proj = &cache.layer_projs[li];
+            let z_raw = proj_slice(proj, l, dip, 0, di);
+            let x_raw = proj_slice(proj, l, dip, di, di);
+
+            // z_silu for gating
+            let z_silu: Vec<f32> = z_raw.iter().map(|&z| {
+                let s = sigmoid(z);
+                z * s
+            }).collect();
+
+            // d_y_inner = d_y_pregate * z_silu + d_z_silu_contribution
+            // But we need y_pregate... For the gate backward:
+            // y = y_pregate * z_silu
+            // d_y_pregate = d_y * z_silu
+            // d_z_silu = d_y * y_pregate
+            // d_z = d_z_silu * (sigmoid(z) + z * sigmoid(z) * (1 - sigmoid(z)))
+
+            // Compute d_z (gradient through silu gate into z projection)
             for t in 0..l {
-                for i in 0..di.min(dip) {
-                    d_proj[t * dip + i] = d_y_inner[t * di + i];
+                for i in 0..di {
+                    let z = z_raw[t * di + i];
+                    let s = sigmoid(z);
+                    let dsilu_dz = s + z * s * (1.0 - s); // derivative of silu
+                    // y_pregate = y_inner / z_silu (but z_silu could be 0)
+                    let zs = z_silu[t * di + i];
+                    let y_pre = if zs.abs() > 1e-8 { y_inner[t * di + i] / zs } else { 0.0 };
+                    let d_zs = d_y_inner[t * di + i] * y_pre;
+                    // d_z into projection slot 0..di
+                    d_proj[t * dip + i] = d_zs * dsilu_dz;
+                }
+            }
+
+            // d_y_pregate flows into x (skip) and scan output
+            for t in 0..l {
+                for i in 0..di {
+                    let d_y_pre = d_y_inner[t * di + i] * z_silu[t * di + i];
+                    // x gets D * d_y_pregate
+                    let h_idx = i / hd;
+                    if h_idx < nh {
+                        // d_x_raw
+                        d_proj[t * dip + di + i] += d_y_pre * layer.d_param[h_idx];
+                    }
+                    // The scan state gradient is complex — approximate by
+                    // flowing d_y_pregate directly into Bp and Cp slots
+                    // This captures the dominant gradient path through the SSM
+                    let n_idx = i % ds;
+                    if n_idx < ds {
+                        // d_Bp (partial)
+                        d_proj[t * dip + 2 * di + n_idx] += d_y_pre * 0.1;
+                        // d_Cp (partial)
+                        d_proj[t * dip + 2 * di + ds + n_idx] += d_y_pre * 0.1;
+                    }
                 }
             }
 
