@@ -1613,10 +1613,13 @@ extern "C" __launch_bounds__(256, 2) __global__ void ssm_scan_bwd_full(
         d_scan_inp[((t * H + h) * hd + p) * ds + n] = dh;
 
         // Block-wide reduction: d_decay[t, h] = Σ dh · state[t, h, p, n]
+        // Reduction size = actual block size (hd*ds), NOT a fixed 128, since
+        // smem[hd*ds..256] is uninitialized for small configs.
         float state_t = states[((t * H + h) * hd + p) * ds + n];
         smem[tid] = dh * state_t;
         __syncthreads();
-        for (int stride = 128; stride > 0; stride >>= 1) {
+        int block_n = hd * ds;
+        for (int stride = block_n >> 1; stride > 0; stride >>= 1) {
             if (tid < stride) smem[tid] += smem[tid + stride];
             __syncthreads();
         }
@@ -1630,7 +1633,7 @@ extern "C" __launch_bounds__(256, 2) __global__ void ssm_scan_bwd_full(
         float blended = (dt_v > 1e-12f) ? (inp_val / dt_v) : 0.0f;
         smem[tid] = dh * blended;
         __syncthreads();
-        for (int stride = 128; stride > 0; stride >>= 1) {
+        for (int stride = block_n >> 1; stride > 0; stride >>= 1) {
             if (tid < stride) smem[tid] += smem[tid + stride];
             __syncthreads();
         }
