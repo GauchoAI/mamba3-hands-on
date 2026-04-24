@@ -402,6 +402,45 @@ impl Mamba3Model {
 fn sigmoid(x: f32) -> f32 { 1.0 / (1.0 + (-x).exp()) }
 fn softplus(x: f32) -> f32 { (1.0 + x.exp()).ln() }
 
+/// SIMD dot product — uses platform intrinsics
+#[inline]
+fn dot_simd(a: &[f32], b: &[f32], k: usize) -> f32 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        let k16 = k / 16 * 16;
+        let mut sum = unsafe { vdupq_n_f32(0.0) };
+        let mut p = 0;
+        while p < k16 {
+            unsafe {
+                sum = vfmaq_f32(sum, vld1q_f32(a.as_ptr().add(p)), vld1q_f32(b.as_ptr().add(p)));
+                sum = vfmaq_f32(sum, vld1q_f32(a.as_ptr().add(p+4)), vld1q_f32(b.as_ptr().add(p+4)));
+                sum = vfmaq_f32(sum, vld1q_f32(a.as_ptr().add(p+8)), vld1q_f32(b.as_ptr().add(p+8)));
+                sum = vfmaq_f32(sum, vld1q_f32(a.as_ptr().add(p+12)), vld1q_f32(b.as_ptr().add(p+12)));
+            }
+            p += 16;
+        }
+        let mut s = unsafe { vaddvq_f32(sum) };
+        while p < k { s += a[p] * b[p]; p += 1; }
+        s
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let mut s0 = 0.0f32;
+        let mut s1 = 0.0f32;
+        let k4 = k / 4 * 4;
+        let mut p = 0;
+        while p < k4 {
+            s0 += a[p] * b[p] + a[p+2] * b[p+2];
+            s1 += a[p+1] * b[p+1] + a[p+3] * b[p+3];
+            p += 4;
+        }
+        let mut s = s0 + s1;
+        while p < k { s += a[p] * b[p]; p += 1; }
+        s
+    }
+}
+
 fn apply_rope(v: &mut [f32], angles: &[f32], l: usize, s: usize, n: usize) {
     for t in 0..l {
         for k in 0..n {
@@ -430,9 +469,64 @@ fn layer_norm(x: &mut [f32], w: &[f32], b: &[f32], seq_len: usize, d: usize) {
 }
 
 /// Matrix multiply: out = a × b^T. a is (m, k), b is (n, k), out is (m, n).
-/// Uses NEON SIMD on aarch64, falls back to scalar with 4-wide unrolling.
+/// Multithreaded via rayon for large matrices, SIMD for inner loops.
+/// Auto-calibrating matmul — picks single-thread SIMD or rayon based on problem size.
+/// Calibrates on first call, then uses the threshold for all subsequent calls.
 pub fn matmul_t_pub(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
-    matmul_t(out, a, b, m, k, n);
+    use std::sync::OnceLock;
+    static PARALLEL_THRESHOLD: OnceLock<usize> = OnceLock::new();
+
+    let threshold = *PARALLEL_THRESHOLD.get_or_init(|| {
+        // Calibrate: benchmark single vs parallel on a representative size
+        let test_m = 32;
+        let test_k = 128;
+        let test_n = 320;
+        let test_a = vec![0.1f32; test_m * test_k];
+        let test_b = vec![0.1f32; test_n * test_k];
+        let mut test_out = vec![0.0f32; test_m * test_n];
+
+        // Single-thread
+        let t0 = std::time::Instant::now();
+        for _ in 0..10 {
+            matmul_t(&mut test_out, &test_a, &test_b, test_m, test_k, test_n);
+        }
+        let single_ns = t0.elapsed().as_nanos() / 10;
+
+        // Parallel (rayon)
+        let t0 = std::time::Instant::now();
+        for _ in 0..10 {
+            use rayon::prelude::*;
+            test_out.par_chunks_mut(test_n).enumerate().for_each(|(i, row)| {
+                let a_row = &test_a[i * test_k..(i + 1) * test_k];
+                for j in 0..test_n {
+                    row[j] = dot_simd(a_row, &test_b[j * test_k..(j + 1) * test_k], test_k);
+                }
+            });
+        }
+        let par_ns = t0.elapsed().as_nanos() / 10;
+
+        let ops = test_m * test_n * test_k;
+        if par_ns < single_ns {
+            eprintln!("  Calibrated: parallel wins at {}ops ({}ns vs {}ns)", ops, par_ns, single_ns);
+            ops / 2  // use parallel for anything >= half this size
+        } else {
+            eprintln!("  Calibrated: single-thread wins ({}ns vs {}ns parallel)", single_ns, par_ns);
+            usize::MAX  // never use parallel
+        }
+    });
+
+    let ops = m * n * k;
+    if ops >= threshold {
+        use rayon::prelude::*;
+        out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
+            let a_row = &a[i * k..(i + 1) * k];
+            for j in 0..n {
+                row[j] = dot_simd(a_row, &b[j * k..(j + 1) * k], k);
+            }
+        });
+    } else {
+        matmul_t(out, a, b, m, k, n);
+    }
 }
 
 fn matmul_t(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
