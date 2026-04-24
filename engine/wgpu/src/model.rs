@@ -52,30 +52,31 @@ impl Mamba3Model {
 
         let floats: &[f32] = bytemuck::cast_slice(&data[28..]);
         let mut off = 0usize;
-        let mut read = |n: usize| -> Vec<f32> {
-            let v = floats[off..off + n].to_vec();
-            off += n;
-            v
-        };
 
-        let embed_w = read(vocab_size * d_model);
-        let embed_norm_w = read(d_model);
-        let embed_norm_b = read(d_model);
+        fn read_slice(floats: &[f32], off: &mut usize, n: usize) -> Vec<f32> {
+            let v = floats[*off..*off + n].to_vec();
+            *off += n;
+            v
+        }
+
+        let embed_w = read_slice(floats, &mut off, vocab_size * d_model);
+        let embed_norm_w = read_slice(floats, &mut off, d_model);
+        let embed_norm_b = read_slice(floats, &mut off, d_model);
 
         let mut layers = Vec::new();
         for _ in 0..n_layers {
             let num_rope_angles = d_state / 2;
             let d_in_proj = 2 * d_inner + 2 * d_state + 3 * n_heads + num_rope_angles;
-            let in_proj_w = read(d_in_proj * d_model);
-            let out_proj_w = read(d_model * d_inner);
-            let dt_bias = read(n_heads);
-            let d_param = read(n_heads);
-            let b_norm_w = read(d_state);
-            let b_norm_b = read(d_state);
-            let c_norm_w = read(d_state);
-            let c_norm_b = read(d_state);
-            let layer_norm_w = read(d_model);
-            let scale = read(1)[0];
+            let in_proj_w = read_slice(floats, &mut off, d_in_proj * d_model);
+            let out_proj_w = read_slice(floats, &mut off, d_model * d_inner);
+            let dt_bias = read_slice(floats, &mut off, n_heads);
+            let d_param = read_slice(floats, &mut off, n_heads);
+            let b_norm_w = read_slice(floats, &mut off, d_state);
+            let b_norm_b = read_slice(floats, &mut off, d_state);
+            let c_norm_w = read_slice(floats, &mut off, d_state);
+            let c_norm_b = read_slice(floats, &mut off, d_state);
+            let layer_norm_w = read_slice(floats, &mut off, d_model);
+            let scale = read_slice(floats, &mut off, 1)[0];
             layers.push(LayerWeights {
                 in_proj_w, d_in_proj, out_proj_w, dt_bias, d_param,
                 b_norm_w, b_norm_b, c_norm_w, c_norm_b,
@@ -83,8 +84,8 @@ impl Mamba3Model {
             });
         }
 
-        let final_norm_w = read(d_model);
-        let final_norm_b = read(d_model);
+        let final_norm_w = read_slice(floats, &mut off, d_model);
+        let final_norm_b = read_slice(floats, &mut off, d_model);
 
         Ok(Self {
             d_model, d_state, d_inner, headdim, n_heads, n_layers, vocab_size,

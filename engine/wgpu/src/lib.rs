@@ -7,3 +7,4 @@
 pub mod scan;
 pub mod model;
 pub mod backward;
+pub mod train;

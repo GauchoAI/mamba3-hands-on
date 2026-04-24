@@ -14,7 +14,11 @@ fn main() {
 
     if let Some(pos) = args.iter().position(|a| a == "--model") {
         let model_path = &args[pos + 1];
-        run_model_inference(model_path);
+        if args.iter().any(|a| a == "--train") {
+            run_training_bench(model_path);
+        } else {
+            run_model_inference(model_path);
+        }
     } else {
         run_scan_benchmark();
     }
@@ -79,6 +83,40 @@ fn run_model_inference(model_path: &str) {
     let ms = total.as_secs_f64() * 1000.0 / n as f64;
     let tps = tokens.len() as f64 / (ms / 1000.0);
     println!("Benchmark: {:.3}ms/inference, {:.0} tokens/sec", ms, tps);
+}
+
+fn run_training_bench(model_path: &str) {
+    use mamba3_engine::train::TrainState;
+
+    println!("Loading model for training from {}...", model_path);
+    let model = Mamba3Model::from_bin(Path::new(model_path))
+        .expect("Failed to load model");
+
+    println!("Model: {} params", model.param_count());
+    let mut state = TrainState::new(model, 1e-3, 0.1);
+
+    // Training data: simple next-token prediction
+    // BOS(256) + "0 1 0" + SEP(258) + "D" + EOS(257)
+    let tokens: Vec<u32> = vec![256, 48, 32, 49, 32, 48, 258, 68, 257];
+    let targets: Vec<u32> = vec![48, 32, 49, 32, 48, 258, 68, 257, 257]; // shifted
+
+    println!("\nTraining for 10 steps...");
+    let start = Instant::now();
+    for step in 0..10 {
+        let loss = state.train_step(&tokens, &targets);
+        if (step + 1) % 5 == 0 {
+            println!("  step {}: loss = {:.4}", step + 1, loss);
+        }
+    }
+    let elapsed = start.elapsed();
+    let ms_per_step = elapsed.as_secs_f64() * 1000.0 / 10.0;
+    println!("\nTraining: {:.1}ms/step ({:.1} steps/sec)",
+        ms_per_step, 1000.0 / ms_per_step);
+
+    // Verify model changed
+    let logits_after = state.model.forward(&tokens);
+    let pred_after = state.model.predict(&tokens);
+    println!("Predictions after training: {:?}", pred_after);
 }
 
 fn run_scan_benchmark() {
