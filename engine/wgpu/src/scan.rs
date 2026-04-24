@@ -16,10 +16,13 @@ struct Params {
 }
 
 pub struct GpuContext {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    // Matmul pipeline
+    matmul_pipeline: wgpu::ComputePipeline,
+    matmul_layout: wgpu::BindGroupLayout,
 }
 
 impl GpuContext {
@@ -101,7 +104,48 @@ impl GpuContext {
             cache: None,
         });
 
-        Ok(Self { device, queue, pipeline, bind_group_layout })
+        // Matmul pipeline
+        let matmul_shader_src = include_str!("shaders/matmul.wgsl");
+        let matmul_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("matmul"),
+            source: wgpu::ShaderSource::Wgsl(matmul_shader_src.into()),
+        });
+
+        let matmul_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("matmul_layout"),
+            entries: &[
+                bgl_entry(0, false),  // A
+                bgl_entry(1, false),  // B
+                bgl_entry(2, true),   // C
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let matmul_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("matmul_pipeline"),
+            bind_group_layouts: &[&matmul_layout],
+            push_constant_ranges: &[],
+        });
+
+        let matmul_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("matmul"),
+            layout: Some(&matmul_pipeline_layout),
+            module: &matmul_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
+        Ok(Self { device, queue, pipeline, bind_group_layout, matmul_pipeline, matmul_layout })
     }
 
     pub async fn run_scan(
@@ -167,6 +211,77 @@ impl GpuContext {
             mapped_at_creation: false,
         });
         encoder.copy_buffer_to_buffer(&buf_y, 0, &staging, 0, (output_size * 4) as u64);
+        self.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
+        self.device.poll(wgpu::Maintain::Wait);
+        rx.recv()??;
+
+        let data = slice.get_mapped_range();
+        let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
+        drop(data);
+        staging.unmap();
+
+        Ok(result)
+    }
+
+    /// GPU matrix multiply: C = A × B^T. A is (m,k), B is (n,k), C is (m,n).
+    pub async fn run_matmul(
+        &self, a: &[f32], b: &[f32], m: u32, k: u32, n: u32,
+    ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+        let output_size = (m * n) as usize;
+
+        let buf_a = self.create_storage_buffer("A", bytemuck::cast_slice(a));
+        let buf_b = self.create_storage_buffer("B", bytemuck::cast_slice(b));
+        let buf_c = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("C"),
+            size: (output_size * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct MatmulParams { m: u32, k: u32, n: u32, _pad: u32 }
+        let params = MatmulParams { m, k, n, _pad: 0 };
+        let buf_params = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("matmul_params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("matmul_bind"),
+            layout: &self.matmul_layout,
+            entries: &[
+                bg_entry(0, &buf_a),
+                bg_entry(1, &buf_b),
+                bg_entry(2, &buf_c),
+                bg_entry(3, &buf_params),
+            ],
+        });
+
+        let tile = 16u32;
+        let wg_x = (m + tile - 1) / tile;
+        let wg_y = (n + tile - 1) / tile;
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.matmul_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(wg_x, wg_y, 1);
+        }
+
+        let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("staging"),
+            size: (output_size * 4) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&buf_c, 0, &staging, 0, (output_size * 4) as u64);
         self.queue.submit(std::iter::once(encoder.finish()));
 
         let slice = staging.slice(..);

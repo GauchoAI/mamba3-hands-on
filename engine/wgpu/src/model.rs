@@ -203,14 +203,28 @@ impl Mamba3Model {
     fn mamba3_block(&self, u: &[f32], lw: &LayerWeights, l: usize) -> Vec<f32> {
         let d = self.d_model;
         let di = self.d_inner;
-        let nh = self.n_heads;
-        let hd = self.headdim;
-        let ds = self.d_state;
 
-        // In-projection: (L, d_model) × (d_in_proj, d_model)^T → (L, d_in_proj)
+        // In-projection
         let dip = lw.d_in_proj;
         let mut proj = vec![0.0f32; l * dip];
         matmul_t(&mut proj, u, &lw.in_proj_w, l, d, dip);
+
+        // SSM + out_proj
+        let y_inner = self.mamba3_block_inner(&proj, lw, l);
+
+        // Out-projection
+        let mut out = vec![0.0f32; l * d];
+        matmul_t(&mut out, &y_inner, &lw.out_proj_w, l, di, d);
+        out
+    }
+
+    /// Inner SSM computation: proj → y_inner (without in_proj and out_proj matmuls)
+    fn mamba3_block_inner(&self, proj: &[f32], lw: &LayerWeights, l: usize) -> Vec<f32> {
+        let di = self.d_inner;
+        let nh = self.n_heads;
+        let hd = self.headdim;
+        let ds = self.d_state;
+        let dip = lw.d_in_proj;
 
         // Split: z, x, Bp, Cp, dd_dt, dd_A, trap_raw, angles
         let mut off = 0;
@@ -362,18 +376,73 @@ impl Mamba3Model {
             }
         }
 
-        // y is (L, H, hD) = (L, d_inner). Out-projection: (L, d_inner) × (d_model, d_inner)^T
-        let mut out = vec![0.0f32; l * d];
-        for t in 0..l {
-            for j in 0..d {
-                let mut s = 0.0f32;
-                for i in 0..di {
-                    s += y[t * di + i] * lw.out_proj_w[j * di + i];
-                }
-                out[t * d + j] = s;
+        y
+    }
+
+    /// Forward pass using GPU for matmuls. Significantly faster on GPU hardware.
+    pub fn forward_gpu(&self, tokens: &[u32], gpu: &crate::scan::GpuContext) -> Vec<f32> {
+        let l = tokens.len();
+        let d = self.d_model;
+
+        // 1. Embedding + norm (CPU — small, not worth GPU transfer)
+        let mut x = vec![0.0f32; l * d];
+        for (t, &tok) in tokens.iter().enumerate() {
+            let tok = tok as usize;
+            if tok < self.vocab_size {
+                for i in 0..d { x[t * d + i] = self.embed_w[tok * d + i]; }
             }
         }
-        out
+        layer_norm(&mut x, &self.embed_norm_w, &self.embed_norm_b, l, d);
+
+        // 2. SSM layers — GPU matmuls + CPU scan
+        for layer in &self.layers {
+            let mut x_normed = x.clone();
+            layer_norm(&mut x_normed, &layer.layer_norm_w, &layer.layer_norm_b, l, d);
+
+            // GPU in_proj: (l, d) × (d_in_proj, d)^T → (l, d_in_proj)
+            let dip = layer.d_in_proj;
+            let proj = pollster::block_on(gpu.run_matmul(
+                &x_normed, &layer.in_proj_w, l as u32, d as u32, dip as u32
+            )).unwrap_or_else(|_| {
+                let mut out = vec![0.0f32; l * dip];
+                matmul_t(&mut out, &x_normed, &layer.in_proj_w, l, d, dip);
+                out
+            });
+
+            // SSM (CPU — sequential, can't parallelize across time)
+            let y_inner = self.run_ssm_from_proj_cpu(&proj, layer, l);
+
+            // GPU out_proj: (l, d_inner) × (d, d_inner)^T → (l, d)
+            let di = self.d_inner;
+            let y_out = pollster::block_on(gpu.run_matmul(
+                &y_inner, &layer.out_proj_w, l as u32, di as u32, d as u32
+            )).unwrap_or_else(|_| {
+                let mut out = vec![0.0f32; l * d];
+                matmul_t(&mut out, &y_inner, &layer.out_proj_w, l, di, d);
+                out
+            });
+
+            for i in 0..l * d { x[i] += layer.scale * y_out[i]; }
+        }
+
+        // 3. Final norm (CPU)
+        layer_norm(&mut x, &self.final_norm_w, &self.final_norm_b, l, d);
+
+        // 4. GPU LM head: (l, d) × (vocab, d)^T → (l, vocab)
+        let logits = pollster::block_on(gpu.run_matmul(
+            &x, &self.embed_w, l as u32, d as u32, self.vocab_size as u32
+        )).unwrap_or_else(|_| {
+            let mut out = vec![0.0f32; l * self.vocab_size];
+            matmul_t(&mut out, &x, &self.embed_w, l, d, self.vocab_size);
+            out
+        });
+
+        logits
+    }
+
+    /// SSM computation from projection (CPU only, used by forward_gpu)
+    fn run_ssm_from_proj_cpu(&self, proj: &[f32], lw: &LayerWeights, l: usize) -> Vec<f32> {
+        self.mamba3_block_inner(proj, lw, l)
     }
 
     /// Predict: run forward, return argmax token at each position

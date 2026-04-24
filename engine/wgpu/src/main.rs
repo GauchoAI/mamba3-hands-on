@@ -94,7 +94,30 @@ fn run_model_inference(model_path: &str) {
     let total = start.elapsed();
     let ms = total.as_secs_f64() * 1000.0 / n as f64;
     let tps = tokens.len() as f64 / (ms / 1000.0);
-    println!("Benchmark: {:.3}ms/inference, {:.0} tokens/sec", ms, tps);
+    println!("Benchmark (CPU): {:.3}ms/inference, {:.0} tokens/sec", ms, tps);
+
+    // GPU inference benchmark
+    if let Ok(gpu) = pollster::block_on(mamba3_engine::scan::GpuContext::new()) {
+        // Warmup
+        for _ in 0..3 { let _ = model.forward_gpu(&tokens, &gpu); }
+
+        let n_gpu = 100;
+        let start = Instant::now();
+        for _ in 0..n_gpu {
+            let _ = model.forward_gpu(&tokens, &gpu);
+        }
+        let total = start.elapsed();
+        let ms_gpu = total.as_secs_f64() * 1000.0 / n_gpu as f64;
+        let tps_gpu = tokens.len() as f64 / (ms_gpu / 1000.0);
+        println!("Benchmark (GPU): {:.3}ms/inference, {:.0} tokens/sec", ms_gpu, tps_gpu);
+
+        // Verify GPU output matches CPU
+        let cpu_logits = model.forward(&tokens);
+        let gpu_logits = model.forward_gpu(&tokens, &gpu);
+        let max_diff: f32 = cpu_logits.iter().zip(gpu_logits.iter())
+            .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        println!("GPU vs CPU max diff: {:.2e} {}", max_diff, if max_diff < 1e-3 { "PASS" } else { "FAIL" });
+    }
 
     // Profile: break down where time is spent
     println!("\n--- Profile ---");
