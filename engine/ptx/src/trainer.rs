@@ -248,11 +248,14 @@ impl PtxTrainer {
         let bc1_inv = 1.0f32 / (1.0 - self.beta1.powi(self.step as i32));
         let bc2_inv = 1.0f32 / (1.0 - self.beta2.powi(self.step as i32));
 
-        // no_decay_wd = 0.0: 1-D tensors (norms, biases) skip weight decay.
-        // This matches PyTorch's standard `optimizer_grouped_parameters`
-        // pattern. Without it, wd=0.1 silently decays layer_norm_w=1 toward 0
-        // every step, crippling any gradient flowing to norm weights.
-        let no_decay_wd = 0.0f32;
+        // Uniform weight decay across all params. PyTorch's "no_decay" idiom
+        // requires the FULL gradient chain to be implemented first; with our
+        // partial gradients, removing WD on 1-D tensors (d_param especially)
+        // lets them grow unboundedly because there's no gradient pullback
+        // counterbalancing them. Tested: no_decay + curriculum diverged with
+        // loss climbing from 0.48 → 1.75 (parity acc fell to 12%). Until we
+        // have the full backward chain, everyone gets the same wd.
+        let no_decay_wd = self.weight_decay;
 
         // Embed (2-D, matrix): standard weight decay.
         launch_adamw(&stream, &ptx,
