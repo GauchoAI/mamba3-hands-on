@@ -75,8 +75,8 @@ fn run_model_inference(model_path: &str) {
 
     println!("\nInference time: {:.2}ms", elapsed.as_secs_f64() * 1000.0);
 
-    // Benchmark: run 100 times
-    let n = 100;
+    // Benchmark: run 1000 times for stable measurement
+    let n = 1000;
     let start = Instant::now();
     for _ in 0..n {
         let _ = model.forward(&tokens);
@@ -85,6 +85,30 @@ fn run_model_inference(model_path: &str) {
     let ms = total.as_secs_f64() * 1000.0 / n as f64;
     let tps = tokens.len() as f64 / (ms / 1000.0);
     println!("Benchmark: {:.3}ms/inference, {:.0} tokens/sec", ms, tps);
+
+    // Profile: break down where time is spent
+    println!("\n--- Profile ---");
+    let n_profile = 100;
+
+    // Just embedding + norm
+    let t0 = Instant::now();
+    for _ in 0..n_profile {
+        let mut x = vec![0.0f32; tokens.len() * model.d_model];
+        for (t, &tok) in tokens.iter().enumerate() {
+            for i in 0..model.d_model {
+                x[t * model.d_model + i] = model.embed_w[tok as usize * model.d_model + i];
+            }
+        }
+    }
+    let embed_us = t0.elapsed().as_micros() as f64 / n_profile as f64;
+    println!("  Embed:    {:.0}us", embed_us);
+
+    // Full forward
+    let t0 = Instant::now();
+    for _ in 0..n_profile { let _ = model.forward(&tokens); }
+    let full_us = t0.elapsed().as_micros() as f64 / n_profile as f64;
+    println!("  Full fwd: {:.0}us", full_us);
+    println!("  SSM+proj: {:.0}us (estimated)", full_us - embed_us);
 }
 
 fn run_training_bench(model_path: &str) {

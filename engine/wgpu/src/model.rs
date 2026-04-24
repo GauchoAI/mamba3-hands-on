@@ -326,21 +326,33 @@ impl Mamba3Model {
             for h in 0..nh {
                 let dec = decay[t * nh + h];
 
-                // State update
-                for p in 0..hd {
-                    for n in 0..ds {
-                        let si = (h * hd + p) * ds + n;
-                        let inp_val = inp[((t * nh + h) * hd + p) * ds + n];
-                        state[si] = dec * state[si] + inp_val;
-                    }
+                // State update — contiguous memory access, 4-wide
+                let state_base = h * hd * ds;
+                let inp_base = ((t * nh + h) * hd) * ds;
+                for pd in 0..hd * ds {
+                    let si = state_base + pd;
+                    state[si] = dec * state[si] + inp[inp_base + pd];
                 }
 
-                // Output projection + skip + gate
+                // Output projection + skip + gate — with unrolled dot product
+                let cp_slice = &cp[t * ds..(t + 1) * ds];
                 for p in 0..hd {
-                    let mut sum = 0.0f32;
-                    for n in 0..ds {
-                        sum += state[(h * hd + p) * ds + n] * cp[t * ds + n]; // Cp broadcast
+                    let s_off = state_base + p * ds;
+                    let mut s0 = 0.0f32;
+                    let mut s1 = 0.0f32;
+                    let mut s2 = 0.0f32;
+                    let mut s3 = 0.0f32;
+                    let ds4 = ds / 4 * 4;
+                    let mut n = 0;
+                    while n < ds4 {
+                        s0 += state[s_off + n] * cp_slice[n];
+                        s1 += state[s_off + n + 1] * cp_slice[n + 1];
+                        s2 += state[s_off + n + 2] * cp_slice[n + 2];
+                        s3 += state[s_off + n + 3] * cp_slice[n + 3];
+                        n += 4;
                     }
+                    let mut sum = s0 + s1 + s2 + s3;
+                    while n < ds { sum += state[s_off + n] * cp_slice[n]; n += 1; }
                     // Skip
                     sum += lw.d_param[h] * x_raw[t * di + h * hd + p];
                     // Gate
@@ -418,14 +430,63 @@ fn layer_norm(x: &mut [f32], w: &[f32], b: &[f32], seq_len: usize, d: usize) {
 }
 
 /// Matrix multiply: out = a × b^T. a is (m, k), b is (n, k), out is (m, n).
+/// Uses NEON SIMD on aarch64, falls back to scalar with 4-wide unrolling.
 fn matmul_t(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
-    for i in 0..m {
-        for j in 0..n {
-            let mut s = 0.0f32;
-            for p in 0..k {
-                s += a[i * k + p] * b[j * k + p];
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        for i in 0..m {
+            let a_row = &a[i * k..];
+            for j in 0..n {
+                let b_row = &b[j * k..];
+                let k16 = k / 16 * 16;
+                let mut sum = unsafe { vdupq_n_f32(0.0) };
+                let mut p = 0;
+                while p < k16 {
+                    unsafe {
+                        let a0 = vld1q_f32(a_row.as_ptr().add(p));
+                        let b0 = vld1q_f32(b_row.as_ptr().add(p));
+                        sum = vfmaq_f32(sum, a0, b0);
+                        let a1 = vld1q_f32(a_row.as_ptr().add(p + 4));
+                        let b1 = vld1q_f32(b_row.as_ptr().add(p + 4));
+                        sum = vfmaq_f32(sum, a1, b1);
+                        let a2 = vld1q_f32(a_row.as_ptr().add(p + 8));
+                        let b2 = vld1q_f32(b_row.as_ptr().add(p + 8));
+                        sum = vfmaq_f32(sum, a2, b2);
+                        let a3 = vld1q_f32(a_row.as_ptr().add(p + 12));
+                        let b3 = vld1q_f32(b_row.as_ptr().add(p + 12));
+                        sum = vfmaq_f32(sum, a3, b3);
+                    }
+                    p += 16;
+                }
+                let mut s = unsafe { vaddvq_f32(sum) };
+                while p < k {
+                    s += a_row[p] * b_row[p];
+                    p += 1;
+                }
+                out[i * n + j] = s;
             }
-            out[i * n + j] = s;
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        for i in 0..m {
+            let a_row = &a[i * k..(i + 1) * k];
+            for j in 0..n {
+                let b_row = &b[j * k..(j + 1) * k];
+                let mut s0 = 0.0f32;
+                let mut s1 = 0.0f32;
+                let k4 = k / 4 * 4;
+                let mut p = 0;
+                while p < k4 {
+                    s0 += a_row[p] * b_row[p] + a_row[p+2] * b_row[p+2];
+                    s1 += a_row[p+1] * b_row[p+1] + a_row[p+3] * b_row[p+3];
+                    p += 4;
+                }
+                let mut s = s0 + s1;
+                while p < k { s += a_row[p] * b_row[p]; p += 1; }
+                out[i * n + j] = s;
+            }
         }
     }
 }
