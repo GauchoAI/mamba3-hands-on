@@ -111,6 +111,48 @@ extern "C" __global__ void matmul_t(
     C[i * N + j] = acc;
 }
 
+// ---------- compute_ssm_params_and_dt_mean ---------------------------------
+// Fused: per-(t,h) dt/decay/trap AND per-t dt_mean (reduce over heads).
+// Replaces compute_ssm_params + compute_dt_mean (2 dispatches -> 1).
+// Grid: (L,), Block: (max(H, 32),)  — single warp does dt_mean reduction.
+extern "C" __global__ void compute_ssm_params_and_dt_mean(
+    const float* __restrict__ proj,
+    const float* __restrict__ dt_bias,
+    float* __restrict__ dt,
+    float* __restrict__ decay,
+    float* __restrict__ trap,
+    float* __restrict__ dt_mean,
+    int L, int H, int dip, int di, int ds
+) {
+    int t = blockIdx.x;
+    int tid = threadIdx.x;
+    if (t >= L) return;
+    int dt_off = 2 * di + 2 * ds;
+    int a_off = dt_off + H;
+    int tr_off = a_off + H;
+
+    // Compute dt/decay/trap for each head this thread is responsible for.
+    // Gather this thread's dt contribution for the reduction.
+    float my_dt = 0.0f;
+    for (int h = tid; h < H; h += blockDim.x) {
+        float dt_raw = proj[t * dip + dt_off + h] + dt_bias[h];
+        float dt_v = softplus_f(dt_raw);
+        dt[t * H + h] = dt_v;
+        my_dt += dt_v;
+
+        float a_raw = proj[t * dip + a_off + h];
+        float a = -softplus_f(a_raw);
+        if (a > -1e-4f) a = -1e-4f;
+        decay[t * H + h] = __expf(a * dt_v);
+
+        float tr_raw = proj[t * dip + tr_off + h];
+        trap[t * H + h] = sigmoid_f(tr_raw);
+    }
+    // Warp reduce within a single warp (assuming blockDim.x <= 32)
+    my_dt = warp_reduce_sum(my_dt);
+    if (tid == 0) dt_mean[t] = my_dt / (float)H;
+}
+
 // ---------- compute_ssm_params ---------------------------------------------
 // Per (t, h): dt = softplus(dd_dt + dt_bias); a = max(-softplus(dd_a), -1e-4);
 //             decay = exp(a*dt);  trap = sigmoid(trap_raw)
@@ -332,6 +374,8 @@ extern "C" __global__ void prepare_bc(
 //
 // Grid: (H,)  Block: (hd * ds,), tid = p * ds + n
 // shared memory: hd*ds floats (for reduction) + hd floats (for y_reduce)
+// NOTE: z_silu is read inline from proj (z_raw is the first di slice of proj).
+// The standalone compute_z_silu kernel is no longer called — one fewer dispatch.
 extern "C" __global__ void ssm_scan_sequential(
     const float* __restrict__ proj,
     const float* __restrict__ bp,
@@ -340,7 +384,6 @@ extern "C" __global__ void ssm_scan_sequential(
     const float* __restrict__ decay_in,
     const float* __restrict__ trap_in,
     const float* __restrict__ d_param,
-    const float* __restrict__ z_silu,
     float* __restrict__ y,
     int L, int H, int hd, int ds, int di, int dip
 ) {
@@ -385,8 +428,9 @@ extern "C" __global__ void ssm_scan_sequential(
         if (n == 0) {
             float sum = smem[p * ds];
             sum = __fmaf_rn(d_param[h], x_val, sum);
-            float z = z_silu[t * di + h * hd + p];
-            y_reduce[p] = sum * z;
+            float z_raw = proj[t * dip + h * hd + p];    // inline z_silu
+            float z_silu = z_raw * sigmoid_f(z_raw);
+            y_reduce[p] = sum * z_silu;
         }
         __syncthreads();
 

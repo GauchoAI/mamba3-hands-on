@@ -595,41 +595,25 @@ impl PtxModel {
                 d,
             )?;
 
-            // SSM params: dt, decay, trap
+            // FUSED: SSM params + dt_mean in one kernel (2 → 1 dispatches)
             {
                 let l_i = l as i32;
                 let h_i = nh as i32;
                 let dip_i = dip as i32;
                 let di_i = di as i32;
                 let ds_i = ds as i32;
-                let mut lb = stream.launch_builder(&self.ptx.k.compute_ssm_params);
+                let mut lb = stream.launch_builder(&self.ptx.k.compute_ssm_params_and_dt_mean);
                 lb.arg(&scratch.proj);
                 lb.arg(&layer.dt_bias);
                 lb.arg(&mut scratch.dt);
                 lb.arg(&mut scratch.decay);
                 lb.arg(&mut scratch.trap);
+                lb.arg(&mut scratch.dt_mean);
                 lb.arg(&l_i);
                 lb.arg(&h_i);
                 lb.arg(&dip_i);
                 lb.arg(&di_i);
                 lb.arg(&ds_i);
-                let cfg = LaunchConfig {
-                    grid_dim: (l as u32, 1, 1),
-                    block_dim: (nh as u32, 1, 1),
-                    shared_mem_bytes: 0,
-                };
-                unsafe { lb.launch(cfg)? };
-            }
-
-            // dt_mean
-            {
-                let l_i = l as i32;
-                let h_i = nh as i32;
-                let mut lb = stream.launch_builder(&self.ptx.k.compute_dt_mean);
-                lb.arg(&scratch.dt);
-                lb.arg(&mut scratch.dt_mean);
-                lb.arg(&l_i);
-                lb.arg(&h_i);
                 let cfg = LaunchConfig {
                     grid_dim: (l as u32, 1, 1),
                     block_dim: (32, 1, 1),
@@ -725,26 +709,7 @@ impl PtxModel {
                 n_angles,
             )?;
 
-            // z_silu
-            {
-                let l_i = l as i32;
-                let di_i = di as i32;
-                let dip_i = dip as i32;
-                let mut lb = stream.launch_builder(&self.ptx.k.compute_z_silu);
-                lb.arg(&scratch.proj);
-                lb.arg(&mut scratch.z_silu);
-                lb.arg(&l_i);
-                lb.arg(&di_i);
-                lb.arg(&dip_i);
-                let cfg = LaunchConfig {
-                    grid_dim: ((di as u32 + 31) / 32, l as u32, 1),
-                    block_dim: (32, 1, 1),
-                    shared_mem_bytes: 0,
-                };
-                unsafe { lb.launch(cfg)? };
-            }
-
-            // SSM scan
+            // SSM scan (z_silu now inlined, no separate compute_z_silu kernel)
             {
                 let l_i = l as i32;
                 let h_i = nh as i32;
@@ -760,7 +725,6 @@ impl PtxModel {
                 lb.arg(&scratch.decay);
                 lb.arg(&scratch.trap);
                 lb.arg(&layer.d_param);
-                lb.arg(&scratch.z_silu);
                 lb.arg(&mut scratch.y_inner);
                 lb.arg(&l_i);
                 lb.arg(&h_i);
