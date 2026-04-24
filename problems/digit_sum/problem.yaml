@@ -1,0 +1,10 @@
+name: digit_sum
+type: generator
+generator: generators.level3_longrange:gen_digit_sum
+target_accuracy: 0.95
+tags: [arithmetic, counting, level3]
+description: "Sum of individual digits of a number"
+curriculum:
+  - {stage: 1, n_digits: 2, max_digits: 3, advance_at: 0.90}
+  - {stage: 2, n_digits: 3, max_digits: 5, advance_at: 0.90}
+  - {stage: 3, n_digits: 4, max_digits: 8, advance_at: 0.95}

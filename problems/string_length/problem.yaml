@@ -1,0 +1,10 @@
+name: string_length
+type: generator
+generator: generators.level3_longrange:gen_string_length
+target_accuracy: 0.95
+tags: [counting, level3]
+description: "Count number of elements in a sequence"
+curriculum:
+  - {stage: 1, max_len: 5, advance_at: 0.90}
+  - {stage: 2, max_len: 10, advance_at: 0.90}
+  - {stage: 3, max_len: 20, advance_at: 0.95}

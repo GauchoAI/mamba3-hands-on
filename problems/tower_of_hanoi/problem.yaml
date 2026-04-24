@@ -1,0 +1,10 @@
+name: tower_of_hanoi
+type: generator
+generator: generators.level3_longrange:gen_tower_of_hanoi
+target_accuracy: 0.95
+tags: [reasoning, longrange, level3]
+description: "Tower of Hanoi — compute number of moves (2^n - 1)"
+curriculum:
+  - {stage: 1, n_disks: 3, advance_at: 0.90}
+  - {stage: 2, n_disks: 5, advance_at: 0.90}
+  - {stage: 3, n_disks: 8, advance_at: 0.95}

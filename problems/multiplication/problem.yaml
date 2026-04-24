@@ -1,0 +1,10 @@
+name: multiplication
+type: generator
+generator: generators.level3_longrange:gen_multiplication
+target_accuracy: 0.95
+tags: [arithmetic, longrange, level3]
+description: "Multiplication — scales from 1-digit to multi-digit"
+curriculum:
+  - {stage: 1, n_digits: 1, max_second: 1, advance_at: 0.90}
+  - {stage: 2, n_digits: 2, max_second: 1, advance_at: 0.90}
+  - {stage: 3, n_digits: 2, max_second: 2, advance_at: 0.95}

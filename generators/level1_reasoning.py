@@ -32,20 +32,22 @@ def gen_min_element(max_val=20, min_len=3, max_len=8):
 
 def gen_sort_check(max_val=15, min_len=3, max_len=7):
     """Is the sequence sorted (ascending)? Output: S (sorted) or U (unsorted).
-    Example: '1 3 5 7' → 'S', '3 1 5' → 'U'"""
+    Guaranteed 50/50 balanced output."""
     length = random.randint(min_len, max_len)
     if random.random() < 0.5:
-        # Generate sorted
-        seq = sorted(random.sample(range(max_val + 1), min(length, max_val + 1)))
+        # Generate strictly sorted
+        pool = random.sample(range(max_val + 1), min(length, max_val + 1))
+        seq = sorted(pool)
         answer = "S"
     else:
-        # Generate unsorted (ensure not accidentally sorted)
-        seq = [random.randint(0, max_val) for _ in range(length)]
-        if seq == sorted(seq):
-            random.shuffle(seq)
-            if seq == sorted(seq) and len(seq) > 1:
-                seq[0], seq[-1] = seq[-1], seq[0]
-        answer = "S" if seq == sorted(seq) else "U"
+        # Generate guaranteed unsorted — swap two elements that break order
+        pool = random.sample(range(max_val + 1), min(length, max_val + 1))
+        seq = sorted(pool)
+        # Swap adjacent pair to break sorting
+        if len(seq) >= 2:
+            i = random.randint(0, len(seq) - 2)
+            seq[i], seq[i + 1] = seq[i + 1], seq[i]
+        answer = "U"
     return {"type": "sort_check", "input": " ".join(str(x) for x in seq), "output": answer}
 
 
@@ -110,19 +112,38 @@ def gen_modular_arithmetic(max_val=20, max_mod=10):
 
 def gen_comparison_chain(max_val=20, min_len=2, max_len=4):
     """Evaluate a chain of comparisons. All must be true for output T.
-    Example: '3 < 5 < 9' → 'T', '3 < 5 > 9' → 'F'"""
+    Guaranteed 50/50 balanced output."""
     length = random.randint(min_len, max_len)
-    values = [random.randint(0, max_val) for _ in range(length + 1)]
-    ops = [random.choice(["<", ">"]) for _ in range(length)]
+
+    if random.random() < 0.5:
+        # Generate TRUE chain — construct values that satisfy all ops
+        ops = [random.choice(["<", ">"]) for _ in range(length)]
+        values = [random.randint(1, max_val - 1)]
+        for op in ops:
+            prev = values[-1]
+            if op == "<":
+                values.append(random.randint(prev + 1, max(prev + 1, max_val)))
+            else:
+                values.append(random.randint(0, max(0, prev - 1)))
+        answer = "T"
+    else:
+        # Generate FALSE chain — at least one comparison fails
+        values = [random.randint(0, max_val) for _ in range(length + 1)]
+        ops = [random.choice(["<", ">"]) for _ in range(length)]
+        # Check if accidentally true, if so break one comparison
+        all_true = all(
+            (values[i] < values[i+1] if ops[i] == "<" else values[i] > values[i+1])
+            for i in range(length)
+        )
+        if all_true and length > 0:
+            # Flip one op to break it
+            i = random.randint(0, length - 1)
+            ops[i] = ">" if ops[i] == "<" else "<"
+        answer = "F"
 
     parts = [str(values[0])]
-    all_true = True
     for i, op in enumerate(ops):
         parts.append(op)
         parts.append(str(values[i + 1]))
-        if op == "<" and not (values[i] < values[i + 1]):
-            all_true = False
-        elif op == ">" and not (values[i] > values[i + 1]):
-            all_true = False
 
-    return {"type": "comparison_chain", "input": " ".join(parts), "output": "T" if all_true else "F"}
+    return {"type": "comparison_chain", "input": " ".join(parts), "output": answer}
