@@ -31,6 +31,9 @@ pub struct TrainScratch {
     pub layer_projs: CudaSlice<f32>,
     // SSM output before out-proj. Shape: (L, d_inner)
     pub layer_y_inners: CudaSlice<f32>,
+    // Layer-normed + RoPE'd bp per layer (needed to reconstruct blended in
+    // the adjoint scan without dividing by dt). (L, ds)
+    pub layer_bps: CudaSlice<f32>,
     // Layer-normed + RoPE'd cp per layer (needed by adjoint scan). (L, ds)
     pub layer_cps: CudaSlice<f32>,
     // decay per layer (needed by adjoint scan). (L, n_heads)
@@ -119,6 +122,7 @@ impl TrainScratch {
             layer_inputs: stream.alloc_zeros::<f32>(n_layers * li)?,
             layer_projs: stream.alloc_zeros::<f32>(n_layers * lp)?,
             layer_y_inners: stream.alloc_zeros::<f32>(n_layers * ly)?,
+            layer_bps: stream.alloc_zeros::<f32>(n_layers * lc)?,
             layer_cps: stream.alloc_zeros::<f32>(n_layers * lc)?,
             layer_decays: stream.alloc_zeros::<f32>(n_layers * ld)?,
             layer_dts: stream.alloc_zeros::<f32>(n_layers * ld)?,

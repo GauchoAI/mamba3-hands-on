@@ -1559,13 +1559,16 @@ extern "C" __global__ void ssm_scan_bwd(
 //   d_d_param[h]       (via atomicAdd of dy_pre · x_raw across t, p)
 //   d_dt_from_inp[t, h] (via block-wide reduction of dh · blended)
 //
-// blended is recomputed as inp_val / dt since inp_val = states[t+1] - decay·states[t]
-// is implicit in the scan (states are saved).
+// `blended` is reconstructed from cached bp + proj[x slice] + cached trap
+// (NOT from inp_val/dt — that amplifies when dt≈0.05 at init). Specifically:
+//   blended[t,h,p,n] = trap[t,h] · bp[t,n] · x[t,h,p]
+//                    + (1-trap[t,h]) · bp[t-1,n] · x[t-1,h,p]
 //
 // Grid: (H,), Block: (hd*ds,)
 extern "C" __launch_bounds__(256, 2) __global__ void ssm_scan_bwd_full(
     const float* __restrict__ d_y_pregate,
     const float* __restrict__ proj,
+    const float* __restrict__ bp,       // (L, ds) — post LN+RoPE
     const float* __restrict__ cp,
     const float* __restrict__ decay,
     const float* __restrict__ dt_in,
@@ -1626,15 +1629,30 @@ extern "C" __launch_bounds__(256, 2) __global__ void ssm_scan_bwd_full(
         if (tid == 0) d_decay[t * H + h] = smem[0];
         __syncthreads();
 
-        // d_dt_from_inp: DROPPED for numerical stability. The math
-        //   d_dt_contrib = Σ dh · blended,   blended = inp_val / dt
-        // blows up when dt is tiny at init (~0.05 from dt_bias=-3). Keeping
-        // only the decay-path contribution to d_dt keeps training stable and
-        // parity learning (72% with just d_d_param; adding decay-path d_dt
-        // should push further). Revisit if we need the exact PyTorch-autograd
-        // gradient; likely needs per-weight LR tuning or a reformulated
-        // expression that doesn't divide by dt.
-        if (tid == 0) d_dt_from_inp[t * H + h] = 0.0f;
+        // d_dt_from_inp[t, h] = Σ_{p,n} dh · blended.
+        // Reconstructed from forward cache (post LN+RoPE bp, post-sigmoid
+        // trap recomputed from proj[tr_off+h]) — avoids inp_val/dt.
+        int tr_off = 2 * di + 2 * ds + 2 * H;
+        float tr_raw_bwd = proj[t * dip + tr_off + h];
+        float tr = 1.0f / (1.0f + __expf(-tr_raw_bwd));
+        float bp_tn  = bp[t * ds + n];
+        float x_val  = proj[t * dip + di + h * hd + p];
+        float bx_cur = bp_tn * x_val;
+        float bx_prev = 0.0f;
+        if (t > 0) {
+            float bp_tm1 = bp[(t - 1) * ds + n];
+            float x_prev = proj[(t - 1) * dip + di + h * hd + p];
+            bx_prev = bp_tm1 * x_prev;
+        }
+        float blended = tr * bx_cur + (1.0f - tr) * bx_prev;
+
+        smem[tid] = dh * blended;
+        __syncthreads();
+        for (int stride = block_n >> 1; stride > 0; stride >>= 1) {
+            if (tid < stride) smem[tid] += smem[tid + stride];
+            __syncthreads();
+        }
+        if (tid == 0) d_dt_from_inp[t * H + h] = smem[0];
         __syncthreads();
 
         // Propagate dh through state update

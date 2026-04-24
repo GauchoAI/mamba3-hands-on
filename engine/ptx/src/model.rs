@@ -410,7 +410,26 @@ impl PtxModel {
             launch_apply_rope(&stream, &self.ptx, &mut scratch.bp, &scratch.phase, l, ds, n_angles)?;
             launch_apply_rope(&stream, &self.ptx, &mut scratch.cp, &scratch.phase, l, ds, n_angles)?;
 
-            // 3g. Save cp (post LN+RoPE) and decay for backward
+            // 3g. Save bp, cp (post LN+RoPE) and decay for backward.
+            // bp is needed so the adjoint scan can reconstruct `blended`
+            // without dividing by dt (avoids the dt≈0.05-at-init blowup).
+            {
+                let bp_off = li * train_scratch.layer_cp_stride;
+                let bp_len = l * ds;
+                let mut dst = train_scratch.layer_bps.slice_mut(bp_off..bp_off + bp_len);
+                let src = scratch.bp.slice(0..bp_len);
+                let n_i = bp_len as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+                lb.arg(&src);
+                lb.arg(&mut dst);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((bp_len as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
             {
                 let cp_off = li * train_scratch.layer_cp_stride;
                 let cp_len = l * ds;
