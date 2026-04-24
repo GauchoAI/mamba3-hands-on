@@ -425,7 +425,11 @@ extern "C" __global__ void ssm_scan_sequential(
 //
 // All arithmetic via __fmaf_rn / explicit sigmoid_f / softplus_f to stay
 // bit-identical with the per-op path and CPU reference.
-extern "C" __global__ void mamba3_forward_persistent(
+// __launch_bounds__(1024, 1): cap at 1024 threads/block, hint 1 resident block
+// per SM. Forces the compiler to budget registers so we fit: 65536 / 1024 = 64
+// regs/thread. Without this, nvcc chooses a higher register count and the
+// driver rejects the launch with CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES at 1024.
+extern "C" __launch_bounds__(1024, 1) __global__ void mamba3_forward_persistent(
     const unsigned int* __restrict__ tokens,    // (L,)
     const float* __restrict__ embed_w,          // (V, d)
     const float* __restrict__ embed_norm_w,     // (d,)
