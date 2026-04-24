@@ -11,3 +11,4 @@ pub mod train;
 pub mod calibrate;
 pub mod gpu_model;
 pub mod gpu_pipeline;
+pub mod gpu_full;

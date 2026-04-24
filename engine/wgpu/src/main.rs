@@ -173,6 +173,25 @@ fn run_model_inference(model_path: &str) {
                 .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
             println!("GPU-pipeline vs CPU max diff: {:.2e} {}", max_diff4, if max_diff4 < 1e-3 { "PASS" } else { "FAIL" });
         }
+
+        // Full GPU model (norm + matmul + residual all on GPU, SSM scan CPU)
+        if let Ok(fg) = pollster::block_on(mamba3_engine::scan::GpuContext::new()) {
+            let full_gpu = mamba3_engine::gpu_full::FullGpuModel::new(
+                Mamba3Model::from_bin(Path::new(model_path)).unwrap(), fg, 64
+            );
+            for _ in 0..3 { let _ = full_gpu.forward(&tokens); }
+            let n_f = 100;
+            let start = Instant::now();
+            for _ in 0..n_f { let _ = full_gpu.forward(&tokens); }
+            let total = start.elapsed();
+            let ms_f = total.as_secs_f64() * 1000.0 / n_f as f64;
+            let tps_f = tokens.len() as f64 / (ms_f / 1000.0);
+            println!("Benchmark (GPU-full): {:.3}ms/inference, {:.0} tokens/sec", ms_f, tps_f);
+            let f_logits = full_gpu.forward(&tokens);
+            let max_diff5: f32 = cpu_logits.iter().zip(f_logits.iter())
+                .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            println!("GPU-full vs CPU max diff: {:.2e} {}", max_diff5, if max_diff5 < 1e-3 { "PASS" } else { "FAIL" });
+        }
     }
 
     // Profile: break down where time is spent
