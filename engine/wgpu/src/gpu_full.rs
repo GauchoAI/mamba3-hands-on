@@ -54,6 +54,8 @@ pub struct FullGpuModel {
     fused_layout: wgpu::BindGroupLayout,
     fused_scale_layout: wgpu::BindGroupLayout,
     fused_scratch: wgpu::Buffer,
+    reduce_pipeline: wgpu::ComputePipeline,
+    reduce_layout: wgpu::BindGroupLayout,
 
     max_seq: usize,
 
@@ -363,9 +365,28 @@ impl FullGpuModel {
             entry_point: Some("main"), compilation_options: Default::default(), cache: None,
         });
 
+        // Reduce pipeline (sum across heads)
+        let reduce_shader = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None, source: wgpu::ShaderSource::Wgsl(include_str!("shaders/head_reduce.wgsl").into()),
+        });
+        let reduce_layout = gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None, entries: &[bgl_rw(0), bgl_ro(1), bgl_u(2)],
+        });
+        let reduce_pl = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None, bind_group_layouts: &[&reduce_layout], push_constant_ranges: &[],
+        });
+        let reduce_pipeline = gpu.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None, layout: Some(&reduce_pl), module: &reduce_shader,
+            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+        });
+
         // Scratch buffer for fused shader — holds all per-layer intermediates
         let max_dip = model.layers.iter().map(|l| l.d_in_proj).max().unwrap_or(0);
-        let scratch_size = d + max_dip + di + 2 * ds + 2 * nh * hd * ds + ds / 2 + 256; // padding
+        // Per-head: x_normed(d) + proj(dip) + y(hd) + state(hd*ds) + bx_prev(hd*ds) + phase(na)
+        let na = ds / 2;
+        let per_head = d + max_dip + hd + hd * ds + hd * ds + na;
+        // Per-timestep out_proj: L * nh * d (each head writes its contribution per timestep)
+        let scratch_size = nh * per_head + max_seq * nh * d + 256;
         let fused_scratch = buf(scratch_size);
 
         eprintln!("  FullGpuModel: {} layers, max_seq={}, scratch={}KB, pre-built {} bind groups",
@@ -381,6 +402,7 @@ impl FullGpuModel {
             norm_pipeline, norm_layout, residual_pipeline, residual_layout,
             ssm_prep_pipeline, ssm_prep_layout,
             fused_pipeline, fused_layout, fused_scale_layout, fused_scratch,
+            reduce_pipeline, reduce_layout,
             all_param_bufs: Vec::new(),
             max_seq,
             embed_norm_bg, final_norm_bg, head_matmul_bg,
@@ -496,6 +518,7 @@ impl FullGpuModel {
         let d = self.cpu_model.d_model;
         let v = self.cpu_model.vocab_size;
         let di = self.cpu_model.d_inner;
+        let nh = self.cpu_model.n_heads;
 
         // Embedding (CPU)
         let mut x = vec![0.0f32; l * d];
@@ -563,12 +586,41 @@ impl FullGpuModel {
                 ],
             });
 
-            let mut pass = enc.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.fused_pipeline);
-            pass.set_bind_group(0, &bg0, &[]);
-            pass.set_bind_group(1, &bg1, &[]);
-            pass.dispatch_workgroups(1, 1, 1); // Single workgroup — all heads sequential
-        }
+            { let mut pass = enc.begin_compute_pass(&Default::default());
+              pass.set_pipeline(&self.fused_pipeline);
+              pass.set_bind_group(0, &bg0, &[]);
+              pass.set_bind_group(1, &bg1, &[]);
+              pass.dispatch_workgroups(nh as u32, 1, 1); } // One workgroup per head
+
+            // Reduce: sum across heads and add residual to x
+            // per_head_size must match fused shader: d + dip + hd + hd*ds*2 + na
+            let na_val = self.cpu_model.d_state / 2;
+            let phs = (d + gl.d_in_proj + self.cpu_model.headdim + self.cpu_model.headdim * self.cpu_model.d_state * 2 + na_val) as u32;
+            #[repr(C)]
+            #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+            struct RP { l_val: u32, d_val: u32, nh_val: u32, scale_bits: u32,
+                        per_head_size: u32, hd_val: u32, _p0: u32, _p1: u32 }
+            let rp = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::bytes_of(&RP {
+                    l_val: l32, d_val: d as u32, nh_val: nh as u32, scale_bits: gl.scale.to_bits(),
+                    per_head_size: phs, hd_val: self.cpu_model.headdim as u32, _p0: 0, _p1: 0,
+                }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            let rbg = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &self.reduce_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: self.x_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: self.fused_scratch.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: rp.as_entire_binding() },
+                ],
+            });
+            { let mut pass = enc.begin_compute_pass(&Default::default());
+              pass.set_pipeline(&self.reduce_pipeline);
+              pass.set_bind_group(0, &rbg, &[]);
+              pass.dispatch_workgroups(((l * d) as u32 + 255) / 256, 1, 1); }
+        } // end for loop over layers
 
         // Final norm + head
         { let mut pass = enc.begin_compute_pass(&Default::default());
