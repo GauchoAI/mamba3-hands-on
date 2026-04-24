@@ -190,6 +190,35 @@ fn main() -> Result<(), Box<dyn Error>> {
         "PTX + CUDA Graph", graph_ms, graph_tps
     );
 
+    // --- v2.1 diagnostic: breakdown of forward_graph phases ---
+    println!();
+    println!("Phase breakdown (average of 200 calls):");
+    let n_diag = 200;
+
+    let mut t_upload = std::time::Duration::ZERO;
+    let mut t_launch = std::time::Duration::ZERO;
+    let mut t_sync = std::time::Duration::ZERO;
+    let mut t_readback = std::time::Duration::ZERO;
+
+    // Warmup.
+    for _ in 0..5 {
+        let _ = gpu_model.forward_graph_diag(&tokens, &graph)?;
+    }
+    for _ in 0..n_diag {
+        let (du, dl, ds, dr) = gpu_model.forward_graph_diag(&tokens, &graph)?;
+        t_upload += du;
+        t_launch += dl;
+        t_sync += ds;
+        t_readback += dr;
+    }
+    let avg_us = |d: std::time::Duration| d.as_secs_f64() * 1e6 / n_diag as f64;
+    let tot_us = avg_us(t_upload) + avg_us(t_launch) + avg_us(t_sync) + avg_us(t_readback);
+    println!("{:>24}  {:>12.1} µs", "upload_tokens (htod)", avg_us(t_upload));
+    println!("{:>24}  {:>12.1} µs", "graph.launch()", avg_us(t_launch));
+    println!("{:>24}  {:>12.1} µs", "stream.synchronize()", avg_us(t_sync));
+    println!("{:>24}  {:>12.1} µs", "memcpy_dtov (logits)", avg_us(t_readback));
+    println!("{:>24}  {:>12.1} µs", "sum", tot_us);
+
     println!();
     println!(
         "PTX per-op    vs CPU: {:.2}x      vs wgpu-fused (21.2 ms): {:.1}x",

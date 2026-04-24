@@ -150,6 +150,38 @@ impl PtxModel {
         Ok(host)
     }
 
+    /// Same as `forward_graph` but returns per-phase timings for diagnostics.
+    pub fn forward_graph_diag(
+        &self,
+        tokens: &[u32],
+        graph: &CudaGraph,
+    ) -> Result<
+        (
+            std::time::Duration,
+            std::time::Duration,
+            std::time::Duration,
+            std::time::Duration,
+        ),
+        Box<dyn Error>,
+    > {
+        let stream = self.ptx.stream.clone();
+        let t0 = std::time::Instant::now();
+        self.upload_tokens(&stream, tokens)?;
+        let t1 = std::time::Instant::now();
+        graph.launch()?;
+        let t2 = std::time::Instant::now();
+        stream.synchronize()?;
+        let t3 = std::time::Instant::now();
+
+        let l = tokens.len();
+        let scratch = self.scratch.borrow();
+        let logits_slice = scratch.logits.slice(0..(l * self.vocab_size));
+        let _host = stream.memcpy_dtov(&logits_slice)?;
+        let t4 = std::time::Instant::now();
+
+        Ok((t1 - t0, t2 - t1, t3 - t2, t4 - t3))
+    }
+
     /// Capture the compute pipeline (all kernel launches for a forward of
     /// length `l`) as a replayable CUDA graph. Tokens must be uploaded to
     /// scratch.tokens via `forward_graph` on each replay — the graph only
