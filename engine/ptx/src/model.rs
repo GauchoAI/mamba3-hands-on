@@ -191,12 +191,14 @@ impl PtxModel {
         })
     }
 
-    /// Block size for the persistent kernel. 1024 threads → 4 SSM heads in
-    /// parallel per iteration for the run_length_next model (hd*ds=256).
-    /// `__launch_bounds__(1024, 1)` on the kernel caps registers to 64/thread
-    /// so we fit the H100's per-block register budget.
+    /// Block size for the persistent kernel. 512 threads → 2 SSM heads in
+    /// parallel per iteration for the run_length_next model (hd*ds=256); 4
+    /// serial passes for 8 heads. We tried 1024 (4 heads parallel): it builds
+    /// with __launch_bounds__(1024,1) but forces registers into local memory
+    /// (HBM), making the kernel 2x slower from register spills. 512 is the
+    /// sweet spot for this model — full register pressure, no spilling.
     pub fn persistent_block_size(&self) -> u32 {
-        1024
+        512
     }
 
     /// Shared-memory footprint (in bytes) of the persistent kernel for a given
