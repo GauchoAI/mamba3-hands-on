@@ -222,6 +222,123 @@ impl Mamba3Model {
     pub fn mamba3_block_inner_pub(&self, proj: &[f32], lw: &LayerWeights, l: usize) -> Vec<f32> {
         self.mamba3_block_inner(proj, lw, l)
     }
+
+    /// Extract scan inputs from projection — for GPU scan dispatch.
+    /// Returns (inp, decay, Cp, x_skip, z_silu, D) flattened for ssm_scan shader.
+    pub fn extract_scan_inputs(&self, proj: &[f32], lw: &LayerWeights, l: usize)
+        -> (Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)
+    {
+        let di = self.d_inner;
+        let nh = self.n_heads;
+        let hd = self.headdim;
+        let ds = self.d_state;
+        let dip = lw.d_in_proj;
+
+        // Split projection
+        let mut off = 0;
+        let z_raw = proj_slice(proj, l, dip, off, di); off += di;
+        let x_raw = proj_slice(proj, l, dip, off, di); off += di;
+        let bp_raw = proj_slice(proj, l, dip, off, ds); off += ds;
+        let cp_raw = proj_slice(proj, l, dip, off, ds); off += ds;
+        let dd_dt = proj_slice(proj, l, dip, off, nh); off += nh;
+        let dd_a = proj_slice(proj, l, dip, off, nh); off += nh;
+        let trap_raw = proj_slice(proj, l, dip, off, nh); off += nh;
+        let angles = proj_slice(proj, l, dip, off, lw.num_rope_angles);
+
+        // Norm B, C
+        let mut bp = bp_raw;
+        layer_norm(&mut bp, &lw.b_norm_w, &lw.b_norm_b, l, ds);
+        let mut cp = cp_raw;
+        layer_norm(&mut cp, &lw.c_norm_w, &lw.c_norm_b, l, ds);
+
+        // DT, decay, trap
+        let mut dt = vec![0.0f32; l * nh];
+        let mut decay = vec![0.0f32; l * nh];
+        let mut trap = vec![0.0f32; l * nh];
+        for t in 0..l {
+            for h in 0..nh {
+                dt[t * nh + h] = softplus(dd_dt[t * nh + h] + lw.dt_bias[h]);
+                let a_raw = -softplus(dd_a[t * nh + h]);
+                let a = if a_raw > -1e-4 { -1e-4 } else { a_raw };
+                decay[t * nh + h] = (a * dt[t * nh + h]).exp();
+                trap[t * nh + h] = sigmoid(trap_raw[t * nh + h]);
+            }
+        }
+
+        // RoPE
+        let n_angles = lw.num_rope_angles;
+        let mut dt_mean = vec![0.0f32; l];
+        for t in 0..l {
+            let mut s = 0.0f32;
+            for h in 0..nh { s += dt[t * nh + h]; }
+            dt_mean[t] = s / nh as f32;
+        }
+        let mut phase = vec![0.0f32; l * n_angles];
+        let mut cumphase = vec![0.0f32; n_angles];
+        for t in 0..l {
+            for k in 0..n_angles {
+                cumphase[k] += angles[t * n_angles + k] * dt_mean[t];
+                phase[t * n_angles + k] = cumphase[k];
+            }
+        }
+        apply_rope(&mut bp, &phase, l, ds, n_angles);
+        apply_rope(&mut cp, &phase, l, ds, n_angles);
+
+        // Compute inp with trapezoidal: (L, H, hD, dS)
+        let mut inp = vec![0.0f32; l * nh * hd * ds];
+        let mut bx_prev = vec![0.0f32; nh * hd * ds];
+        for t in 0..l {
+            for h in 0..nh {
+                let mut bx_cur = vec![0.0f32; hd * ds];
+                for p in 0..hd {
+                    let xv = x_raw[t * di + h * hd + p];
+                    for n in 0..ds { bx_cur[p * ds + n] = xv * bp[t * ds + n]; }
+                }
+                let tr = trap[t * nh + h];
+                let dtv = dt[t * nh + h];
+                for p in 0..hd {
+                    for n in 0..ds {
+                        let idx = ((t * nh + h) * hd + p) * ds + n;
+                        inp[idx] = (tr * bx_cur[p * ds + n] + (1.0 - tr) * bx_prev[h * hd * ds + p * ds + n]) * dtv;
+                    }
+                }
+                for i in 0..hd * ds { bx_prev[h * hd * ds + i] = bx_cur[i]; }
+            }
+        }
+
+        // Reshape for ssm_scan: needs (B=1, L, H, dS) for Cp
+        // Broadcast Cp across heads
+        let mut cp_broadcast = vec![0.0f32; l * nh * ds];
+        for t in 0..l {
+            for h in 0..nh {
+                for n in 0..ds { cp_broadcast[(t * nh + h) * ds + n] = cp[t * ds + n]; }
+            }
+        }
+
+        // x reshaped to (L, H, hD)
+        let mut x_skip = vec![0.0f32; l * nh * hd];
+        for t in 0..l {
+            for h in 0..nh {
+                for p in 0..hd { x_skip[(t * nh + h) * hd + p] = x_raw[t * di + h * hd + p]; }
+            }
+        }
+
+        // z_silu reshaped to (L, H, hD) — precomputed silu gate
+        let mut z_reshaped = vec![0.0f32; l * nh * hd];
+        for t in 0..l {
+            for h in 0..nh {
+                for p in 0..hd {
+                    let z = z_raw[t * di + h * hd + p];
+                    z_reshaped[(t * nh + h) * hd + p] = z * sigmoid(z);
+                }
+            }
+        }
+
+        // D param
+        let d_param = lw.d_param.clone();
+
+        (inp, decay, cp_broadcast, x_skip, z_reshaped, d_param)
+    }
     fn mamba3_block_inner(&self, proj: &[f32], lw: &LayerWeights, l: usize) -> Vec<f32> {
         let di = self.d_inner;
         let nh = self.n_heads;

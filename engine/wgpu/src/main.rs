@@ -152,6 +152,27 @@ fn run_model_inference(model_path: &str) {
         let max_diff3: f32 = cpu_logits.iter().zip(bat_logits.iter())
             .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         println!("GPU-batched vs CPU max diff: {:.2e} {}", max_diff3, if max_diff3 < 1e-3 { "PASS" } else { "FAIL" });
+
+        // Full GPU pipeline (norm + matmul + scan all on GPU)
+        let pipeline_gpu = pollster::block_on(mamba3_engine::scan::GpuContext::new()).ok();
+        if let Some(pg) = pipeline_gpu {
+            let pipeline = mamba3_engine::gpu_pipeline::GpuPipeline::new(
+                Mamba3Model::from_bin(Path::new(model_path)).unwrap(), pg, 64
+            );
+            // Warmup
+            for _ in 0..3 { let _ = pipeline.forward(&tokens); }
+            let n_p = 100;
+            let start = Instant::now();
+            for _ in 0..n_p { let _ = pipeline.forward(&tokens); }
+            let total = start.elapsed();
+            let ms_p = total.as_secs_f64() * 1000.0 / n_p as f64;
+            let tps_p = tokens.len() as f64 / (ms_p / 1000.0);
+            println!("Benchmark (GPU-pipeline): {:.3}ms/inference, {:.0} tokens/sec", ms_p, tps_p);
+            let p_logits = pipeline.forward(&tokens);
+            let max_diff4: f32 = cpu_logits.iter().zip(p_logits.iter())
+                .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            println!("GPU-pipeline vs CPU max diff: {:.2e} {}", max_diff4, if max_diff4 < 1e-3 { "PASS" } else { "FAIL" });
+        }
     }
 
     // Profile: break down where time is spent
