@@ -218,6 +218,60 @@ fn main() -> Result<(), Box<dyn Error>> {
         cpu_ms, cpu_ms / am_ms
     );
 
+    // --- v2.B Cooperative multi-block persistent kernel (the real v2) ---
+    println!();
+    println!("Testing cooperative multi-block persistent kernel...");
+    let coop_logits = gpu_model.forward_coop(&tokens)?;
+    let coop_diff: f32 = cpu_logits
+        .iter()
+        .zip(coop_logits.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, |acc, d| if d.is_nan() { f32::INFINITY } else { acc.max(d) });
+    println!(
+        "Coop vs CPU: max diff = {:.3e}   {}",
+        coop_diff,
+        if coop_diff < 1e-3 && coop_logits.iter().all(|v| v.is_finite()) { "PASS" } else { "FAIL" }
+    );
+
+    let graph_coop = gpu_model.capture_graph_coop(tokens.len())?;
+    let coopg_logits = gpu_model.forward_graph_coop(&tokens, &graph_coop)?;
+    let coopg_diff: f32 = cpu_logits
+        .iter()
+        .zip(coopg_logits.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, |acc, d| if d.is_nan() { f32::INFINITY } else { acc.max(d) });
+    println!(
+        "Coop + Graph vs CPU: max diff = {:.3e}   {}",
+        coopg_diff,
+        if coopg_diff < 1e-3 && coopg_logits.iter().all(|v| v.is_finite()) { "PASS" } else { "FAIL" }
+    );
+
+    for _ in 0..5 { let _ = gpu_model.forward_coop(&tokens)?; }
+    let start = Instant::now();
+    let mut count = 0;
+    while start.elapsed().as_secs_f64() < 2.5 {
+        let _ = gpu_model.forward_coop(&tokens)?;
+        count += 1;
+    }
+    let coop_ms = start.elapsed().as_secs_f64() * 1000.0 / count as f64;
+    let coop_tps = tokens.len() as f64 / (coop_ms / 1000.0);
+    println!("{:>24}  {:>14.3}  {:>14.0}", "PTX coop (1 launch)", coop_ms, coop_tps);
+
+    for _ in 0..5 { let _ = gpu_model.forward_graph_coop(&tokens, &graph_coop)?; }
+    let start = Instant::now();
+    let mut count = 0;
+    while start.elapsed().as_secs_f64() < 2.5 {
+        let _ = gpu_model.forward_graph_coop(&tokens, &graph_coop)?;
+        count += 1;
+    }
+    let coopg_ms = start.elapsed().as_secs_f64() * 1000.0 / count as f64;
+    let coopg_tps = tokens.len() as f64 / (coopg_ms / 1000.0);
+    println!("{:>24}  {:>14.3}  {:>14.0}", "PTX coop + graph", coopg_ms, coopg_tps);
+
+    println!();
+    println!("PTX coop        vs CPU: {:.2}x", cpu_ms / coop_ms);
+    println!("PTX coop+graph  vs CPU: {:.2}x", cpu_ms / coopg_ms);
+
     // --- v2.7 Persistent single-kernel forward ---
     println!();
     println!("Testing persistent single-kernel forward...");

@@ -227,6 +227,134 @@ impl PtxModel {
         (floats * 4) as u32
     }
 
+    /// Forward pass via the cooperative-groups multi-block persistent kernel.
+    /// ONE kernel launch, COOP_BLOCKS blocks (default 64), grid-sync between
+    /// phases. HBM scratch buffers for cross-block communication. This is the
+    /// design that wins under GPU contention: one scheduling event instead of
+    /// 45.
+    pub fn forward_coop(&self, tokens: &[u32]) -> Result<Vec<f32>, Box<dyn Error>> {
+        let stream = self.ptx.stream.clone();
+        self.upload_tokens(&stream, tokens)?;
+        self.launch_coop(&stream, tokens.len())?;
+        stream.synchronize()?;
+
+        let l = tokens.len();
+        let scratch = self.scratch.borrow();
+        let logits_slice = scratch.logits.slice(0..(l * self.vocab_size));
+        let host = stream.memcpy_dtov(&logits_slice)?;
+        Ok(host)
+    }
+
+    /// Launch the cooperative kernel. No upload, no sync, no readback —
+    /// suitable for graph capture.
+    pub fn launch_coop(
+        &self,
+        stream: &Arc<CudaStream>,
+        l: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut scratch_ref = self.scratch.borrow_mut();
+        let scratch: &mut PtxScratch = &mut *scratch_ref;
+
+        let l_i = l as i32;
+        let n_layers_i = self.n_layers as i32;
+        let d_i = self.d_model as i32;
+        let di_i = self.d_inner as i32;
+        let ds_i = self.d_state as i32;
+        let h_i = self.n_heads as i32;
+        let hd_i = self.headdim as i32;
+        let na_i = self.num_rope_angles as i32;
+        let v_i = self.vocab_size as i32;
+        let dip_i = self.d_in_proj as i32;
+
+        let mut lb = stream.launch_builder(&self.ptx.k.mamba3_forward_coop);
+        lb.arg(&scratch.tokens);
+        lb.arg(&self.embed_w);
+        lb.arg(&self.embed_norm_w);
+        lb.arg(&self.embed_norm_b);
+        lb.arg(&self.l_in_proj_w);
+        lb.arg(&self.l_out_proj_w);
+        lb.arg(&self.l_dt_bias);
+        lb.arg(&self.l_d_param);
+        lb.arg(&self.l_b_norm_w);
+        lb.arg(&self.l_b_norm_b);
+        lb.arg(&self.l_c_norm_w);
+        lb.arg(&self.l_c_norm_b);
+        lb.arg(&self.l_ln_w);
+        lb.arg(&self.l_ln_b);
+        lb.arg(&self.l_scale);
+        lb.arg(&self.final_norm_w);
+        lb.arg(&self.final_norm_b);
+        lb.arg(&mut scratch.x);
+        lb.arg(&mut scratch.x_normed);
+        lb.arg(&mut scratch.proj);
+        lb.arg(&mut scratch.dt);
+        lb.arg(&mut scratch.decay);
+        lb.arg(&mut scratch.trap);
+        lb.arg(&mut scratch.dt_mean);
+        lb.arg(&mut scratch.phase);
+        lb.arg(&mut scratch.bp);
+        lb.arg(&mut scratch.cp);
+        lb.arg(&mut scratch.y_inner);
+        lb.arg(&mut scratch.y_out);
+        lb.arg(&mut scratch.logits);
+        lb.arg(&l_i);
+        lb.arg(&n_layers_i);
+        lb.arg(&d_i);
+        lb.arg(&di_i);
+        lb.arg(&ds_i);
+        lb.arg(&h_i);
+        lb.arg(&hd_i);
+        lb.arg(&na_i);
+        lb.arg(&v_i);
+        lb.arg(&dip_i);
+
+        // 64 blocks × 256 threads. Block count chosen so cooperative launch
+        // fits H100's max active blocks for this kernel; with
+        // __launch_bounds__(256, 2) giving ≥2 blocks/SM and 132 SMs, limit is
+        // well above 64. Grid-stride loops inside handle any residual work.
+        let cfg = LaunchConfig {
+            grid_dim: (64, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        unsafe { lb.launch_cooperative(cfg)? };
+        Ok(())
+    }
+
+    /// Capture cooperative kernel launch as CUDA Graph.
+    pub fn capture_graph_coop(&self, l: usize) -> Result<CudaGraph, Box<dyn Error>> {
+        let stream = self.ptx.stream.clone();
+        let dummy: Vec<u32> = vec![0; l];
+        self.upload_tokens(&stream, &dummy)?;
+        self.launch_coop(&stream, l)?;
+        stream.synchronize()?;
+
+        stream.begin_capture(CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)?;
+        let r = self.launch_coop(&stream, l);
+        let g = stream
+            .end_capture(CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH);
+        r?;
+        let graph = g?.ok_or("Graph capture returned None")?;
+        Ok(graph)
+    }
+
+    pub fn forward_graph_coop(
+        &self,
+        tokens: &[u32],
+        graph: &CudaGraph,
+    ) -> Result<Vec<f32>, Box<dyn Error>> {
+        let stream = self.ptx.stream.clone();
+        self.upload_tokens(&stream, tokens)?;
+        graph.launch()?;
+        stream.synchronize()?;
+
+        let l = tokens.len();
+        let scratch = self.scratch.borrow();
+        let logits_slice = scratch.logits.slice(0..(l * self.vocab_size));
+        let host = stream.memcpy_dtov(&logits_slice)?;
+        Ok(host)
+    }
+
     /// Forward pass via the persistent single-kernel launch. Entire forward in
     /// ONE CUDA kernel, one dispatch. Logits land in scratch.logits, copied
     /// back to host.

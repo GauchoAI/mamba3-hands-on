@@ -7,6 +7,9 @@
 // Design is v1 (correctness-first): one kernel per op, many dispatches per
 // layer. v2+ fuses ambitiously.
 
+#include <cooperative_groups.h>
+namespace cg = cooperative_groups;
+
 // ---------- helpers ---------------------------------------------------------
 
 __device__ __forceinline__ float sigmoid_f(float x) {
@@ -880,6 +883,396 @@ extern "C" __launch_bounds__(1024, 1) __global__ void mamba3_forward_persistent(
         const float* xrow = x + ti * d;
         const float* brow = embed_w + vi * d;
         for (int k = 0; k < d; k++) acc = __fmaf_rn(xrow[k], brow[k], acc);
+        logits[idx] = acc;
+    }
+}
+
+// ---------- mamba3_forward_coop --------------------------------------------
+//
+// Cooperative-groups multi-block persistent forward. ONE kernel launch for the
+// entire Mamba-3 inference. Many blocks (one per SM), `cg::this_grid().sync()`
+// between phases, intermediate tensors live in HBM scratch (not SMEM).
+//
+// Why: on a contested H100, each per-op kernel dispatch has to fight for SM
+// slots. 45 dispatches per forward = 45 contention events. This kernel makes
+// it 1 dispatch, 1 contention event, then the whole forward runs through.
+//
+// Launch requirements:
+//   grid_dim.x   = COOP_BLOCKS (default 64; must not exceed device max active
+//                  blocks for this kernel)
+//   block_dim.x  = 256 threads
+//   cooperative launch (cuLaunchCooperativeKernel)
+//
+// __launch_bounds__(256, 2): 256 threads/block, min 2 blocks/SM.  That caps
+// regs at 65536/(256*2) = 128 per thread.  Ample headroom.
+extern "C" __launch_bounds__(256, 2) __global__ void mamba3_forward_coop(
+    const unsigned int* __restrict__ tokens,
+    const float* __restrict__ embed_w,
+    const float* __restrict__ embed_norm_w,
+    const float* __restrict__ embed_norm_b,
+    const float* __restrict__ layers_in_proj_w,
+    const float* __restrict__ layers_out_proj_w,
+    const float* __restrict__ layers_dt_bias,
+    const float* __restrict__ layers_d_param,
+    const float* __restrict__ layers_b_norm_w,
+    const float* __restrict__ layers_b_norm_b,
+    const float* __restrict__ layers_c_norm_w,
+    const float* __restrict__ layers_c_norm_b,
+    const float* __restrict__ layers_ln_w,
+    const float* __restrict__ layers_ln_b,
+    const float* __restrict__ layers_scale,
+    const float* __restrict__ final_norm_w,
+    const float* __restrict__ final_norm_b,
+    float* __restrict__ x_buf,
+    float* __restrict__ x_normed_buf,
+    float* __restrict__ proj_buf,
+    float* __restrict__ dt_buf,
+    float* __restrict__ decay_buf,
+    float* __restrict__ trap_buf,
+    float* __restrict__ dt_mean_buf,
+    float* __restrict__ phase_buf,
+    float* __restrict__ bp_buf,
+    float* __restrict__ cp_buf,
+    float* __restrict__ y_inner_buf,
+    float* __restrict__ y_out_buf,
+    float* __restrict__ logits,
+    int L, int n_layers, int d, int di, int ds, int H, int hd,
+    int n_angles, int V, int dip
+) {
+    cg::grid_group grid = cg::this_grid();
+    int bid = blockIdx.x;
+    int tid = threadIdx.x;
+    int gtid = bid * blockDim.x + tid;
+    int gdim = gridDim.x * blockDim.x;
+    int wid = tid >> 5;
+    int lid = tid & 31;
+    const float eps = 1e-5f;
+
+    __shared__ float warp_scratch[8];   // for block-wide reductions (assuming <= 8 warps)
+    __shared__ float ssm_reduce[256];   // scan reduction (used in Phase 8 only)
+    __shared__ float y_local[64];       // per-head SSM output per timestep
+
+    // --- Phase 1: embed gather ---
+    for (int idx = gtid; idx < L * d; idx += gdim) {
+        int t = idx / d;
+        int i = idx - t * d;
+        unsigned int tok = tokens[t];
+        x_buf[idx] = (tok < (unsigned int)V) ? embed_w[tok * d + i] : 0.0f;
+    }
+    grid.sync();
+
+    // --- Phase 2: embed norm (one block per row) ---
+    if (bid < L) {
+        int t = bid;
+        float v = 0.0f;
+        for (int i = tid; i < d; i += blockDim.x) v += x_buf[t * d + i];
+        v = warp_reduce_sum(v);
+        if (lid == 0) warp_scratch[wid] = v;
+        __syncthreads();
+        if (wid == 0) {
+            int nw = (blockDim.x + 31) >> 5;
+            v = (lid < nw) ? warp_scratch[lid] : 0.0f;
+            v = warp_reduce_sum(v);
+            if (lid == 0) warp_scratch[0] = v;
+        }
+        __syncthreads();
+        float mean = warp_scratch[0] / (float)d;
+
+        float vs = 0.0f;
+        for (int i = tid; i < d; i += blockDim.x) {
+            float diff = x_buf[t * d + i] - mean;
+            vs = __fmaf_rn(diff, diff, vs);
+        }
+        vs = warp_reduce_sum(vs);
+        if (lid == 0) warp_scratch[wid] = vs;
+        __syncthreads();
+        if (wid == 0) {
+            int nw = (blockDim.x + 31) >> 5;
+            vs = (lid < nw) ? warp_scratch[lid] : 0.0f;
+            vs = warp_reduce_sum(vs);
+            if (lid == 0) warp_scratch[0] = vs;
+        }
+        __syncthreads();
+        float inv_std = rsqrtf(warp_scratch[0] / (float)d + eps);
+
+        for (int i = tid; i < d; i += blockDim.x) {
+            x_buf[t * d + i] = __fmaf_rn((x_buf[t * d + i] - mean) * inv_std,
+                                          embed_norm_w[i], embed_norm_b[i]);
+        }
+    }
+    grid.sync();
+
+    // --- Layers ---
+    for (int l = 0; l < n_layers; l++) {
+        // 3a: copy x -> x_normed
+        for (int idx = gtid; idx < L * d; idx += gdim) x_normed_buf[idx] = x_buf[idx];
+        grid.sync();
+
+        // 3b: pre-norm on x_normed
+        if (bid < L) {
+            int t = bid;
+            const float* lw = &layers_ln_w[l * d];
+            const float* lb = &layers_ln_b[l * d];
+
+            float v = 0.0f;
+            for (int i = tid; i < d; i += blockDim.x) v += x_normed_buf[t * d + i];
+            v = warp_reduce_sum(v);
+            if (lid == 0) warp_scratch[wid] = v;
+            __syncthreads();
+            if (wid == 0) {
+                int nw = (blockDim.x + 31) >> 5;
+                v = (lid < nw) ? warp_scratch[lid] : 0.0f;
+                v = warp_reduce_sum(v);
+                if (lid == 0) warp_scratch[0] = v;
+            }
+            __syncthreads();
+            float mean = warp_scratch[0] / (float)d;
+
+            float vs = 0.0f;
+            for (int i = tid; i < d; i += blockDim.x) {
+                float diff = x_normed_buf[t * d + i] - mean;
+                vs = __fmaf_rn(diff, diff, vs);
+            }
+            vs = warp_reduce_sum(vs);
+            if (lid == 0) warp_scratch[wid] = vs;
+            __syncthreads();
+            if (wid == 0) {
+                int nw = (blockDim.x + 31) >> 5;
+                vs = (lid < nw) ? warp_scratch[lid] : 0.0f;
+                vs = warp_reduce_sum(vs);
+                if (lid == 0) warp_scratch[0] = vs;
+            }
+            __syncthreads();
+            float inv_std = rsqrtf(warp_scratch[0] / (float)d + eps);
+
+            for (int i = tid; i < d; i += blockDim.x) {
+                x_normed_buf[t * d + i] = __fmaf_rn(
+                    (x_normed_buf[t * d + i] - mean) * inv_std, lw[i], lb[i]);
+            }
+        }
+        grid.sync();
+
+        // 3c: in_proj matmul, grid-striped
+        const float* ipw = &layers_in_proj_w[(size_t)l * dip * d];
+        for (int idx = gtid; idx < L * dip; idx += gdim) {
+            int ti = idx / dip;
+            int ji = idx - ti * dip;
+            float acc = 0.0f;
+            const float* xr = &x_normed_buf[ti * d];
+            const float* br = &ipw[ji * d];
+            for (int k = 0; k < d; k++) acc = __fmaf_rn(xr[k], br[k], acc);
+            proj_buf[idx] = acc;
+        }
+        grid.sync();
+
+        // 3d: dt/decay/trap and dt_mean (one block per t)
+        if (bid < L) {
+            int t = bid;
+            int dt_off = 2 * di + 2 * ds;
+            int a_off = dt_off + H;
+            int tr_off = a_off + H;
+            const float* dbias = &layers_dt_bias[l * H];
+
+            float my_dt = 0.0f;
+            for (int h = tid; h < H; h += blockDim.x) {
+                float dt_raw = proj_buf[t * dip + dt_off + h] + dbias[h];
+                float dt_v = softplus_f(dt_raw);
+                dt_buf[t * H + h] = dt_v;
+                my_dt += dt_v;
+                float a_raw = proj_buf[t * dip + a_off + h];
+                float a = -softplus_f(a_raw);
+                if (a > -1e-4f) a = -1e-4f;
+                decay_buf[t * H + h] = __expf(a * dt_v);
+                trap_buf[t * H + h] = sigmoid_f(proj_buf[t * dip + tr_off + h]);
+            }
+            // H <= 32 → single-warp reduce suffices.
+            my_dt = warp_reduce_sum(my_dt);
+            if (tid == 0) dt_mean_buf[t] = my_dt / (float)H;
+        }
+        grid.sync();
+
+        // 3e: phase cumulative sum (single block, thread per angle)
+        if (bid == 0 && tid < n_angles) {
+            int ang_off = 2 * di + 2 * ds + 3 * H;
+            float cum = 0.0f;
+            for (int t = 0; t < L; t++) {
+                cum = __fmaf_rn(proj_buf[t * dip + ang_off + tid], dt_mean_buf[t], cum);
+                phase_buf[t * n_angles + tid] = cum;
+            }
+        }
+        grid.sync();
+
+        // 3f: extract bp/cp + LN + RoPE (one block per t, single warp works since ds <= 32)
+        if (bid < L) {
+            int t = bid;
+            int bp_off = 2 * di;
+            int cp_off = bp_off + ds;
+            const float* bnw = &layers_b_norm_w[l * ds];
+            const float* bnb = &layers_b_norm_b[l * ds];
+            const float* cnw = &layers_c_norm_w[l * ds];
+            const float* cnb = &layers_c_norm_b[l * ds];
+
+            if (tid < 32) {
+                // bp branch
+                float bv = (tid < ds) ? proj_buf[t * dip + bp_off + tid] : 0.0f;
+                float sb = warp_reduce_sum(bv);
+                float meanb = sb / (float)ds;
+                float diffb = bv - meanb;
+                float varb = warp_reduce_sum((tid < ds) ? diffb * diffb : 0.0f);
+                float inv_std_b = rsqrtf(varb / (float)ds + eps);
+                float bn = (tid < ds) ? __fmaf_rn(diffb * inv_std_b, bnw[tid], bnb[tid]) : 0.0f;
+                float bp_partner = __shfl_xor_sync(0xffffffff, bn, 1);
+                int kr = tid >> 1;
+                int is_odd = tid & 1;
+                float ang = (tid < ds) ? phase_buf[t * n_angles + kr] : 0.0f;
+                float co = __cosf(ang);
+                float si = __sinf(ang);
+                float b_res = (is_odd == 0)
+                    ? __fmaf_rn(bn, co, -bp_partner * si)
+                    : __fmaf_rn(bp_partner, si, bn * co);
+                if (tid < ds) bp_buf[t * ds + tid] = b_res;
+
+                // cp branch
+                float cv = (tid < ds) ? proj_buf[t * dip + cp_off + tid] : 0.0f;
+                float sc = warp_reduce_sum(cv);
+                float meanc = sc / (float)ds;
+                float diffc = cv - meanc;
+                float varc = warp_reduce_sum((tid < ds) ? diffc * diffc : 0.0f);
+                float inv_std_c = rsqrtf(varc / (float)ds + eps);
+                float cn = (tid < ds) ? __fmaf_rn(diffc * inv_std_c, cnw[tid], cnb[tid]) : 0.0f;
+                float cp_partner = __shfl_xor_sync(0xffffffff, cn, 1);
+                float c_res = (is_odd == 0)
+                    ? __fmaf_rn(cn, co, -cp_partner * si)
+                    : __fmaf_rn(cp_partner, si, cn * co);
+                if (tid < ds) cp_buf[t * ds + tid] = c_res;
+            }
+        }
+        grid.sync();
+
+        // 3g: SSM scan — one block per head
+        if (bid < H) {
+            int h = bid;
+            const float* dparam = &layers_d_param[l * H];
+
+            int p = tid / ds;
+            int n = tid - p * ds;
+            bool active = tid < hd * ds;
+            float state = 0.0f;
+            float bx_prev = 0.0f;
+
+            for (int t = 0; t < L; t++) {
+                float bp_tn = active ? bp_buf[t * ds + n] : 0.0f;
+                float cp_tn = active ? cp_buf[t * ds + n] : 0.0f;
+                float dt_v = active ? dt_buf[t * H + h] : 0.0f;
+                float dec  = active ? decay_buf[t * H + h] : 0.0f;
+                float tr   = active ? trap_buf[t * H + h] : 0.0f;
+                float x_val = active ? proj_buf[t * dip + di + h * hd + p] : 0.0f;
+
+                if (active) {
+                    float bx_cur = x_val * bp_tn;
+                    float blended = __fmaf_rn(tr, bx_cur, (1.0f - tr) * bx_prev);
+                    float inp_val = blended * dt_v;
+                    bx_prev = bx_cur;
+                    state = __fmaf_rn(dec, state, inp_val);
+                    ssm_reduce[tid] = state * cp_tn;
+                }
+                __syncthreads();
+
+                for (int stride = ds >> 1; stride > 0; stride >>= 1) {
+                    if (active && n < stride) {
+                        ssm_reduce[tid] += ssm_reduce[tid + stride];
+                    }
+                    __syncthreads();
+                }
+
+                if (active && n == 0) {
+                    float sum = ssm_reduce[p * ds];
+                    sum = __fmaf_rn(dparam[h], x_val, sum);
+                    float z_raw = proj_buf[t * dip + h * hd + p];
+                    float z_silu = z_raw * sigmoid_f(z_raw);
+                    y_local[p] = sum * z_silu;
+                }
+                __syncthreads();
+
+                if (tid < hd) {
+                    y_inner_buf[(t * H + h) * hd + tid] = y_local[tid];
+                }
+                __syncthreads();
+            }
+        }
+        grid.sync();
+
+        // 3h: out_proj matmul, grid-striped
+        const float* opw = &layers_out_proj_w[(size_t)l * d * di];
+        for (int idx = gtid; idx < L * d; idx += gdim) {
+            int ti = idx / d;
+            int ji = idx - ti * d;
+            float acc = 0.0f;
+            const float* yr = &y_inner_buf[ti * di];
+            const float* br = &opw[ji * di];
+            for (int k = 0; k < di; k++) acc = __fmaf_rn(yr[k], br[k], acc);
+            y_out_buf[idx] = acc;
+        }
+        grid.sync();
+
+        // 3i: residual, grid-striped
+        float scl = layers_scale[l];
+        for (int idx = gtid; idx < L * d; idx += gdim) {
+            x_buf[idx] = __fmaf_rn(scl, y_out_buf[idx], x_buf[idx]);
+        }
+        grid.sync();
+    }
+
+    // --- Phase 4: final norm (one block per row) ---
+    if (bid < L) {
+        int t = bid;
+        float v = 0.0f;
+        for (int i = tid; i < d; i += blockDim.x) v += x_buf[t * d + i];
+        v = warp_reduce_sum(v);
+        if (lid == 0) warp_scratch[wid] = v;
+        __syncthreads();
+        if (wid == 0) {
+            int nw = (blockDim.x + 31) >> 5;
+            v = (lid < nw) ? warp_scratch[lid] : 0.0f;
+            v = warp_reduce_sum(v);
+            if (lid == 0) warp_scratch[0] = v;
+        }
+        __syncthreads();
+        float mean = warp_scratch[0] / (float)d;
+
+        float vs = 0.0f;
+        for (int i = tid; i < d; i += blockDim.x) {
+            float diff = x_buf[t * d + i] - mean;
+            vs = __fmaf_rn(diff, diff, vs);
+        }
+        vs = warp_reduce_sum(vs);
+        if (lid == 0) warp_scratch[wid] = vs;
+        __syncthreads();
+        if (wid == 0) {
+            int nw = (blockDim.x + 31) >> 5;
+            vs = (lid < nw) ? warp_scratch[lid] : 0.0f;
+            vs = warp_reduce_sum(vs);
+            if (lid == 0) warp_scratch[0] = vs;
+        }
+        __syncthreads();
+        float inv_std = rsqrtf(warp_scratch[0] / (float)d + eps);
+
+        for (int i = tid; i < d; i += blockDim.x) {
+            x_buf[t * d + i] = __fmaf_rn(
+                (x_buf[t * d + i] - mean) * inv_std,
+                final_norm_w[i], final_norm_b[i]);
+        }
+    }
+    grid.sync();
+
+    // --- Phase 5: LM head, grid-striped, output to HBM logits ---
+    for (int idx = gtid; idx < L * V; idx += gdim) {
+        int ti = idx / V;
+        int vi = idx - ti * V;
+        float acc = 0.0f;
+        const float* xr = &x_buf[ti * d];
+        const float* br = &embed_w[vi * d];
+        for (int k = 0; k < d; k++) acc = __fmaf_rn(xr[k], br[k], acc);
         logits[idx] = acc;
     }
 }

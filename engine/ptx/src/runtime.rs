@@ -24,6 +24,7 @@ pub struct Kernels {
     pub residual_add: CudaFunction,
     pub argmax_f32: CudaFunction,
     pub mamba3_forward_persistent: CudaFunction,
+    pub mamba3_forward_coop: CudaFunction,
 }
 
 pub struct PtxContext {
@@ -87,6 +88,7 @@ impl PtxContext {
             residual_add: module.load_function("residual_add")?,
             argmax_f32: module.load_function("argmax_f32")?,
             mamba3_forward_persistent: module.load_function("mamba3_forward_persistent")?,
+            mamba3_forward_coop: module.load_function("mamba3_forward_coop")?,
         };
 
         Ok(Self {
