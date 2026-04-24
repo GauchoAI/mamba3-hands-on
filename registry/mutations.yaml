@@ -9,8 +9,8 @@ mutations:
     type: categorical
     probability: 0.3
     max_probability: 1.0
-    values: [jit, triton]
-    default: triton
+    values: [native, compiled, jit, triton]
+    default: native
 
   - name: device
     key: device

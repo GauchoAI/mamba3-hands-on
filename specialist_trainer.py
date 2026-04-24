@@ -824,7 +824,7 @@ if __name__ == "__main__":
                        help="champion: normal training. challenger: compare against champion best.")
     parser.add_argument("--run-dir", type=str, default=None)
     parser.add_argument("--scan-backend", type=str, default=None,
-                       choices=["jit", "triton"],
+                       choices=["native", "compiled", "jit", "triton"],
                        help="SSM scan backend: jit (precise) or triton (fast)")
     parser.add_argument("--device", type=str, default=None,
                        choices=["cuda", "cpu", "mps"],

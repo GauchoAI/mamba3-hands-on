@@ -52,27 +52,33 @@ def ssm_scan_jit(
     return y
 
 
-# Backend override: set to "jit" to force JIT even on CUDA.
+# Backend override: set to force a specific backend.
 # Controlled by config["scan_backend"] via specialist_trainer.
-FORCE_BACKEND = None  # None = auto, "jit" = force JIT, "triton" = force Triton
+# Options: None (auto), "native", "compiled", "jit", "triton"
+FORCE_BACKEND = None
 
 
 def ssm_scan(inp, decay, C, x, z, D):
     """
-    Dispatch to Triton (CUDA) or JIT (MPS/CPU).
-    Respects FORCE_BACKEND when set.
+    Dispatch SSM scan to the best available backend.
+
+    Default: native (correct on all hardware).
+    Triton is available but has precision bugs — only used if explicitly forced.
     """
+    if FORCE_BACKEND == "native":
+        from ssm_scan_native import ssm_scan_native
+        return ssm_scan_native(inp, decay, C, x, z, D)
+    if FORCE_BACKEND == "compiled":
+        from ssm_scan_native import ssm_scan_compiled
+        return ssm_scan_compiled(inp, decay, C, x, z, D)
     if FORCE_BACKEND == "jit":
         return ssm_scan_jit(inp, decay, C, x, z, D)
     if FORCE_BACKEND == "triton" and inp.is_cuda and HAS_TRITON:
         return ssm_scan_triton(inp, decay, C, x, z, D)
-    # Auto: Triton on CUDA if available, else JIT
-    if inp.is_cuda and HAS_TRITON:
-        try:
-            return ssm_scan_triton(inp, decay, C, x, z, D)
-        except Exception:
-            pass
-    return ssm_scan_jit(inp, decay, C, x, z, D)
+    # Auto: use native (correct) on all devices.
+    # Triton is NOT the default — it has precision bugs.
+    from ssm_scan_native import ssm_scan_native
+    return ssm_scan_native(inp, decay, C, x, z, D)
 
 
 # ── Triton kernel (only defined when triton is available) ───────────
