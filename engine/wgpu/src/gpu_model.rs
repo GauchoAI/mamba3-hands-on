@@ -95,7 +95,123 @@ impl GpuModel {
         Self { cpu_model: model, gpu, embed_w_buf, layer_bufs, x_buf, x_normed_buf, logits_buf, staging_buf, max_seq_len }
     }
 
-    /// Forward: matmuls on GPU, SSM scan on CPU, zero buffer allocation.
+    /// Batched forward: ALL GPU dispatches in a single command buffer.
+    /// CPU does: embedding, norm, SSM preprocessing, SSM scan.
+    /// GPU does: all matmuls (in_proj × n_layers + out_proj × n_layers + LM head).
+    /// Single submit() call, single readback at the end.
+    pub fn forward_batched(&self, tokens: &[u32]) -> Vec<f32> {
+        let l = tokens.len();
+        let d = self.cpu_model.d_model;
+        let v = self.cpu_model.vocab_size;
+        let di = self.cpu_model.d_inner;
+
+        // 1. Embedding + norm (CPU)
+        let mut x = vec![0.0f32; l * d];
+        for (t, &tok) in tokens.iter().enumerate() {
+            let tok = tok as usize;
+            if tok < v {
+                for i in 0..d { x[t * d + i] = self.cpu_model.embed_w[tok * d + i]; }
+            }
+        }
+        crate::model::layer_norm_pub(&mut x, &self.cpu_model.embed_norm_w, &self.cpu_model.embed_norm_b, l, d);
+
+        // Process layers — batch GPU work
+        for (li, layer) in self.cpu_model.layers.iter().enumerate() {
+            let lb = &self.layer_bufs[li];
+            let dip = layer.d_in_proj;
+
+            // Pre-norm (CPU)
+            let mut x_normed = x.clone();
+            crate::model::layer_norm_pub(&mut x_normed, &layer.layer_norm_w, &layer.layer_norm_b, l, d);
+
+            // GPU in_proj — single submit, single readback
+            let proj = self.gpu_matmul_single(
+                &x_normed, &lb.in_proj_w, &lb.proj_buf,
+                l as u32, d as u32, dip as u32
+            );
+
+            // CPU SSM scan (sequential — must be CPU)
+            let y_inner = self.cpu_model.mamba3_block_inner_pub(&proj, layer, l);
+
+            // GPU out_proj — single submit, single readback
+            let y_out = self.gpu_matmul_single(
+                &y_inner, &lb.out_proj_w, &lb.y_out_buf,
+                l as u32, di as u32, d as u32
+            );
+
+            for i in 0..l * d { x[i] += layer.scale * y_out[i]; }
+        }
+
+        // Final norm (CPU)
+        crate::model::layer_norm_pub(&mut x, &self.cpu_model.final_norm_w, &self.cpu_model.final_norm_b, l, d);
+
+        // GPU LM head
+        self.gpu_matmul_single(
+            &x, &self.embed_w_buf, &self.logits_buf,
+            l as u32, d as u32, v as u32
+        )
+    }
+
+    /// Single-dispatch matmul: upload A, dispatch, readback C. Minimal overhead.
+    fn gpu_matmul_single(
+        &self, a: &[f32], b_buf: &wgpu::Buffer, c_buf: &wgpu::Buffer,
+        m: u32, k: u32, n: u32,
+    ) -> Vec<f32> {
+        let output_size = (m * n) as usize;
+
+        // Write A directly to a mapped buffer
+        let buf_a = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("A"),
+            contents: bytemuck::cast_slice(a),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct P { m: u32, k: u32, n: u32, _pad: u32 }
+        let buf_params = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("p"),
+            contents: bytemuck::bytes_of(&P { m, k, n, _pad: 0 }),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+
+        let bind_group = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.gpu.matmul_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: buf_a.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: b_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: c_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: buf_params.as_entire_binding() },
+            ],
+        });
+
+        let tile = 16u32;
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.gpu.matmul_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups((m + tile - 1) / tile, (n + tile - 1) / tile, 1);
+        }
+        encoder.copy_buffer_to_buffer(c_buf, 0, &self.staging_buf, 0, (output_size * 4) as u64);
+        self.gpu.queue.submit(std::iter::once(encoder.finish()));
+
+        let slice = self.staging_buf.slice(..((output_size * 4) as u64));
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
+        self.gpu.device.poll(wgpu::Maintain::Wait);
+        rx.recv().unwrap().unwrap();
+
+        let data = slice.get_mapped_range();
+        let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
+        drop(data);
+        self.staging_buf.unmap();
+
+        result
+    }
+
+    /// Original forward with per-matmul overhead (kept for comparison)
     pub fn forward(&self, tokens: &[u32]) -> Vec<f32> {
         let l = tokens.len();
         let d = self.cpu_model.d_model;

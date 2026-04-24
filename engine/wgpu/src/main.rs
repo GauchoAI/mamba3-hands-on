@@ -137,6 +137,21 @@ fn run_model_inference(model_path: &str) {
         let max_diff2: f32 = cpu_logits.iter().zip(res_logits.iter())
             .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         println!("GPU-resident vs CPU max diff: {:.2e} {}", max_diff2, if max_diff2 < 1e-3 { "PASS" } else { "FAIL" });
+
+        // Batched forward benchmark
+        for _ in 0..3 { let _ = gpu_model.forward_batched(&tokens); }
+        let n_bat = 100;
+        let start = Instant::now();
+        for _ in 0..n_bat { let _ = gpu_model.forward_batched(&tokens); }
+        let total = start.elapsed();
+        let ms_bat = total.as_secs_f64() * 1000.0 / n_bat as f64;
+        let tps_bat = tokens.len() as f64 / (ms_bat / 1000.0);
+        println!("Benchmark (GPU-batched): {:.3}ms/inference, {:.0} tokens/sec", ms_bat, tps_bat);
+
+        let bat_logits = gpu_model.forward_batched(&tokens);
+        let max_diff3: f32 = cpu_logits.iter().zip(bat_logits.iter())
+            .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        println!("GPU-batched vs CPU max diff: {:.2e} {}", max_diff3, if max_diff3 < 1e-3 { "PASS" } else { "FAIL" });
     }
 
     // Profile: break down where time is spent
