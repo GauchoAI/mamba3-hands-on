@@ -308,12 +308,13 @@ impl PtxModel {
         lb.arg(&v_i);
         lb.arg(&dip_i);
 
-        // 64 blocks × 256 threads. Block count chosen so cooperative launch
-        // fits H100's max active blocks for this kernel; with
-        // __launch_bounds__(256, 2) giving ≥2 blocks/SM and 132 SMs, limit is
-        // well above 64. Grid-stride loops inside handle any residual work.
+        // 16 blocks × 256 threads. For our tiny model (L=7), 16 blocks is
+        // plenty: in_proj matmul has 2240 outputs (140 per block), out_proj
+        // has 448 (28 per block), SSM scan needs 8 blocks (one per head),
+        // norms need 7. More blocks mean more SMs to wait for at each
+        // grid.sync(), so on a contested GPU fewer blocks sync faster.
         let cfg = LaunchConfig {
-            grid_dim: (64, 1, 1),
+            grid_dim: (16, 1, 1),
             block_dim: (256, 1, 1),
             shared_mem_bytes: 0,
         };
