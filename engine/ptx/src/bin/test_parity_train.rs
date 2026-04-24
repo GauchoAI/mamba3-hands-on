@@ -14,12 +14,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ptx = Arc::new(PtxContext::new()?);
     println!("kernels compiled in {:.2}s", t0.elapsed().as_secs_f64());
 
-    // Same config as run_parity_training in mamba3-engine.
-    let cpu_model = Mamba3Model::new_random(32, 16, 16, 1, 260);
-    println!("Model: {} params (d=32, L=1)", cpu_model.param_count());
-    let gpu_model = PtxModel::from_cpu(&cpu_model, ptx.clone(), 16)?;
+    // findings.md Entry 24 line 1867: d=64 L=4 dS=8 + jit+cuda → parity 100%.
+    // Match that architecture exactly for fairness.
+    let cpu_model = Mamba3Model::new_random(64, 8, 16, 4, 260);
+    println!("Model: {} params (d=64, L=4, dS=8)", cpu_model.param_count());
+    let gpu_model = PtxModel::from_cpu(&cpu_model, ptx.clone(), 32)?;
 
-    let mut trainer = PtxTrainer::new(gpu_model, 1e-3, 0.1, 16)?;
+    let mut trainer = PtxTrainer::new(gpu_model, 1e-3, 0.1, 32)?;
 
     let mut rng_state: u64 = 12345;
     let mut rng = || -> u32 {
@@ -34,7 +35,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     for step in 0..total_steps {
         let n_bits = 4;
         let mut total_loss = 0.0f32;
-        let batch = 16;
+        let batch = 64;
 
         for _ in 0..batch {
             let mut bits = Vec::new();
