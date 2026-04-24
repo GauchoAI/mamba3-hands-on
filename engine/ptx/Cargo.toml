@@ -32,6 +32,10 @@ path = "src/bin/test_parity_train.rs"
 name = "ptxd"
 path = "src/bin/ptxd.rs"
 
+[[bin]]
+name = "test-parity-accuracy"
+path = "src/bin/test_parity_accuracy.rs"
+
 [dependencies]
 mamba3-engine = { path = "../wgpu" }
 cudarc = { version = "0.16", default-features = false, features = ["std", "driver", "nvrtc", "cuda-version-from-build-system", "dynamic-linking"] }
