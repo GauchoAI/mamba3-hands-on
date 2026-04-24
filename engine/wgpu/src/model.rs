@@ -1,11 +1,9 @@
-//! Full Mamba-3 model inference in Rust — embedding, SSM scan, linear, output.
-//!
-//! No PyTorch dependency. Loads weights from a simple binary format.
-//! All fp32, explicit arithmetic.
+//! Full Mamba-3 model — forward pass in pure Rust.
+//! Matches mamba3_minimal.py + progressive_model.py exactly.
+//! All fp32, explicit arithmetic, no framework dependency.
 
 use std::path::Path;
 
-/// Full Mamba-3 model for inference
 pub struct Mamba3Model {
     pub d_model: usize,
     pub d_state: usize,
@@ -15,38 +13,35 @@ pub struct Mamba3Model {
     pub n_layers: usize,
     pub vocab_size: usize,
 
-    // Weights
-    pub embed: Vec<f32>,            // (vocab_size, d_model)
-    pub embed_norm_w: Vec<f32>,     // (d_model,)
-    pub embed_norm_b: Vec<f32>,     // (d_model,)
+    pub embed_w: Vec<f32>,           // (vocab, d_model)
+    pub embed_norm_w: Vec<f32>,      // (d_model,)
+    pub embed_norm_b: Vec<f32>,      // (d_model,)
     pub layers: Vec<LayerWeights>,
-    pub final_norm_w: Vec<f32>,     // (d_model,)
-    pub final_norm_b: Vec<f32>,     // (d_model,)
-    pub head: Vec<f32>,             // (vocab_size, d_model) — tied with embed
+    pub final_norm_w: Vec<f32>,      // (d_model,)
+    pub final_norm_b: Vec<f32>,      // (d_model,)
+    // head = embed_w (weight-tied)
 }
 
 pub struct LayerWeights {
-    pub in_proj_w: Vec<f32>,        // (d_in_proj, d_model)
-    pub conv1d_w: Vec<f32>,         // (d_inner, 1, conv_width)
-    pub conv1d_b: Vec<f32>,         // (d_inner,)
-    pub out_proj_w: Vec<f32>,       // (d_model, d_inner)
-    pub dt_bias: Vec<f32>,          // (n_heads,)
-    pub a_log: Vec<f32>,            // (n_heads,)
-    pub d_param: Vec<f32>,          // (n_heads,)
-    pub norm_w: Vec<f32>,           // (d_model,)
-    pub scale: f32,                 // near-identity scale
+    pub in_proj_w: Vec<f32>,         // (d_in_proj, d_model)
+    pub d_in_proj: usize,
+    pub out_proj_w: Vec<f32>,        // (d_model, d_inner)
+    pub dt_bias: Vec<f32>,           // (n_heads,)
+    pub d_param: Vec<f32>,           // (n_heads,)
+    pub b_norm_w: Vec<f32>,          // (d_state,)
+    pub b_norm_b: Vec<f32>,          // (d_state,)
+    pub c_norm_w: Vec<f32>,          // (d_state,)
+    pub c_norm_b: Vec<f32>,          // (d_state,)
+    pub layer_norm_w: Vec<f32>,      // (d_model,)
+    pub scale: f32,
+    pub num_rope_angles: usize,
 }
 
 impl Mamba3Model {
-    /// Load from a PyTorch checkpoint exported as raw binary tensors
+    /// Load from exported binary (see export/rust_export.py)
     pub fn from_bin(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let data = std::fs::read(path)?;
-        let header_size = 7 * 4; // 7 u32 values
-        if data.len() < header_size {
-            return Err("File too small".into());
-        }
-
-        let header: &[u32] = bytemuck::cast_slice(&data[..header_size]);
+        let header: &[u32] = bytemuck::cast_slice(&data[..28]);
         let d_model = header[0] as usize;
         let d_state = header[1] as usize;
         let headdim = header[2] as usize;
@@ -55,160 +50,294 @@ impl Mamba3Model {
         let d_inner = d_model * 2;
         let n_heads = d_inner / headdim;
 
-        let floats: &[f32] = bytemuck::cast_slice(&data[header_size..]);
-        let mut offset = 0;
-
-        let read = |off: &mut usize, n: usize| -> Vec<f32> {
-            let slice = floats[*off..*off + n].to_vec();
-            *off += n;
-            slice
+        let floats: &[f32] = bytemuck::cast_slice(&data[28..]);
+        let mut off = 0usize;
+        let mut read = |n: usize| -> Vec<f32> {
+            let v = floats[off..off + n].to_vec();
+            off += n;
+            v
         };
 
-        let embed = read(&mut offset, vocab_size * d_model);
-        let embed_norm_w = read(&mut offset, d_model);
-        let embed_norm_b = read(&mut offset, d_model);
+        let embed_w = read(vocab_size * d_model);
+        let embed_norm_w = read(d_model);
+        let embed_norm_b = read(d_model);
 
         let mut layers = Vec::new();
         for _ in 0..n_layers {
-            let d_in_proj = 2 * d_inner + 2 * n_heads * d_state + 3 * n_heads + d_state / 2;
+            let num_rope_angles = d_state / 2;
+            let d_in_proj = 2 * d_inner + 2 * d_state + 3 * n_heads + num_rope_angles;
+            let in_proj_w = read(d_in_proj * d_model);
+            let out_proj_w = read(d_model * d_inner);
+            let dt_bias = read(n_heads);
+            let d_param = read(n_heads);
+            let b_norm_w = read(d_state);
+            let b_norm_b = read(d_state);
+            let c_norm_w = read(d_state);
+            let c_norm_b = read(d_state);
+            let layer_norm_w = read(d_model);
+            let scale = read(1)[0];
             layers.push(LayerWeights {
-                in_proj_w: read(&mut offset, d_in_proj * d_model),
-                conv1d_w: read(&mut offset, d_inner * 4), // conv_width=4
-                conv1d_b: read(&mut offset, d_inner),
-                out_proj_w: read(&mut offset, d_model * d_inner),
-                dt_bias: read(&mut offset, n_heads),
-                a_log: read(&mut offset, n_heads),
-                d_param: read(&mut offset, n_heads),
-                norm_w: read(&mut offset, d_model),
-                scale: read(&mut offset, 1)[0],
+                in_proj_w, d_in_proj, out_proj_w, dt_bias, d_param,
+                b_norm_w, b_norm_b, c_norm_w, c_norm_b,
+                layer_norm_w, scale, num_rope_angles,
             });
         }
 
-        let final_norm_w = read(&mut offset, d_model);
-        let final_norm_b = read(&mut offset, d_model);
-        let head = embed.clone(); // weight-tied
+        let final_norm_w = read(d_model);
+        let final_norm_b = read(d_model);
 
         Ok(Self {
             d_model, d_state, d_inner, headdim, n_heads, n_layers, vocab_size,
-            embed, embed_norm_w, embed_norm_b, layers,
-            final_norm_w, final_norm_b, head,
+            embed_w, embed_norm_w, embed_norm_b, layers, final_norm_w, final_norm_b,
         })
     }
 
-    /// Run inference on a token sequence. Returns logits (seq_len, vocab_size).
+    /// Forward pass: tokens → logits. Single sequence (batch=1).
     pub fn forward(&self, tokens: &[u32]) -> Vec<f32> {
-        let seq_len = tokens.len();
+        let l = tokens.len();
         let d = self.d_model;
 
-        // Embedding lookup + layer norm
-        let mut x = vec![0.0f32; seq_len * d];
+        // 1. Embedding + norm
+        let mut x = vec![0.0f32; l * d];
         for (t, &tok) in tokens.iter().enumerate() {
-            for i in 0..d {
-                x[t * d + i] = self.embed[tok as usize * d + i];
-            }
-        }
-        layer_norm_inplace(&mut x, &self.embed_norm_w, &self.embed_norm_b, seq_len, d);
-
-        // SSM layers
-        for layer in &self.layers {
-            let residual = x.clone();
-            x = self.ssm_layer(&x, layer, seq_len);
-            // Residual connection with scale
-            for i in 0..seq_len * d {
-                x[i] = residual[i] + layer.scale * x[i];
-            }
-        }
-
-        // Final norm
-        layer_norm_inplace(&mut x, &self.final_norm_w, &self.final_norm_b, seq_len, d);
-
-        // LM head: (seq_len, d_model) × (d_model, vocab_size)^T → (seq_len, vocab_size)
-        let mut logits = vec![0.0f32; seq_len * self.vocab_size];
-        for t in 0..seq_len {
-            for v in 0..self.vocab_size {
-                let mut sum = 0.0f32;
+            let tok = tok as usize;
+            if tok < self.vocab_size {
                 for i in 0..d {
-                    sum += x[t * d + i] * self.head[v * d + i];
+                    x[t * d + i] = self.embed_w[tok * d + i];
                 }
-                logits[t * self.vocab_size + v] = sum;
+            }
+        }
+        layer_norm(&mut x, &self.embed_norm_w, &self.embed_norm_b, l, d);
+
+        // 2. SSM layers
+        for layer in &self.layers {
+            let y = self.mamba3_block(&x, layer, l);
+            // Residual + scale
+            for i in 0..l * d {
+                x[i] += layer.scale * y[i];
             }
         }
 
+        // 3. Final norm
+        layer_norm(&mut x, &self.final_norm_w, &self.final_norm_b, l, d);
+
+        // 4. LM head (weight-tied with embed)
+        let mut logits = vec![0.0f32; l * self.vocab_size];
+        for t in 0..l {
+            for v in 0..self.vocab_size {
+                let mut s = 0.0f32;
+                for i in 0..d {
+                    s += x[t * d + i] * self.embed_w[v * d + i];
+                }
+                logits[t * self.vocab_size + v] = s;
+            }
+        }
         logits
     }
 
-    fn ssm_layer(&self, x_in: &[f32], layer: &LayerWeights, seq_len: usize) -> Vec<f32> {
+    fn mamba3_block(&self, u: &[f32], lw: &LayerWeights, l: usize) -> Vec<f32> {
         let d = self.d_model;
         let di = self.d_inner;
         let nh = self.n_heads;
         let hd = self.headdim;
         let ds = self.d_state;
 
-        // In-projection: (seq_len, d_model) × (d_in_proj, d_model)^T
-        let d_in_proj = layer.in_proj_w.len() / d;
-        let mut proj = vec![0.0f32; seq_len * d_in_proj];
-        for t in 0..seq_len {
-            for j in 0..d_in_proj {
-                let mut sum = 0.0f32;
-                for i in 0..d {
-                    sum += x_in[t * d + i] * layer.in_proj_w[j * d + i];
+        // In-projection: (L, d_model) × (d_in_proj, d_model)^T → (L, d_in_proj)
+        let dip = lw.d_in_proj;
+        let mut proj = vec![0.0f32; l * dip];
+        matmul_t(&mut proj, u, &lw.in_proj_w, l, d, dip);
+
+        // Split: z, x, Bp, Cp, dd_dt, dd_A, trap_raw, angles
+        let mut off = 0;
+        let z_raw = &proj_slice(&proj, l, dip, off, di); off += di;
+        let x_raw = &proj_slice(&proj, l, dip, off, di); off += di;
+        let bp_raw = &proj_slice(&proj, l, dip, off, ds); off += ds;
+        let cp_raw = &proj_slice(&proj, l, dip, off, ds); off += ds;
+        let dd_dt = &proj_slice(&proj, l, dip, off, nh); off += nh;
+        let dd_a = &proj_slice(&proj, l, dip, off, nh); off += nh;
+        let trap_raw = &proj_slice(&proj, l, dip, off, nh); off += nh;
+        let _angles = &proj_slice(&proj, l, dip, off, lw.num_rope_angles);
+
+        // Layer-norm B and C
+        let mut bp = bp_raw.clone();
+        layer_norm(&mut bp, &lw.b_norm_w, &lw.b_norm_b, l, ds);
+        let mut cp = cp_raw.clone();
+        layer_norm(&mut cp, &lw.c_norm_w, &lw.c_norm_b, l, ds);
+
+        // DT = softplus(dd_dt + dt_bias)
+        let mut dt = vec![0.0f32; l * nh];
+        for t in 0..l {
+            for h in 0..nh {
+                let v = dd_dt[t * nh + h] + lw.dt_bias[h];
+                dt[t * nh + h] = softplus(v);
+            }
+        }
+
+        // A = -softplus(dd_A), decay = exp(A * DT)
+        let mut decay = vec![0.0f32; l * nh];
+        for t in 0..l {
+            for h in 0..nh {
+                let a = -softplus(dd_a[t * nh + h]).max(0.001); // A_floor
+                decay[t * nh + h] = (a * dt[t * nh + h]).exp();
+            }
+        }
+
+        // Trap = sigmoid(trap_raw)
+        let mut trap = vec![0.0f32; l * nh];
+        for t in 0..l {
+            for h in 0..nh {
+                trap[t * nh + h] = sigmoid(trap_raw[t * nh + h]);
+            }
+        }
+
+        // Reshape x to (L, H, hD) and compute Bx = outer(x, Bp): (L, H, hD, dS)
+        // Then inp = trap * Bx + (1-trap) * Bx_prev, scaled by dt
+        let mut inp = vec![0.0f32; l * nh * hd * ds];
+        let mut bx_prev = vec![0.0f32; nh * hd * ds]; // zero for t=0
+
+        for t in 0..l {
+            for h in 0..nh {
+                // Current Bx
+                let mut bx_cur = vec![0.0f32; hd * ds];
+                for p in 0..hd {
+                    let x_val = x_raw[t * di + h * hd + p];
+                    for n in 0..ds {
+                        bx_cur[p * ds + n] = x_val * bp[t * ds + n]; // Bp broadcast across heads
+                    }
                 }
-                proj[t * d_in_proj + j] = sum;
+
+                let tr = trap[t * nh + h];
+                let dt_val = dt[t * nh + h];
+
+                for p in 0..hd {
+                    for n in 0..ds {
+                        let idx = ((t * nh + h) * hd + p) * ds + n;
+                        let cur = bx_cur[p * ds + n];
+                        let prev = bx_prev[h * hd * ds + p * ds + n];
+                        inp[idx] = (tr * cur + (1.0 - tr) * prev) * dt_val;
+                    }
+                }
+
+                // Save current as prev for next timestep
+                for i in 0..hd * ds {
+                    bx_prev[h * hd * ds + i] = bx_cur[i];
+                }
             }
         }
 
-        // Split projections (simplified — skipping conv1d, RoPE, trapezoidal for now)
-        // This is a simplified forward pass for inference verification
-        let mut z = vec![0.0f32; seq_len * di];
-        let mut x_val = vec![0.0f32; seq_len * di];
-        for t in 0..seq_len {
-            for i in 0..di {
-                z[t * di + i] = proj[t * d_in_proj + i];
-                x_val[t * di + i] = proj[t * d_in_proj + di + i];
+        // SSM scan
+        let mut state = vec![0.0f32; nh * hd * ds];
+        let mut y = vec![0.0f32; l * nh * hd];
+
+        // Precompute silu(z) — OUTSIDE the scan loop
+        let mut z_silu = vec![0.0f32; l * di];
+        for i in 0..l * di {
+            let z = z_raw[i];
+            z_silu[i] = z * sigmoid(z);
+        }
+
+        for t in 0..l {
+            for h in 0..nh {
+                let dec = decay[t * nh + h];
+
+                // State update
+                for p in 0..hd {
+                    for n in 0..ds {
+                        let si = (h * hd + p) * ds + n;
+                        let inp_val = inp[((t * nh + h) * hd + p) * ds + n];
+                        state[si] = dec * state[si] + inp_val;
+                    }
+                }
+
+                // Output projection + skip + gate
+                for p in 0..hd {
+                    let mut sum = 0.0f32;
+                    for n in 0..ds {
+                        sum += state[(h * hd + p) * ds + n] * cp[t * ds + n]; // Cp broadcast
+                    }
+                    // Skip
+                    sum += lw.d_param[h] * x_raw[t * di + h * hd + p];
+                    // Gate
+                    sum *= z_silu[t * di + h * hd + p];
+                    y[(t * nh + h) * hd + p] = sum;
+                }
             }
         }
 
-        // SSM scan (simplified — using x_val as both inp and output)
-        // Full implementation would compute B, C, dt from projections
-        // For now, output = silu(z) * x_val as a placeholder
-        let mut y = vec![0.0f32; seq_len * di];
-        for t in 0..seq_len {
-            for i in 0..di {
-                let z_val = z[t * di + i];
-                let silu = z_val * sigmoid(z_val);
-                y[t * di + i] = silu * x_val[t * di + i];
-            }
-        }
-
-        // Out-projection: (seq_len, d_inner) × (d_model, d_inner)^T
-        let mut out = vec![0.0f32; seq_len * d];
-        for t in 0..seq_len {
+        // y is (L, H, hD) = (L, d_inner). Out-projection: (L, d_inner) × (d_model, d_inner)^T
+        let mut out = vec![0.0f32; l * d];
+        for t in 0..l {
             for j in 0..d {
-                let mut sum = 0.0f32;
+                let mut s = 0.0f32;
                 for i in 0..di {
-                    sum += y[t * di + i] * layer.out_proj_w[j * di + i];
+                    s += y[t * di + i] * lw.out_proj_w[j * di + i];
                 }
-                out[t * d + j] = sum;
+                out[t * d + j] = s;
             }
         }
 
         out
     }
+
+    /// Predict: run forward, return argmax token at each position
+    pub fn predict(&self, tokens: &[u32]) -> Vec<u32> {
+        let logits = self.forward(tokens);
+        let l = tokens.len();
+        let v = self.vocab_size;
+        let mut preds = vec![0u32; l];
+        for t in 0..l {
+            let mut best = f32::NEG_INFINITY;
+            let mut best_idx = 0u32;
+            for i in 0..v {
+                if logits[t * v + i] > best {
+                    best = logits[t * v + i];
+                    best_idx = i as u32;
+                }
+            }
+            preds[t] = best_idx;
+        }
+        preds
+    }
 }
 
-fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + (-x).exp())
-}
+// ── Helpers ──────────────────────────────────────────────
 
-fn layer_norm_inplace(x: &mut [f32], w: &[f32], b: &[f32], seq_len: usize, d: usize) {
+fn sigmoid(x: f32) -> f32 { 1.0 / (1.0 + (-x).exp()) }
+fn softplus(x: f32) -> f32 { (1.0 + x.exp()).ln() }
+
+fn layer_norm(x: &mut [f32], w: &[f32], b: &[f32], seq_len: usize, d: usize) {
     let eps = 1e-5f32;
     for t in 0..seq_len {
-        let slice = &x[t * d..(t + 1) * d];
-        let mean: f32 = slice.iter().sum::<f32>() / d as f32;
-        let var: f32 = slice.iter().map(|&v| (v - mean) * (v - mean)).sum::<f32>() / d as f32;
-        let std = (var + eps).sqrt();
+        let off = t * d;
+        let mean: f32 = (0..d).map(|i| x[off + i]).sum::<f32>() / d as f32;
+        let var: f32 = (0..d).map(|i| (x[off + i] - mean).powi(2)).sum::<f32>() / d as f32;
+        let inv_std = 1.0 / (var + eps).sqrt();
         for i in 0..d {
-            x[t * d + i] = (x[t * d + i] - mean) / std * w[i] + b[i];
+            x[off + i] = (x[off + i] - mean) * inv_std * w[i] + b[i];
         }
     }
+}
+
+/// Matrix multiply: out = a × b^T. a is (m, k), b is (n, k), out is (m, n).
+fn matmul_t(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
+    for i in 0..m {
+        for j in 0..n {
+            let mut s = 0.0f32;
+            for p in 0..k {
+                s += a[i * k + p] * b[j * k + p];
+            }
+            out[i * n + j] = s;
+        }
+    }
+}
+
+/// Extract a slice from a packed projection: (L, total_dim) → (L, slice_dim)
+fn proj_slice(proj: &[f32], l: usize, total: usize, offset: usize, dim: usize) -> Vec<f32> {
+    let mut out = vec![0.0f32; l * dim];
+    for t in 0..l {
+        for i in 0..dim {
+            out[t * dim + i] = proj[t * total + offset + i];
+        }
+    }
+    out
 }

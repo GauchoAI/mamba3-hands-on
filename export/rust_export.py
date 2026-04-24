@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Export PyTorch checkpoint to Rust binary format for the wgpu engine.
+"""Export PyTorch checkpoint to Rust binary format.
 
-The format is simple:
-  - 7 × uint32 header: d_model, d_state, headdim, n_layers, vocab_size, 0, 0
-  - All weights concatenated as flat f32 arrays in order:
-    embed, embed_norm_w, embed_norm_b,
-    per-layer: in_proj_w, conv1d_w, conv1d_b, out_proj_w, dt_bias, A_log, D, norm_w, scale
+Format:
+  Header: 7 × uint32 (d_model, d_state, headdim, n_layers, vocab_size, 0, 0)
+  Weights: flat f32 arrays in order:
+    embed_w, embed_norm_w, embed_norm_b,
+    per-layer: in_proj_w, out_proj_w, dt_bias, D, B_norm_w, B_norm_b, C_norm_w, C_norm_b, layer_norm_w, scale
     final_norm_w, final_norm_b
 
 Usage:
@@ -14,7 +14,6 @@ Usage:
 
 import struct
 import sys
-import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -22,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def export_to_bin(checkpoint_path: str, output_path: str) -> str:
     import torch
-    from progressive_model import ProgressiveModel
 
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     config = ckpt.get("config", {})
@@ -36,58 +34,66 @@ def export_to_bin(checkpoint_path: str, output_path: str) -> str:
     vocab_size = 260
 
     print(f"Exporting {task}: d={d_model} L={n_layers} dS={d_state} hd={headdim}")
+    total_floats = 0
 
     with open(output_path, "wb") as f:
         # Header
         for v in [d_model, d_state, headdim, n_layers, vocab_size, 0, 0]:
             f.write(struct.pack("<I", v))
 
-        def write_tensor(key):
+        def write(key, required=True):
+            nonlocal total_floats
             if key in state_dict:
                 data = state_dict[key].float().contiguous().numpy()
                 f.write(data.tobytes())
-                return data.size
-            return 0
+                total_floats += data.size
+                return True
+            elif required:
+                print(f"  WARNING: missing {key}")
+            return False
 
         # Embedding
-        n = write_tensor("embed.weight")
-        print(f"  embed: {n} floats")
-        write_tensor("embed_norm.weight")
-        write_tensor("embed_norm.bias")
+        write("embed.weight")
+        write("embed_norm.weight")
+        write("embed_norm.bias")
 
         # Layers
         for i in range(n_layers):
-            prefix = f"kernel_layers.{i}.block."
-            n = write_tensor(f"{prefix}in_proj.weight")
-            print(f"  layer {i} in_proj: {n} floats")
-            write_tensor(f"{prefix}conv1d.weight")
-            write_tensor(f"{prefix}conv1d.bias")
-            write_tensor(f"{prefix}out_proj.weight")
-            write_tensor(f"{prefix}dt_bias")
-            write_tensor(f"{prefix}A_log")
-            write_tensor(f"{prefix}D")
+            bp = f"kernel_layers.{i}.block."
+            write(f"{bp}in_proj.weight")
+            write(f"{bp}out_proj.weight")
+            write(f"{bp}dt_bias")
+            write(f"{bp}D")
+            write(f"{bp}B_norm.weight")
+            write(f"{bp}B_norm.bias")
+            write(f"{bp}C_norm.weight")
+            write(f"{bp}C_norm.bias")
 
-            # Layer norm (outside block)
-            write_tensor(f"kernel_layers.{i}.norm.weight")
+            # Layer norm (outside block in progressive_model)
+            if not write(f"kernel_layers.{i}.norm.weight", required=False):
+                # Fallback: write ones
+                f.write(struct.pack(f"<{d_model}f", *([1.0] * d_model)))
+                total_floats += d_model
 
-            # Scale parameter
+            # Scale
             scale_key = f"kernel_layers.{i}.scale"
             if scale_key in state_dict:
-                val = state_dict[scale_key].float().item()
-                f.write(struct.pack("<f", val))
+                f.write(struct.pack("<f", state_dict[scale_key].float().item()))
             else:
                 f.write(struct.pack("<f", 0.01))
+            total_floats += 1
 
         # Final norm
-        write_tensor("final_norm.weight")
-        write_tensor("final_norm.bias")
+        write("final_norm.weight")
+        write("final_norm.bias")
 
     size_kb = Path(output_path).stat().st_size / 1024
-    print(f"  Exported: {output_path} ({size_kb:.1f} KB)")
+    print(f"  {total_floats:,} floats → {output_path} ({size_kb:.1f} KB)")
     return output_path
 
 
 if __name__ == "__main__":
+    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output", required=True)
