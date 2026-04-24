@@ -348,13 +348,25 @@ impl PtxTrainer {
         )?;
         let y_off = li * self.train_scratch.layer_yinner_stride;
         let y_len = l * di;
-        let y_src = self.train_scratch.layer_y_inners.slice(y_off..y_off + y_len);
-        launch_matmul_atb_accum(stream, ptx,
-            &self.train_scratch.d_y_out,
-            &y_src,
-            &mut self.train_scratch.d_out_proj_w[li],
-            d, di, l,
-        )?;
+        {
+            let y_src = self.train_scratch.layer_y_inners.slice(y_off..y_off + y_len);
+            let m_i = d as i32;
+            let n_i = di as i32;
+            let k_i = l as i32;
+            let mut lb = stream.launch_builder(&ptx.k.matmul_atb_tiled);
+            lb.arg(&self.train_scratch.d_y_out);
+            lb.arg(&y_src);
+            lb.arg(&mut self.train_scratch.d_out_proj_w[li]);
+            lb.arg(&m_i);
+            lb.arg(&n_i);
+            lb.arg(&k_i);
+            let cfg = LaunchConfig {
+                grid_dim: ((di as u32 + 15) / 16, (d as u32 + 15) / 16, 1),
+                block_dim: (16, 16, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
 
         // Step C: Zero d_proj (it accumulates via atomicAdd from gate/scan/bx)
         launch_fill_zero(stream, ptx, &mut self.train_scratch.d_proj, l * dip)?;
@@ -449,19 +461,28 @@ impl PtxTrainer {
         }
 
         // Step G: in_proj backward
-        //   d_in_proj_w[li] += d_proj^T @ x_in   (dip, L) × (L, d) → (dip, d)
-        //   d_x_from_layer = d_proj @ in_proj_w  (L, dip) × (dip, d) → (L, d)
+        //   d_in_proj_w[li] = d_proj^T @ x_in   (dip, L) × (L, d) → (dip, d)
+        //   d_x_from_layer = d_proj @ in_proj_w (L, dip) × (dip, d) → (L, d)
         {
             let input_off = li * self.train_scratch.layer_input_stride;
             let input_len = l * d;
             let x_in_view = self.train_scratch.layer_inputs.slice(input_off..input_off + input_len);
-
-            launch_matmul_atb_accum(stream, ptx,
-                &self.train_scratch.d_proj,
-                &x_in_view,
-                &mut self.train_scratch.d_in_proj_w[li],
-                dip, d, l,
-            )?;
+            let m_i = dip as i32;
+            let n_i = d as i32;
+            let k_i = l as i32;
+            let mut lb = stream.launch_builder(&ptx.k.matmul_atb_tiled);
+            lb.arg(&self.train_scratch.d_proj);
+            lb.arg(&x_in_view);
+            lb.arg(&mut self.train_scratch.d_in_proj_w[li]);
+            lb.arg(&m_i);
+            lb.arg(&n_i);
+            lb.arg(&k_i);
+            let cfg = LaunchConfig {
+                grid_dim: ((d as u32 + 15) / 16, (dip as u32 + 15) / 16, 1),
+                block_dim: (16, 16, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
         }
         // d_x_from_layer into d_y_out (reusing buffer)
         let in_proj_w_ref: &CudaSlice<f32> = &self.model.layers[li].in_proj_w;
@@ -606,18 +627,6 @@ fn launch_matmul_atb(
 // But we USE this for d_in_proj_w and d_out_proj_w which should ACCUMULATE across
 // calls within a step... actually they are set to 0 per train_step, then written
 // ONCE per layer via this function, so non-accumulating overwrite is fine.
-fn launch_matmul_atb_accum(
-    stream: &Arc<cudarc::driver::CudaStream>,
-    ptx: &Arc<PtxContext>,
-    a: &CudaSlice<f32>,
-    b: &CudaSlice<f32>,
-    c: &mut CudaSlice<f32>,
-    m: usize, n: usize, k: usize,
-) -> Result<(), Box<dyn Error>> {
-    // Each layer's d_W gets a single atb computation per train_step, overwriting
-    // the zeroed buffer.
-    launch_matmul_atb(stream, ptx, a, b, c, m, n, k)
-}
 
 fn launch_adamw(
     stream: &Arc<cudarc::driver::CudaStream>,
