@@ -40,14 +40,20 @@ export_rust_model('checkpoints/specialists/run_length_next_best.pt', '/tmp/run_l
 
 Model: run_length_next, d=64, 3 layers, 28K params, 7 tokens
 
-| Path | M4 (Metal) | H100 (Vulkan) |
-|------|-----------|---------------|
-| CPU | **0.8ms** / 8,589 tok/s | **3.6ms** / 1,943 tok/s |
-| GPU-fused | 11.6ms / 605 tok/s | 21.2ms / 331 tok/s |
-| GPU-full | 33.9ms / 207 tok/s | 62.1ms / 113 tok/s |
-| GPU-pipeline | 61.8ms / 113 tok/s | 79.0ms / 89 tok/s |
+| Path | M4 (Metal) | H100 (Vulkan) | H100 (PTX, new) |
+|------|-----------|---------------|-----------------|
+| CPU | **0.8ms** / 8,589 tok/s | **3.6ms** / 1,943 tok/s | 2.2–2.8ms / 2,500–3,300 tok/s |
+| GPU-fused | 11.6ms / 605 tok/s | 21.2ms / 331 tok/s | n/a |
+| GPU-full | 33.9ms / 207 tok/s | 62.1ms / 113 tok/s | n/a |
+| GPU-pipeline | 61.8ms / 113 tok/s | 79.0ms / 89 tok/s | n/a |
+| **PTX (per-op)** | n/a | n/a | **3.6–5.2ms / 1,400–1,950 tok/s** |
+| **PTX + CUDA Graph** | n/a | n/a | **3.3–4.5ms / 1,550–2,100 tok/s** |
 
-GPU-fused is our best GPU path. CPU wins on this tiny model because dispatch overhead dominates the actual compute.
+**Correctness: PTX max |PTX − CPU| = 7.6e-6 (bit-close; matches Rust `f32::mul_add`).**
+
+PTX is **~5× faster than wgpu GPU-fused** on H100 for this model, and within 1.5× of the EPYC CPU — which, given the tiny model size and dispatch-bound nature, is good. The naive matmul and many separate dispatches leave lots of room; see `engine/ptx/PLAN.md` for v2+ creative iterations (persistent single-kernel forward, warp shuffles, tensor cores, etc.).
+
+H100 variance on the shared vast.ai container is significant (~30% run-to-run). A dedicated H100 would show tighter numbers.
 
 ## Architecture: GPU-Fused
 
