@@ -208,69 +208,133 @@ impl FullGpuModel {
 
     /// Forward — ZERO mid-forward readback. One upload, one download.
     /// All ops (norm, matmul, SSM prep, scan, residual) run as GPU shaders.
-    /// Single command buffer. Single submit. Single readback.
+    /// Single command buffer. Single submit. Single readback. Zero mid-forward transfers.
     pub fn forward(&self, tokens: &[u32]) -> Vec<f32> {
         let l = tokens.len();
         let d = self.cpu_model.d_model;
         let v = self.cpu_model.vocab_size;
         let di = self.cpu_model.d_inner;
         let nh = self.cpu_model.n_heads as u32;
+        let hd = self.cpu_model.headdim as u32;
+        let ds = self.cpu_model.d_state as u32;
 
-        // Embedding (CPU) + upload
+        // Embedding (CPU lookup, ~0.5KB)
         let mut x = vec![0.0f32; l * d];
         for (t, &tok) in tokens.iter().enumerate() {
             let tok = tok as usize;
             if tok < v { for i in 0..d { x[t * d + i] = self.cpu_model.embed_w[tok * d + i]; } }
         }
+
+        // === THE ONLY UPLOAD ===
         self.gpu.queue.write_buffer(&self.x_buf, 0, bytemuck::cast_slice(&x));
 
-        // Build ONE command buffer for embed norm + all layers + final norm + LM head
-        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        // === SINGLE COMMAND BUFFER - ENTIRE FORWARD ===
+        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
 
-        // Embed norm (GPU)
-        self.encode_norm(&mut encoder, &self.x_buf, &self.embed_norm_w, &self.embed_norm_b, l as u32, d as u32);
+        // Embed norm
+        self.encode_norm(&mut enc, &self.x_buf, &self.embed_norm_w, &self.embed_norm_b, l as u32, d as u32);
 
-        // Submit embed norm, read x for layer processing
-        self.gpu.queue.submit(std::iter::once(encoder.finish()));
-        let mut x_cpu = self.readback(&self.x_buf, l * d);
-
-        // Layers — GPU matmuls, CPU SSM
+        // All layers - zero readback between them
         for (li, gl) in self.layers.iter().enumerate() {
-            // CPU pre-norm
-            let mut x_normed = x_cpu.clone();
-            crate::model::layer_norm_pub(&mut x_normed, &self.cpu_model.layers[li].layer_norm_w, &self.cpu_model.layers[li].layer_norm_b, l, d);
+            let dip = gl.d_in_proj as u32;
 
-            // GPU in_proj: single submit
-            self.gpu.queue.write_buffer(&self.x_normed_buf, 0, bytemuck::cast_slice(&x_normed));
-            let mut enc = self.gpu.device.create_command_encoder(&Default::default());
-            self.encode_matmul(&mut enc, &self.x_normed_buf, &gl.in_proj_w, &gl.proj_buf, l as u32, d as u32, gl.d_in_proj as u32);
-            self.gpu.queue.submit(std::iter::once(enc.finish()));
-            let proj = self.readback(&gl.proj_buf, l * gl.d_in_proj);
+            // Pre-norm: copy x to x_normed, norm in-place
+            enc.copy_buffer_to_buffer(&self.x_buf, 0, &self.x_normed_buf, 0, (l * d * 4) as u64);
+            self.encode_norm(&mut enc, &self.x_normed_buf, &gl.norm_w, &gl.norm_b, l as u32, d as u32);
 
-            // CPU SSM (with RoPE, trapezoidal — sequential)
-            let y_inner = self.cpu_model.mamba3_block_inner_pub(&proj, &self.cpu_model.layers[li], l);
+            // In-proj matmul (GPU)
+            self.encode_matmul(&mut enc, &self.x_normed_buf, &gl.in_proj_w, &gl.proj_buf, l as u32, d as u32, dip);
 
-            // GPU out_proj: single submit
-            self.gpu.queue.write_buffer(&self.x_normed_buf, 0, bytemuck::cast_slice(&y_inner));
-            let mut enc = self.gpu.device.create_command_encoder(&Default::default());
-            self.encode_matmul(&mut enc, &self.x_normed_buf, &gl.out_proj_w, &gl.y_out_buf, l as u32, di as u32, d as u32);
-            // Residual on GPU: x += scale * y
-            self.gpu.queue.write_buffer(&self.x_buf, 0, bytemuck::cast_slice(&x_cpu));
+            // SSM prep (GPU shader: split, norm B/C, RoPE, outer product, trapezoidal)
+            self.encode_ssm_prep(&mut enc, &gl.proj_buf, li, l as u32);
+
+            // SSM scan (GPU shader)
+            self.encode_ssm_scan(&mut enc, li, l as u32);
+
+            // Out-proj matmul (GPU)
+            self.encode_matmul(&mut enc, &self.scan_out_buf, &gl.out_proj_w, &gl.y_out_buf, l as u32, di as u32, d as u32);
+
+            // Residual: x += scale * y_out (GPU)
             self.encode_residual(&mut enc, &self.x_buf, &gl.y_out_buf, (l * d) as u32, gl.scale);
-            self.gpu.queue.submit(std::iter::once(enc.finish()));
-            x_cpu = self.readback(&self.x_buf, l * d);
         }
 
-        // Final norm + LM head in one submit
-        self.gpu.queue.write_buffer(&self.x_buf, 0, bytemuck::cast_slice(&x_cpu));
-        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        // Final norm + LM head
         self.encode_norm(&mut enc, &self.x_buf, &self.final_norm_w, &self.final_norm_b, l as u32, d as u32);
         self.encode_matmul(&mut enc, &self.x_buf, &self.embed_w, &self.logits_buf, l as u32, d as u32, v as u32);
-        enc.copy_buffer_to_buffer(&self.logits_buf, 0, &self.staging, 0, (l * v * 4) as u64);
-        self.gpu.queue.submit(std::iter::once(enc.finish()));
 
-        // Single final readback
+        // === THE ONLY READBACK ===
+        enc.copy_buffer_to_buffer(&self.logits_buf, 0, &self.staging, 0, (l * v * 4) as u64);
+
+        // === SINGLE SUBMIT ===
+        self.gpu.queue.submit(std::iter::once(enc.finish()));
         self.map_staging(l * v)
+    }
+
+    fn encode_ssm_prep(&self, enc: &mut wgpu::CommandEncoder, proj_buf: &wgpu::Buffer, li: usize, l: u32) {
+        let nh = self.cpu_model.n_heads as u32;
+        let di = self.cpu_model.d_inner as u32;
+        let ds = self.cpu_model.d_state as u32;
+        let hd = self.cpu_model.headdim as u32;
+        let dip = self.layers[li].d_in_proj as u32;
+        let na = ds / 2;
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct P { l: u32, di: u32, ds: u32, nh: u32, hd: u32, dip: u32, na: u32, _p: u32 }
+        let p = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None, contents: bytemuck::bytes_of(&P { l, di, ds, nh, hd, dip, na, _p: 0 }),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bg = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None, layout: &self.ssm_prep_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: proj_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.layer_dt_bias[li].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.layer_b_norm_w[li].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: self.layer_b_norm_b[li].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: self.layer_c_norm_w[li].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: self.layer_c_norm_b[li].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: self.inp_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: self.decay_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: self.cp_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 9, resource: self.x_skip_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: self.z_silu_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 11, resource: p.as_entire_binding() },
+            ],
+        });
+        let mut pass = enc.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&self.ssm_prep_pipeline);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.dispatch_workgroups(nh, 1, 1);
+    }
+
+    fn encode_ssm_scan(&self, enc: &mut wgpu::CommandEncoder, li: usize, l: u32) {
+        let nh = self.cpu_model.n_heads as u32;
+        let hd = self.cpu_model.headdim as u32;
+        let ds = self.cpu_model.d_state as u32;
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct SP { b: u32, l: u32, h: u32, hd: u32, ds: u32 }
+        let p = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: None, contents: bytemuck::bytes_of(&SP { b: 1, l, h: nh, hd, ds }),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bg = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None, layout: &self.gpu.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.inp_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.decay_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.cp_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: self.x_skip_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 4, resource: self.z_silu_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 5, resource: self.layer_d_param[li].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 6, resource: self.scan_out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 7, resource: p.as_entire_binding() },
+            ],
+        });
+        let mut pass = enc.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&self.gpu.pipeline);
+        pass.set_bind_group(0, &bg, &[]);
+        pass.dispatch_workgroups(nh, 1, 1);
     }
 
     fn encode_norm(&self, enc: &mut wgpu::CommandEncoder, x: &wgpu::Buffer, w: &wgpu::Buffer, b: &wgpu::Buffer, seq_len: u32, d: u32) {

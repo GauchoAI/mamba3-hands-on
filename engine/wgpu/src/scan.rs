@@ -44,7 +44,10 @@ impl GpuContext {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("mamba3"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::default(),
+                required_limits: wgpu::Limits {
+                    max_storage_buffers_per_shader_stage: 12,
+                    ..wgpu::Limits::default()
+                },
                 ..Default::default()
             }, None)
             .await?;
