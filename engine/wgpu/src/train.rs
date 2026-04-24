@@ -657,15 +657,7 @@ fn layer_norm_inplace(x: &mut [f32], w: &[f32], b: &[f32], l: usize, d: usize) {
 }
 
 fn matmul_t(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
-    for i in 0..m {
-        for j in 0..n {
-            let mut s = 0.0f32;
-            for p in 0..k {
-                s += a[i * k + p] * b[j * k + p];
-            }
-            out[i * n + j] = s;
-        }
-    }
+    crate::model::matmul_t_pub(out, a, b, m, k, n);
 }
 
 /// Apply pairwise RoPE rotation: pairs (v[2k], v[2k+1]) rotated by angle[k]

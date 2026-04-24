@@ -431,6 +431,10 @@ fn layer_norm(x: &mut [f32], w: &[f32], b: &[f32], seq_len: usize, d: usize) {
 
 /// Matrix multiply: out = a × b^T. a is (m, k), b is (n, k), out is (m, n).
 /// Uses NEON SIMD on aarch64, falls back to scalar with 4-wide unrolling.
+pub fn matmul_t_pub(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
+    matmul_t(out, a, b, m, k, n);
+}
+
 fn matmul_t(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
     #[cfg(target_arch = "aarch64")]
     {
@@ -468,23 +472,78 @@ fn matmul_t(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize)
             }
         }
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(target_arch = "x86_64")]
+    {
+        #[cfg(target_feature = "avx2")]
+        {
+            use std::arch::x86_64::*;
+            for i in 0..m {
+                let a_row = &a[i * k..];
+                for j in 0..n {
+                    let b_row = &b[j * k..];
+                    let k32 = k / 32 * 32;
+                    let mut sum0 = unsafe { _mm256_setzero_ps() };
+                    let mut sum1 = unsafe { _mm256_setzero_ps() };
+                    let mut sum2 = unsafe { _mm256_setzero_ps() };
+                    let mut sum3 = unsafe { _mm256_setzero_ps() };
+                    let mut p = 0;
+                    while p < k32 {
+                        unsafe {
+                            sum0 = _mm256_fmadd_ps(_mm256_loadu_ps(a_row.as_ptr().add(p)), _mm256_loadu_ps(b_row.as_ptr().add(p)), sum0);
+                            sum1 = _mm256_fmadd_ps(_mm256_loadu_ps(a_row.as_ptr().add(p+8)), _mm256_loadu_ps(b_row.as_ptr().add(p+8)), sum1);
+                            sum2 = _mm256_fmadd_ps(_mm256_loadu_ps(a_row.as_ptr().add(p+16)), _mm256_loadu_ps(b_row.as_ptr().add(p+16)), sum2);
+                            sum3 = _mm256_fmadd_ps(_mm256_loadu_ps(a_row.as_ptr().add(p+24)), _mm256_loadu_ps(b_row.as_ptr().add(p+24)), sum3);
+                        }
+                        p += 32;
+                    }
+                    let combined = unsafe {
+                        let s01 = _mm256_add_ps(sum0, sum1);
+                        let s23 = _mm256_add_ps(sum2, sum3);
+                        let s = _mm256_add_ps(s01, s23);
+                        // Horizontal sum of 8 floats
+                        let hi = _mm256_extractf128_ps(s, 1);
+                        let lo = _mm256_castps256_ps128(s);
+                        let sum128 = _mm_add_ps(lo, hi);
+                        let shuf = _mm_movehdup_ps(sum128);
+                        let sums = _mm_add_ps(sum128, shuf);
+                        let shuf2 = _mm_movehl_ps(sums, sums);
+                        _mm_cvtss_f32(_mm_add_ss(sums, shuf2))
+                    };
+                    let mut s = combined;
+                    while p < k { s += a_row[p] * b_row[p]; p += 1; }
+                    out[i * n + j] = s;
+                }
+            }
+        }
+        #[cfg(not(target_feature = "avx2"))]
+        {
+            // SSE2 fallback (always available on x86_64)
+            for i in 0..m {
+                let a_row = &a[i * k..(i + 1) * k];
+                for j in 0..n {
+                    let b_row = &b[j * k..(j + 1) * k];
+                    let mut s0 = 0.0f32;
+                    let mut s1 = 0.0f32;
+                    let k4 = k / 4 * 4;
+                    let mut p = 0;
+                    while p < k4 {
+                        s0 += a_row[p] * b_row[p] + a_row[p+2] * b_row[p+2];
+                        s1 += a_row[p+1] * b_row[p+1] + a_row[p+3] * b_row[p+3];
+                        p += 4;
+                    }
+                    let mut s = s0 + s1;
+                    while p < k { s += a_row[p] * b_row[p]; p += 1; }
+                    out[i * n + j] = s;
+                }
+            }
+        }
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
     {
         for i in 0..m {
-            let a_row = &a[i * k..(i + 1) * k];
             for j in 0..n {
-                let b_row = &b[j * k..(j + 1) * k];
-                let mut s0 = 0.0f32;
-                let mut s1 = 0.0f32;
-                let k4 = k / 4 * 4;
-                let mut p = 0;
-                while p < k4 {
-                    s0 += a_row[p] * b_row[p] + a_row[p+2] * b_row[p+2];
-                    s1 += a_row[p+1] * b_row[p+1] + a_row[p+3] * b_row[p+3];
-                    p += 4;
-                }
-                let mut s = s0 + s1;
-                while p < k { s += a_row[p] * b_row[p]; p += 1; }
+                let mut s = 0.0f32;
+                for p in 0..k { s += a[i*k+p] * b[j*k+p]; }
                 out[i * n + j] = s;
             }
         }
