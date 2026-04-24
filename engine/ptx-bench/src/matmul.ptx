@@ -7,7 +7,7 @@
 // Block: 16x16 threads.  Grid: ceil(N/16) x ceil(M/16).
 //
 // Uses fma.rn.f32: IEEE round-to-nearest-even FMA, no contraction, no fast math.
-// This is the whole point of going PTX — we pin the precision ourselves.
+// This is the whole point of going PTX - we pin the precision ourselves.
 //
 
 .version 7.8
