@@ -1,6 +1,6 @@
-// Matrix multiply: C = A × B^T
+// Tiled Matrix multiply: C = A × B^T
 // A is (M, K), B is (N, K), C is (M, N)
-// Each workgroup computes one tile of C.
+// Uses shared memory tiles for coalesced memory access.
 
 struct Params {
     M: u32,
@@ -16,18 +16,53 @@ struct Params {
 
 const TILE: u32 = 16;
 
-@compute @workgroup_size(TILE, TILE)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let row = gid.x;
-    let col = gid.y;
+var<workgroup> tileA: array<array<f32, TILE>, TILE>;
+var<workgroup> tileB: array<array<f32, TILE>, TILE>;
 
-    if (row >= params.M || col >= params.N) {
-        return;
-    }
+@compute @workgroup_size(TILE, TILE)
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(workgroup_id) wid: vec3<u32>,
+) {
+    let row = wid.x * TILE + lid.x;
+    let col = wid.y * TILE + lid.y;
+    let lr = lid.x;
+    let lc = lid.y;
 
     var sum: f32 = 0.0;
-    for (var k = 0u; k < params.K; k = k + 1u) {
-        sum = sum + A[row * params.K + k] * B[col * params.K + k];
+
+    let n_tiles = (params.K + TILE - 1) / TILE;
+
+    for (var t = 0u; t < n_tiles; t = t + 1u) {
+        // Load tile of A into shared memory
+        let a_col = t * TILE + lc;
+        if (row < params.M && a_col < params.K) {
+            tileA[lr][lc] = A[row * params.K + a_col];
+        } else {
+            tileA[lr][lc] = 0.0;
+        }
+
+        // Load tile of B^T into shared memory
+        // B is (N, K), B^T access: B[col, t*TILE + lr]
+        let b_col = t * TILE + lr;
+        if (col < params.N && b_col < params.K) {
+            tileB[lc][lr] = B[col * params.K + b_col];
+        } else {
+            tileB[lc][lr] = 0.0;
+        }
+
+        workgroupBarrier();
+
+        // Compute partial dot product from tiles
+        for (var kk = 0u; kk < TILE; kk = kk + 1u) {
+            sum = sum + tileA[lr][kk] * tileB[lc][kk];
+        }
+
+        workgroupBarrier();
     }
-    C[row * params.N + col] = sum;
+
+    if (row < params.M && col < params.N) {
+        C[row * params.N + col] = sum;
+    }
 }
