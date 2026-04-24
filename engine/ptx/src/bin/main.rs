@@ -60,12 +60,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ptx_logits = gpu_model.forward(&tokens)?;
 
     // Correctness
+    let has_nan = ptx_logits.iter().any(|v| !v.is_finite());
     let max_diff = cpu_logits
         .iter()
         .zip(ptx_logits.iter())
         .map(|(a, b)| (a - b).abs())
-        .fold(0.0f32, f32::max);
-    let status = if max_diff < 1e-3 { "PASS" } else { "FAIL" };
+        .fold(0.0f32, |acc, d| if d.is_nan() { f32::INFINITY } else { acc.max(d) });
+    let status = if !has_nan && max_diff < 1e-3 { "PASS" } else { "FAIL" };
     println!(
         "Correctness (full forward):  max |PTX - CPU| = {:.3e}   {}",
         max_diff, status

@@ -276,25 +276,24 @@ extern "C" __global__ void prepare_bc(
     float inv_std = rsqrtf(vs / (float)ds + eps);
     float bn = (tid < ds) ? __fmaf_rn(diff * inv_std, b_norm_w[tid], b_norm_b[tid]) : 0.0f;
 
-    // Apply RoPE using phase[t, tid/2]
-    // After layer_norm, pairs (2k, 2k+1) rotate together. Thread tid handles
-    // one element of the pair; read partner's value via warp shuffle.
-    if (tid < ds) {
+    // Apply RoPE using phase[t, tid/2]. Pairs (2k, 2k+1) rotate together.
+    // IMPORTANT: shfl_xor_sync must be called with ALL 32 lanes participating,
+    // so we do the shuffle outside any divergent branch. Out-of-bounds lanes
+    // compute garbage which is discarded by the guarded write.
+    float bp_partner = __shfl_xor_sync(0xffffffff, bn, 1);
+    {
         int k = tid >> 1;
         int is_odd = tid & 1;
-        float partner = __shfl_xor_sync(0xffffffff, bn, 1);  // swap with neighbor lane
-        float a = phase[t * n_angles + k];
+        float a = (tid < ds) ? phase[t * n_angles + k] : 0.0f;
         float c = __cosf(a);
         float sn = __sinf(a);
         float result;
         if (is_odd == 0) {
-            // even index: result = even*c - odd*s; even=bn, odd=partner
-            result = __fmaf_rn(bn, c, -partner * sn);
+            result = __fmaf_rn(bn, c, -bp_partner * sn);
         } else {
-            // odd index: result = even*s + odd*c; even=partner, odd=bn
-            result = __fmaf_rn(partner, sn, bn * c);
+            result = __fmaf_rn(bp_partner, sn, bn * c);
         }
-        bp[t * ds + tid] = result;
+        if (tid < ds) bp[t * ds + tid] = result;
     }
 
     // --- cp --- (same pattern)
@@ -306,20 +305,20 @@ extern "C" __global__ void prepare_bc(
     inv_std = rsqrtf(vs / (float)ds + eps);
     float cn = (tid < ds) ? __fmaf_rn(diff * inv_std, c_norm_w[tid], c_norm_b[tid]) : 0.0f;
 
-    if (tid < ds) {
+    float cp_partner = __shfl_xor_sync(0xffffffff, cn, 1);
+    {
         int k = tid >> 1;
         int is_odd = tid & 1;
-        float partner = __shfl_xor_sync(0xffffffff, cn, 1);
-        float a = phase[t * n_angles + k];
+        float a = (tid < ds) ? phase[t * n_angles + k] : 0.0f;
         float c = __cosf(a);
         float sn = __sinf(a);
         float result;
         if (is_odd == 0) {
-            result = __fmaf_rn(cn, c, -partner * sn);
+            result = __fmaf_rn(cn, c, -cp_partner * sn);
         } else {
-            result = __fmaf_rn(partner, sn, cn * c);
+            result = __fmaf_rn(cp_partner, sn, cn * c);
         }
-        cp[t * ds + tid] = result;
+        if (tid < ds) cp[t * ds + tid] = result;
     }
 }
 
