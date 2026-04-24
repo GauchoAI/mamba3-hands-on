@@ -40,20 +40,26 @@ struct ScaleParam {
 }
 @group(1) @binding(0) var<uniform> scale_param: ScaleParam;
 
-// Per-thread private memory
-var<private> x_normed: array<f32, 512>;   // max d_model=512
-var<private> proj_row: array<f32, 1280>;  // max d_in_proj=1280
+// Workgroup shared memory — all threads access
+var<workgroup> x_normed: array<f32, 512>;
+var<workgroup> proj_row: array<f32, 1280>;
+var<workgroup> y_full_shared: array<f32, 1024>;
 var<private> bp_n: array<f32, 32>;        // d_state after norm
 var<private> cp_n: array<f32, 32>;        // d_state after norm
 var<private> state: array<f32, 256>;      // hD * dS = 16*16 = 256
 var<private> bx_prev: array<f32, 256>;    // hD * dS
 var<private> y_head: array<f32, 16>;      // headdim output per timestep
 
-// Single workgroup processes ALL heads — avoids race condition on x output
-@compute @workgroup_size(1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    // Only one workgroup — processes all heads sequentially
-    if (gid.x != 0u) { return; }
+// One workgroup with multiple threads for parallel matmul.
+// Thread 0 does the SSM scan (sequential), all threads do matmul in parallel.
+@compute @workgroup_size(16)
+fn main(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+) {
+    if (gid.x >= 16u) { return; }
+    let tid = lid.x; // 0..15
     let L = params.L;
     let d = params.d_model;
     let di = params.d_inner;
@@ -76,29 +82,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var y_full: array<f32, 1024>;  // max d_inner = 512
 
     for (var t = 0u; t < L; t++) {
-        // 1. Layer norm of x[t]
-        var mean: f32 = 0.0;
-        for (var i = 0u; i < d; i++) { mean += x[t * d + i]; }
-        mean /= f32(d);
-        var variance: f32 = 0.0;
-        for (var i = 0u; i < d; i++) {
-            let diff = x[t * d + i] - mean;
-            variance += diff * diff;
+        // 1. Layer norm — thread 0 computes mean/var, all threads normalize
+        if (tid == 0u) {
+            var mean: f32 = 0.0;
+            for (var i = 0u; i < d; i++) { mean += x[t * d + i]; }
+            mean /= f32(d);
+            var variance: f32 = 0.0;
+            for (var i = 0u; i < d; i++) {
+                let diff = x[t * d + i] - mean;
+                variance += diff * diff;
+            }
+            variance /= f32(d);
+            let inv_std = 1.0 / sqrt(variance + 1e-5);
+            for (var i = 0u; i < d; i++) {
+                x_normed[i] = (x[t * d + i] - mean) * inv_std * norm_w[i] + norm_b[i];
+            }
         }
-        variance /= f32(d);
-        let inv_std = 1.0 / sqrt(variance + 1e-5);
-        for (var i = 0u; i < d; i++) {
-            x_normed[i] = (x[t * d + i] - mean) * inv_std * norm_w[i] + norm_b[i];
-        }
+        workgroupBarrier();
 
-        // 2. In-projection: proj_row = x_normed @ in_proj_w^T
-        for (var j = 0u; j < dip; j++) {
+        // 2. In-projection — PARALLEL: each thread handles dip/16 columns
+        let cols_per_thread = (dip + 15u) / 16u;
+        let j_start = tid * cols_per_thread;
+        let j_end = min(j_start + cols_per_thread, dip);
+        for (var j = j_start; j < j_end; j++) {
             var s: f32 = 0.0;
             for (var i = 0u; i < d; i++) {
                 s += x_normed[i] * in_proj_w[j * d + i];
             }
             proj_row[j] = s;
         }
+        workgroupBarrier();
 
         // 3. Split + SSM prep — process ALL heads
         let z_off = 0u;
@@ -140,6 +153,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             cp_n[n] = (proj_row[cp_off + n] - mean_c) * inv_c * c_norm_w[n] + c_norm_b[n];
         }
 
+        // 3. SSM: thread 0 does all heads (sequential scan)
+        if (tid == 0u) {
         // RoPE: cumulative phase (shared across heads, compute once per timestep)
         var dt_mean: f32 = 0.0;
         for (var hh = 0u; hh < nh; hh++) {
@@ -192,13 +207,22 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // 4. Out-projection + residual: x[t] += scale * y_full @ out_proj_w^T
-        for (var j = 0u; j < d; j++) {
+        // Copy y_full to shared memory for parallel out_proj
+            for (var i = 0u; i < di; i++) { y_full_shared[i] = y_full[i]; }
+        } // end tid==0 SSM block
+        workgroupBarrier();
+
+        // 4. Out-projection + residual — PARALLEL
+        let d_per_thread = (d + 15u) / 16u;
+        let jj_start = tid * d_per_thread;
+        let jj_end = min(jj_start + d_per_thread, d);
+        for (var j = jj_start; j < jj_end; j++) {
             var s: f32 = 0.0;
             for (var i = 0u; i < di; i++) {
-                s += y_full[i] * out_proj_w[j * di + i];
+                s += y_full_shared[i] * out_proj_w[j * di + i];
             }
             x[t * d + j] += scale * s;
         }
+        workgroupBarrier();
     }
 }
