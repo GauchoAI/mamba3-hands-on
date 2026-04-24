@@ -34,6 +34,14 @@ pub struct PtxTrainer {
     pub v_layer_norm_w: Vec<CudaSlice<f32>>,
     pub m_layer_norm_b: Vec<CudaSlice<f32>>,
     pub v_layer_norm_b: Vec<CudaSlice<f32>>,
+    pub m_b_norm_w: Vec<CudaSlice<f32>>,
+    pub v_b_norm_w: Vec<CudaSlice<f32>>,
+    pub m_b_norm_b: Vec<CudaSlice<f32>>,
+    pub v_b_norm_b: Vec<CudaSlice<f32>>,
+    pub m_c_norm_w: Vec<CudaSlice<f32>>,
+    pub v_c_norm_w: Vec<CudaSlice<f32>>,
+    pub m_c_norm_b: Vec<CudaSlice<f32>>,
+    pub v_c_norm_b: Vec<CudaSlice<f32>>,
 
     pub step: u32,
     pub lr: f32,
@@ -75,6 +83,14 @@ impl PtxTrainer {
         let mut v_layer_norm_w = Vec::with_capacity(nl);
         let mut m_layer_norm_b = Vec::with_capacity(nl);
         let mut v_layer_norm_b = Vec::with_capacity(nl);
+        let mut m_b_norm_w = Vec::with_capacity(nl);
+        let mut v_b_norm_w = Vec::with_capacity(nl);
+        let mut m_b_norm_b = Vec::with_capacity(nl);
+        let mut v_b_norm_b = Vec::with_capacity(nl);
+        let mut m_c_norm_w = Vec::with_capacity(nl);
+        let mut v_c_norm_w = Vec::with_capacity(nl);
+        let mut m_c_norm_b = Vec::with_capacity(nl);
+        let mut v_c_norm_b = Vec::with_capacity(nl);
         for _ in 0..nl {
             m_in_proj.push(stream.alloc_zeros::<f32>(dip * d)?);
             v_in_proj.push(stream.alloc_zeros::<f32>(dip * d)?);
@@ -88,6 +104,14 @@ impl PtxTrainer {
             v_layer_norm_w.push(stream.alloc_zeros::<f32>(d)?);
             m_layer_norm_b.push(stream.alloc_zeros::<f32>(d)?);
             v_layer_norm_b.push(stream.alloc_zeros::<f32>(d)?);
+            m_b_norm_w.push(stream.alloc_zeros::<f32>(ds)?);
+            v_b_norm_w.push(stream.alloc_zeros::<f32>(ds)?);
+            m_b_norm_b.push(stream.alloc_zeros::<f32>(ds)?);
+            v_b_norm_b.push(stream.alloc_zeros::<f32>(ds)?);
+            m_c_norm_w.push(stream.alloc_zeros::<f32>(ds)?);
+            v_c_norm_w.push(stream.alloc_zeros::<f32>(ds)?);
+            m_c_norm_b.push(stream.alloc_zeros::<f32>(ds)?);
+            v_c_norm_b.push(stream.alloc_zeros::<f32>(ds)?);
         }
         let m_fnorm_w = stream.alloc_zeros::<f32>(d)?;
         let v_fnorm_w = stream.alloc_zeros::<f32>(d)?;
@@ -106,6 +130,10 @@ impl PtxTrainer {
             m_dt_bias, v_dt_bias,
             m_layer_norm_w, v_layer_norm_w,
             m_layer_norm_b, v_layer_norm_b,
+            m_b_norm_w, v_b_norm_w,
+            m_b_norm_b, v_b_norm_b,
+            m_c_norm_w, v_c_norm_w,
+            m_c_norm_b, v_c_norm_b,
             step: 0,
             lr,
             weight_decay,
@@ -335,6 +363,31 @@ impl PtxTrainer {
                 &mut self.m_layer_norm_b[li], &mut self.v_layer_norm_b[li],
                 self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
                 d,
+            )?;
+            let ds = self.model.d_state;
+            launch_adamw(&stream, &ptx,
+                &mut layer.b_norm_w, &self.train_scratch.d_b_norm_w[li],
+                &mut self.m_b_norm_w[li], &mut self.v_b_norm_w[li],
+                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                ds,
+            )?;
+            launch_adamw(&stream, &ptx,
+                &mut layer.b_norm_b, &self.train_scratch.d_b_norm_b[li],
+                &mut self.m_b_norm_b[li], &mut self.v_b_norm_b[li],
+                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                ds,
+            )?;
+            launch_adamw(&stream, &ptx,
+                &mut layer.c_norm_w, &self.train_scratch.d_c_norm_w[li],
+                &mut self.m_c_norm_w[li], &mut self.v_c_norm_w[li],
+                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                ds,
+            )?;
+            launch_adamw(&stream, &ptx,
+                &mut layer.c_norm_b, &self.train_scratch.d_c_norm_b[li],
+                &mut self.m_c_norm_b[li], &mut self.v_c_norm_b[li],
+                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                ds,
             )?;
         }
         launch_adamw(&stream, &ptx,
