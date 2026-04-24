@@ -30,11 +30,11 @@ struct Params {
 @group(0) @binding(10) var<storage, read_write> z_silu: array<f32>;   // (L, H, hD)
 @group(0) @binding(11) var<uniform> params: Params;
 
-// Per-workgroup local arrays (each head gets its own copy)
-var<private> bp_normed: array<f32, 1024>;  // max L*dS = 64*16
-var<private> cp_normed: array<f32, 1024>;
-var<private> phase: array<f32, 512>;        // max L*n_angles = 64*8
-var<private> bx_prev: array<f32, 4096>;     // max H*hD*dS = hd*dS = 256
+// Per-thread local arrays — sized for actual usage
+var<private> bp_normed: array<f32, 256>;   // L*dS, max 16*16 = 256
+var<private> cp_normed: array<f32, 256>;
+var<private> phase_arr: array<f32, 128>;   // L*n_angles, max 16*8 = 128
+var<private> bx_prev_arr: array<f32, 256>; // hD*dS = 16*16 = 256
 
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -105,14 +105,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 }
                 dt_mean /= f32(nh);
                 cum += proj[t * dip + ang_off + k] * dt_mean;
-                phase[t * na + k] = cum;
+                phase_arr[t * na + k] = cum;
             }
         }
 
         // Apply RoPE to B and C
         for (var t = 0u; t < L; t = t + 1u) {
             for (var k = 0u; k < na; k = k + 1u) {
-                let angle = phase[t * na + k];
+                let angle = phase_arr[t * na + k];
                 let cos_a = cos(angle);
                 let sin_a = sin(angle);
                 // B
@@ -128,9 +128,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
 
-        // Init bx_prev to zero
-        for (var i = 0u; i < nh * hd * ds; i = i + 1u) {
-            bx_prev[i] = 0.0;
+        // Init bx_prev to zero (per-head, so only hd*ds elements)
+        for (var i = 0u; i < hd * ds; i = i + 1u) {
+            bx_prev_arr[i] = 0.0;
         }
     }
 
@@ -171,10 +171,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let x_val = proj[poff + di + h * hd + p];
             for (var n = 0u; n < ds; n = n + 1u) {
                 let bx_cur = x_val * bp_normed[t * ds + n];
-                let prev = bx_prev[h * hd * ds + p * ds + n];
+                let prev = bx_prev_arr[p * ds + n];
                 let blended = trap_val * bx_cur + (1.0 - trap_val) * prev;
                 inp[((t * nh + h) * hd + p) * ds + n] = blended * dt_val;
-                bx_prev[h * hd * ds + p * ds + n] = bx_cur;
+                bx_prev_arr[p * ds + n] = bx_cur;
             }
         }
     }
