@@ -205,13 +205,22 @@
   </div>
 </div>
 
-<!-- Firebase Bandwidth -->
-<div class="bg-gray-50 rounded-lg border border-gray-200 px-4 py-2 mb-3">
-  <div class="flex justify-between items-center text-xs text-gray-500">
-    <span>Firebase: <span id="fb-usage" class="font-mono">-</span></span>
-    <span id="fb-warning" class="text-red-500 font-bold hidden">⚠ Approaching 10GB limit</span>
-    <span>Schema: <span class="font-mono text-gray-400">/mamba3/{nodes, models, three_pop/{teachers,tasks}, learning_rate, bandwidth}</span></span>
+<!-- Firebase Stats & Schema -->
+<div class="bg-gray-50 rounded-lg border border-gray-200 px-4 py-3 mb-3">
+  <div class="flex justify-between items-center mb-2">
+    <span class="font-bold text-gray-600 text-sm">Firebase Stats</span>
+    <span id="fb-warning" class="text-red-500 text-xs font-bold hidden">⚠ Approaching 10GB/month limit</span>
   </div>
+  <div class="grid grid-cols-4 gap-3 mb-3">
+    <div class="text-center"><div id="fb-cycles" class="font-bold text-blue-600">-</div><div class="text-[10px] text-gray-400">Cycles</div></div>
+    <div class="text-center"><div id="fb-lineage" class="font-bold text-purple-600">-</div><div class="text-[10px] text-gray-400">Lineage</div></div>
+    <div class="text-center"><div id="fb-push-kb" class="font-bold text-amber-600">-</div><div class="text-[10px] text-gray-400">Per Push</div></div>
+    <div class="text-center"><div id="fb-monthly" class="font-bold text-red-600">-</div><div class="text-[10px] text-gray-400">Est. Monthly</div></div>
+  </div>
+  <details class="text-xs text-gray-500">
+    <summary class="cursor-pointer font-bold text-gray-600">Schema Reference</summary>
+    <div id="fb-schema" class="mt-2 grid grid-cols-2 gap-2"></div>
+  </details>
 </div>
 
 <footer class="text-gray-300 text-xs mt-4 border-t pt-2">
@@ -323,18 +332,33 @@ db.ref('mamba3/learning_rate').on('value', s=>{
     + 'Last: '+(d.last_task||'?')+' ('+d.last_cycles+' cycles)';
 });
 
-// Firebase bandwidth tracking
-db.ref('mamba3/bandwidth').on('value', s=>{
+// Firebase meta: schema, usage, bandwidth — auto-updated by push_state
+db.ref('mamba3/meta').on('value', s=>{
   const d = s.val(); if(!d) return;
-  const el = document.getElementById('fb-usage');
+  const usage = d.usage || {};
+  const bw = d.bandwidth || {};
+  const schema = d.schema || {};
   const warn = document.getElementById('fb-warning');
-  const bytes = d.last_push_bytes || 0;
-  // Rough estimate: push_state runs ~every 5 min per node, 2 nodes
-  const pushesPerDay = 2 * 288; // 2 nodes * 288 five-min intervals
-  const dailyMB = (bytes * pushesPerDay) / (1024*1024);
-  const monthlyGB = (dailyMB * 30) / 1024;
-  el.textContent = (bytes/1024).toFixed(1)+'KB/push, est '+monthlyGB.toFixed(2)+'GB/month';
-  if(monthlyGB > 8) { warn.classList.remove('hidden'); } else { warn.classList.add('hidden'); }
+
+  // Stats
+  document.getElementById('fb-cycles').textContent = (usage.total_cycles||0).toLocaleString();
+  document.getElementById('fb-lineage').textContent = (usage.total_lineage_entries||0).toLocaleString();
+  document.getElementById('fb-push-kb').textContent = (bw.estimated_per_push_kb||0).toFixed(1)+'KB';
+  const monthly = bw.estimated_monthly_gb || 0;
+  document.getElementById('fb-monthly').textContent = monthly.toFixed(2)+'GB';
+  if(monthly > 8) { warn.classList.remove('hidden'); } else { warn.classList.add('hidden'); }
+
+  // Schema reference
+  const schemaEl = document.getElementById('fb-schema');
+  let html = '';
+  Object.entries(schema).forEach(([key, info])=>{
+    html += '<div class="bg-white rounded p-2 border border-gray-200">'
+      + '<div class="font-mono font-bold text-[11px]">'+info.path+'</div>'
+      + '<div class="text-gray-400 mt-0.5">'+info.desc+'</div>'
+      + '<pre class="mt-1 bg-gray-100 rounded p-1 text-[10px] overflow-x-auto">'+JSON.stringify(info.example, null, 1)+'</pre>'
+      + '</div>';
+  });
+  schemaEl.innerHTML = html;
 });
 
 // Nodes — real-time

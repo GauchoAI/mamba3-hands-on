@@ -191,11 +191,58 @@ def push_state(db_path="three_pop/training.db"):
         if lr:
             print(f"  Learning rate: {lr:.3f} (last/first cycles)")
 
-    # 5. Bandwidth tracking — estimate Firebase usage
-    _patch("mamba3/bandwidth", {
-        "last_push_bytes": _bandwidth_bytes,
-        "last_push_at": time.time(),
-        "node": node_id,
+    # 5. Schema + bandwidth + usage stats — always up to date in Firebase
+    # Count total data
+    total_cycles = db.conn.execute("SELECT COUNT(*) FROM cycle_history").fetchone()[0]
+    total_lineage = db.conn.execute("SELECT COUNT(*) FROM lineage").fetchone()[0]
+
+    _patch("mamba3/meta", {
+        "schema": {
+            "nodes": {
+                "desc": "Training nodes with heartbeats",
+                "path": "/mamba3/nodes/{node_id}",
+                "example": {"backends": ["cuda","jit"], "vram_mb": 81079, "status": "online", "last_heartbeat": 1745366400},
+            },
+            "models": {
+                "desc": "Checkpoint catalog — every model available for inference",
+                "path": "/mamba3/models/{task}",
+                "example": {"path": "checkpoints/specialists/parity.pt", "size_kb": 208, "node": "h100-vast-001", "available": True},
+            },
+            "teachers": {
+                "desc": "Graduated specialists — passed confidence gate",
+                "path": "/mamba3/three_pop/teachers/{task}",
+                "example": {"accuracy": 1.0, "cycles": 25, "node": "h100-vast-001", "config": {"d_model": 64, "n_kernel_layers": 3}},
+            },
+            "tasks": {
+                "desc": "Per-task training progress (best accuracy wins across nodes)",
+                "path": "/mamba3/three_pop/tasks/{task}",
+                "example": {"best_accuracy": 0.96, "status": "training", "current_stage": 2, "confidence_score": 0.85, "node": "mac-mini"},
+            },
+            "learning_rate": {
+                "desc": "Meta-learning: cycles-to-mastery per task, speedup ratio",
+                "path": "/mamba3/learning_rate",
+                "example": {"learning_ratio": 0.8, "first_task": "parity", "first_cycles": 25, "last_task": "logic_gate", "last_cycles": 20},
+            },
+        },
+        "usage": {
+            "total_cycles": total_cycles,
+            "total_lineage_entries": total_lineage,
+            "total_teachers": len(teacher_data),
+            "total_models": len(catalog),
+            "total_problems": len(all_status),
+            "node": node_id,
+            "updated_at": time.time(),
+        },
+        "bandwidth": {
+            "last_push_bytes": _bandwidth_bytes,
+            "last_push_at": time.time(),
+            "node": node_id,
+            "estimated_per_push_kb": round(_bandwidth_bytes / 1024, 1),
+            # 2 nodes, ~12 pushes/hour (every round ~5min)
+            "estimated_daily_mb": round(_bandwidth_bytes * 2 * 12 * 24 / (1024 * 1024), 1),
+            "estimated_monthly_gb": round(_bandwidth_bytes * 2 * 12 * 24 * 30 / (1024 * 1024 * 1024), 2),
+            "limit_gb": 10,
+        },
     })
 
     db.close()
