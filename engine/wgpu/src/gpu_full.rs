@@ -35,11 +35,21 @@ pub struct FullGpuModel {
     z_silu_buf: wgpu::Buffer,
     scan_out_buf: wgpu::Buffer,
 
+    // Per-layer weight buffers for SSM prep
+    layer_dt_bias: Vec<wgpu::Buffer>,
+    layer_b_norm_w: Vec<wgpu::Buffer>,
+    layer_b_norm_b: Vec<wgpu::Buffer>,
+    layer_c_norm_w: Vec<wgpu::Buffer>,
+    layer_c_norm_b: Vec<wgpu::Buffer>,
+    layer_d_param: Vec<wgpu::Buffer>,
+
     // Pipelines
     norm_pipeline: wgpu::ComputePipeline,
     norm_layout: wgpu::BindGroupLayout,
     residual_pipeline: wgpu::ComputePipeline,
     residual_layout: wgpu::BindGroupLayout,
+    ssm_prep_pipeline: wgpu::ComputePipeline,
+    ssm_prep_layout: wgpu::BindGroupLayout,
 
     max_seq: usize,
 }
@@ -147,6 +157,40 @@ impl FullGpuModel {
             entry_point: Some("main"), compilation_options: Default::default(), cache: None,
         });
 
+        // SSM prep pipeline (12 bindings: proj, dt_bias, b_norm_w/b, c_norm_w/b, inp, decay, Cp, x_skip, z_silu, params)
+        let prep_shader = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None, source: wgpu::ShaderSource::Wgsl(include_str!("shaders/ssm_prep.wgsl").into()),
+        });
+        let ssm_prep_layout = gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None, entries: &[
+                bgl_ro(0), bgl_ro(1), bgl_ro(2), bgl_ro(3), bgl_ro(4), bgl_ro(5),
+                bgl_rw(6), bgl_rw(7), bgl_rw(8), bgl_rw(9), bgl_rw(10), bgl_u(11),
+            ],
+        });
+        let prep_pl = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None, bind_group_layouts: &[&ssm_prep_layout], push_constant_ranges: &[],
+        });
+        let ssm_prep_pipeline = gpu.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None, layout: Some(&prep_pl), module: &prep_shader,
+            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+        });
+
+        // Per-layer SSM weight buffers
+        let mut layer_dt_bias = Vec::new();
+        let mut layer_b_norm_w = Vec::new();
+        let mut layer_b_norm_b = Vec::new();
+        let mut layer_c_norm_w = Vec::new();
+        let mut layer_c_norm_b = Vec::new();
+        let mut layer_d_param = Vec::new();
+        for layer in &model.layers {
+            layer_dt_bias.push(w(&layer.dt_bias));
+            layer_b_norm_w.push(w(&layer.b_norm_w));
+            layer_b_norm_b.push(w(&layer.b_norm_b));
+            layer_c_norm_w.push(w(&layer.c_norm_w));
+            layer_c_norm_b.push(w(&layer.c_norm_b));
+            layer_d_param.push(w(&layer.d_param));
+        }
+
         eprintln!("  FullGpuModel: {} layers, max_seq={}", model.layers.len(), max_seq);
 
         Self {
@@ -154,18 +198,23 @@ impl FullGpuModel {
             final_norm_w, final_norm_b, layers, x_buf, x_normed_buf,
             logits_buf, staging, inp_buf, decay_buf, cp_buf,
             x_skip_buf, z_silu_buf, scan_out_buf,
+            layer_dt_bias, layer_b_norm_w, layer_b_norm_b,
+            layer_c_norm_w, layer_c_norm_b, layer_d_param,
             norm_pipeline, norm_layout, residual_pipeline, residual_layout,
+            ssm_prep_pipeline, ssm_prep_layout,
             max_seq,
         }
     }
 
-    /// Forward — single command buffer, one readback at the end.
-    /// SSM preprocessing still on CPU (needs RoPE cumsum), but matmuls + norms on GPU.
+    /// Forward — ZERO mid-forward readback. One upload, one download.
+    /// All ops (norm, matmul, SSM prep, scan, residual) run as GPU shaders.
+    /// Single command buffer. Single submit. Single readback.
     pub fn forward(&self, tokens: &[u32]) -> Vec<f32> {
         let l = tokens.len();
         let d = self.cpu_model.d_model;
         let v = self.cpu_model.vocab_size;
         let di = self.cpu_model.d_inner;
+        let nh = self.cpu_model.n_heads as u32;
 
         // Embedding (CPU) + upload
         let mut x = vec![0.0f32; l * d];

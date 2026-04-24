@@ -18,8 +18,8 @@ struct Params {
 pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    pipeline: wgpu::ComputePipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
+    pub pipeline: wgpu::ComputePipeline,
+    pub bind_group_layout: wgpu::BindGroupLayout,
     // Matmul pipeline
     pub matmul_pipeline: wgpu::ComputePipeline,
     pub matmul_layout: wgpu::BindGroupLayout,
