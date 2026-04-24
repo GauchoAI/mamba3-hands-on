@@ -1277,6 +1277,124 @@ extern "C" __launch_bounds__(256, 2) __global__ void mamba3_forward_coop(
     }
 }
 
+// ============================================================================
+//                              TRAINING KERNELS
+// ============================================================================
+
+// ---------- adamw_step ------------------------------------------------------
+// Elementwise AdamW update. Matches mamba3_engine::backward::adamw_step exactly.
+//   p *= 1 - lr*wd
+//   m = β1·m + (1-β1)·g
+//   v = β2·v + (1-β2)·g²
+//   p -= lr · (m/bc1) / (sqrt(v/bc2) + eps)
+// bc1_inv, bc2_inv precomputed on host as 1/(1-β^step).
+// Grid: (ceil(n/256),), Block: (256,)
+extern "C" __global__ void adamw_step(
+    float* __restrict__ params,
+    const float* __restrict__ grads,
+    float* __restrict__ m,
+    float* __restrict__ v,
+    float lr, float beta1, float beta2, float eps, float wd,
+    float bc1_inv, float bc2_inv,
+    int n
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float g = grads[i];
+    float p = params[i] * (1.0f - lr * wd);
+    float mi = __fmaf_rn(1.0f - beta1, g, beta1 * m[i]);
+    float vi = __fmaf_rn(1.0f - beta2, g * g, beta2 * v[i]);
+    m[i] = mi;
+    v[i] = vi;
+    float m_hat = mi * bc1_inv;
+    float v_hat = vi * bc2_inv;
+    params[i] = p - lr * m_hat / (sqrtf(v_hat) + eps);
+}
+
+// ---------- cross_entropy_fwd_bwd ------------------------------------------
+// Per-row softmax with max-subtraction for numerical stability.  Writes:
+//   loss_out[0] += -log(softmax[target]) / L  (atomic across L rows)
+//   d_logits[t, v] = (softmax(t, v) - [v==target]) / L
+// Matches mamba3_engine::backward::cross_entropy_loss.
+// Grid: (L,), Block: (256,) — one block per timestep
+extern "C" __global__ void cross_entropy_fwd_bwd(
+    const float* __restrict__ logits,     // (L, V)
+    const unsigned int* __restrict__ targets,  // (L,)
+    float* __restrict__ d_logits,         // (L, V)
+    float* __restrict__ loss_out,         // (1,) accumulator — caller must zero
+    int L, int V
+) {
+    int t = blockIdx.x;
+    if (t >= L) return;
+    int tid = threadIdx.x;
+    int warp = tid >> 5;
+    int lane = tid & 31;
+    unsigned int target = targets[t];
+
+    __shared__ float s_max;
+    __shared__ float s_sum;
+    __shared__ float warp_buf[8];
+
+    // --- find row max ---
+    float my_max = -3.4028235e38f;
+    for (int v = tid; v < V; v += blockDim.x) {
+        my_max = fmaxf(my_max, logits[t * V + v]);
+    }
+    for (int off = 16; off > 0; off >>= 1) {
+        float other = __shfl_xor_sync(0xffffffff, my_max, off);
+        my_max = fmaxf(my_max, other);
+    }
+    if (lane == 0) warp_buf[warp] = my_max;
+    __syncthreads();
+    if (warp == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        my_max = (lane < nw) ? warp_buf[lane] : -3.4028235e38f;
+        for (int off = 16; off > 0; off >>= 1) {
+            float other = __shfl_xor_sync(0xffffffff, my_max, off);
+            my_max = fmaxf(my_max, other);
+        }
+        if (lane == 0) s_max = my_max;
+    }
+    __syncthreads();
+    float row_max = s_max;
+
+    // --- compute exp, sum, store unnormalized into d_logits ---
+    float my_sum = 0.0f;
+    for (int v = tid; v < V; v += blockDim.x) {
+        float e = __expf(logits[t * V + v] - row_max);
+        d_logits[t * V + v] = e;
+        my_sum += e;
+    }
+    my_sum = warp_reduce_sum(my_sum);
+    if (lane == 0) warp_buf[warp] = my_sum;
+    __syncthreads();
+    if (warp == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        my_sum = (lane < nw) ? warp_buf[lane] : 0.0f;
+        my_sum = warp_reduce_sum(my_sum);
+        if (lane == 0) s_sum = my_sum;
+    }
+    __syncthreads();
+
+    float inv_sum = 1.0f / s_sum;
+    float inv_L = 1.0f / (float)L;
+
+    // --- normalize to softmax, subtract one-hot, scale by 1/L ---
+    for (int v = tid; v < V; v += blockDim.x) {
+        float sm = d_logits[t * V + v] * inv_sum;
+        float g = sm - ((unsigned int)v == target ? 1.0f : 0.0f);
+        d_logits[t * V + v] = g * inv_L;
+    }
+
+    // --- loss contribution for this row ---
+    if (tid == 0) {
+        // pred = exp(logits[target] - max) * inv_sum   (avoids re-reading d_logits after write)
+        float pred = __expf(logits[t * V + target] - row_max) * inv_sum;
+        float contrib = -__logf(pred) * inv_L;
+        atomicAdd(loss_out, contrib);
+    }
+}
+
 // ---------- residual_add ----------------------------------------------------
 // x[i] = x[i] + scale * y[i]
 // Grid: (ceil(n/256),), Block: (256,)

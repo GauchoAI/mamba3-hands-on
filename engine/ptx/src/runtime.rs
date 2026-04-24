@@ -25,6 +25,8 @@ pub struct Kernels {
     pub argmax_f32: CudaFunction,
     pub mamba3_forward_persistent: CudaFunction,
     pub mamba3_forward_coop: CudaFunction,
+    pub adamw_step: CudaFunction,
+    pub cross_entropy_fwd_bwd: CudaFunction,
 }
 
 pub struct PtxContext {
@@ -93,6 +95,8 @@ impl PtxContext {
             argmax_f32: module.load_function("argmax_f32")?,
             mamba3_forward_persistent: module.load_function("mamba3_forward_persistent")?,
             mamba3_forward_coop: module.load_function("mamba3_forward_coop")?,
+            adamw_step: module.load_function("adamw_step")?,
+            cross_entropy_fwd_bwd: module.load_function("cross_entropy_fwd_bwd")?,
         };
 
         Ok(Self {
