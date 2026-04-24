@@ -52,6 +52,17 @@ pub struct FullGpuModel {
     ssm_prep_layout: wgpu::BindGroupLayout,
 
     max_seq: usize,
+
+    // Pre-built bind groups (created once at load, reused every forward)
+    embed_norm_bg: wgpu::BindGroup,
+    final_norm_bg: wgpu::BindGroup,
+    layer_norm_bgs: Vec<wgpu::BindGroup>,
+    layer_in_proj_bgs: Vec<wgpu::BindGroup>,
+    layer_out_proj_bgs: Vec<wgpu::BindGroup>,
+    layer_residual_bgs: Vec<wgpu::BindGroup>,
+    layer_prep_bgs: Vec<wgpu::BindGroup>,
+    layer_scan_bgs: Vec<wgpu::BindGroup>,
+    head_matmul_bg: wgpu::BindGroup,
 }
 
 struct FullGpuLayer {
@@ -191,7 +202,142 @@ impl FullGpuModel {
             layer_d_param.push(w(&layer.d_param));
         }
 
-        eprintln!("  FullGpuModel: {} layers, max_seq={}", model.layers.len(), max_seq);
+        // Pre-build ALL bind groups with WRITABLE params buffers.
+        // Params are updated with actual L via queue.write_buffer each forward.
+        // Bind groups stay valid because they reference the same buffer objects.
+        let l = max_seq as u32; // Params init value — overwritten each forward
+        let d32 = d as u32;
+        let di32 = di as u32;
+        let v32 = v as u32;
+        let nh32 = nh as u32;
+        let hd32 = hd as u32;
+        let ds32 = ds as u32;
+
+        let mk_norm_bg = |x: &wgpu::Buffer, ww: &wgpu::Buffer, bb: &wgpu::Buffer, seq: u32, dim: u32| -> wgpu::BindGroup {
+            #[repr(C)]
+            #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+            struct NP { s: u32, d: u32, _0: u32, _1: u32 }
+            let pb = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None, contents: bytemuck::bytes_of(&NP { s: seq, d: dim, _0: 0, _1: 0 }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &norm_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: x.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: ww.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: bb.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: pb.as_entire_binding() },
+                ],
+            })
+        };
+
+        let mk_matmul_bg = |a: &wgpu::Buffer, b: &wgpu::Buffer, c: &wgpu::Buffer, m: u32, k: u32, n: u32| -> wgpu::BindGroup {
+            #[repr(C)]
+            #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+            struct MP { m: u32, k: u32, n: u32, _pad: u32 }
+            let pb = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None, contents: bytemuck::bytes_of(&MP { m, k, n, _pad: 0 }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &gpu.matmul_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: a.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: b.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: c.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: pb.as_entire_binding() },
+                ],
+            })
+        };
+
+        let mk_res_bg = |x: &wgpu::Buffer, y: &wgpu::Buffer, n: u32, scale: f32| -> wgpu::BindGroup {
+            #[repr(C)]
+            #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+            struct RP { n: u32, sb: u32, _0: u32, _1: u32 }
+            let pb = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None, contents: bytemuck::bytes_of(&RP { n, sb: scale.to_bits(), _0: 0, _1: 0 }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &residual_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: x.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: y.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: pb.as_entire_binding() },
+                ],
+            })
+        };
+
+        let embed_norm_bg = mk_norm_bg(&x_buf, &embed_norm_w, &embed_norm_b, l, d32);
+        let final_norm_bg = mk_norm_bg(&x_buf, &final_norm_w, &final_norm_b, l, d32);
+        let head_matmul_bg = mk_matmul_bg(&x_buf, &embed_w, &logits_buf, l, d32, v32);
+
+        let mut layer_norm_bgs = Vec::new();
+        let mut layer_in_proj_bgs = Vec::new();
+        let mut layer_out_proj_bgs = Vec::new();
+        let mut layer_residual_bgs = Vec::new();
+        let mut layer_prep_bgs = Vec::new();
+        let mut layer_scan_bgs = Vec::new();
+
+        for (li, gl) in layers.iter().enumerate() {
+            layer_norm_bgs.push(mk_norm_bg(&x_normed_buf, &gl.norm_w, &gl.norm_b, l, d32));
+            layer_in_proj_bgs.push(mk_matmul_bg(&x_normed_buf, &gl.in_proj_w, &gl.proj_buf, l, d32, gl.d_in_proj as u32));
+            layer_out_proj_bgs.push(mk_matmul_bg(&scan_out_buf, &gl.out_proj_w, &gl.y_out_buf, l, di32, d32));
+            layer_residual_bgs.push(mk_res_bg(&x_buf, &gl.y_out_buf, l * d32, gl.scale));
+
+            // SSM prep bind group
+            #[repr(C)]
+            #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+            struct PP { l: u32, di: u32, ds: u32, nh: u32, hd: u32, dip: u32, na: u32, _p: u32 }
+            let pp = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None, contents: bytemuck::bytes_of(&PP {
+                    l, di: di32, ds: ds32, nh: nh32, hd: hd32, dip: gl.d_in_proj as u32, na: ds32 / 2, _p: 0
+                }), usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            layer_prep_bgs.push(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &ssm_prep_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: gl.proj_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: layer_dt_bias[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: layer_b_norm_w[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: layer_b_norm_b[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 4, resource: layer_c_norm_w[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 5, resource: layer_c_norm_b[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 6, resource: inp_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 7, resource: decay_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 8, resource: cp_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 9, resource: x_skip_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 10, resource: z_silu_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 11, resource: pp.as_entire_binding() },
+                ],
+            }));
+
+            // SSM scan bind group
+            #[repr(C)]
+            #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+            struct SP { b: u32, l: u32, h: u32, hd: u32, ds: u32 }
+            let sp = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None, contents: bytemuck::bytes_of(&SP { b: 1, l, h: nh32, hd: hd32, ds: ds32 }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            layer_scan_bgs.push(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &gpu.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: inp_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: decay_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: cp_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: x_skip_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 4, resource: z_silu_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 5, resource: layer_d_param[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 6, resource: scan_out_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 7, resource: sp.as_entire_binding() },
+                ],
+            }));
+        }
+
+        eprintln!("  FullGpuModel: {} layers, max_seq={}, pre-built {} bind groups",
+            model.layers.len(), max_seq, 2 + layers.len() * 6 + 1);
 
         Self {
             cpu_model: model, gpu, embed_w, embed_norm_w, embed_norm_b,
@@ -203,6 +349,9 @@ impl FullGpuModel {
             norm_pipeline, norm_layout, residual_pipeline, residual_layout,
             ssm_prep_pipeline, ssm_prep_layout,
             max_seq,
+            embed_norm_bg, final_norm_bg, head_matmul_bg,
+            layer_norm_bgs, layer_in_proj_bgs, layer_out_proj_bgs,
+            layer_residual_bgs, layer_prep_bgs, layer_scan_bgs,
         }
     }
 
@@ -231,36 +380,71 @@ impl FullGpuModel {
         // === SINGLE COMMAND BUFFER - ENTIRE FORWARD ===
         let mut enc = self.gpu.device.create_command_encoder(&Default::default());
 
-        // Embed norm
-        self.encode_norm(&mut enc, &self.x_buf, &self.embed_norm_w, &self.embed_norm_b, l as u32, d as u32);
+        // Note: pre-built bind groups use max_seq for params.
+        // Dispatch with actual l — excess workgroups exit early via bounds check in shader.
+        let l32 = l as u32;
 
-        // All layers - zero readback between them
-        for (li, gl) in self.layers.iter().enumerate() {
+        // Embed norm
+        { let mut pass = enc.begin_compute_pass(&Default::default());
+          pass.set_pipeline(&self.norm_pipeline);
+          pass.set_bind_group(0, &self.embed_norm_bg, &[]);
+          pass.dispatch_workgroups(l32, 1, 1); }
+
+        // All layers — pre-built bind groups, zero creation
+        let tile = 16u32;
+        for li in 0..self.layers.len() {
+            let gl = &self.layers[li];
             let dip = gl.d_in_proj as u32;
 
-            // Pre-norm: copy x to x_normed, norm in-place
+            // Copy x → x_normed
             enc.copy_buffer_to_buffer(&self.x_buf, 0, &self.x_normed_buf, 0, (l * d * 4) as u64);
-            self.encode_norm(&mut enc, &self.x_normed_buf, &gl.norm_w, &gl.norm_b, l as u32, d as u32);
 
-            // In-proj matmul (GPU)
-            self.encode_matmul(&mut enc, &self.x_normed_buf, &gl.in_proj_w, &gl.proj_buf, l as u32, d as u32, dip);
+            // Pre-norm
+            { let mut pass = enc.begin_compute_pass(&Default::default());
+              pass.set_pipeline(&self.norm_pipeline);
+              pass.set_bind_group(0, &self.layer_norm_bgs[li], &[]);
+              pass.dispatch_workgroups(l as u32, 1, 1); }
 
-            // SSM prep (GPU shader: split, norm B/C, RoPE, outer product, trapezoidal)
-            self.encode_ssm_prep(&mut enc, &gl.proj_buf, li, l as u32);
+            // In-proj matmul
+            { let mut pass = enc.begin_compute_pass(&Default::default());
+              pass.set_pipeline(&self.gpu.matmul_pipeline);
+              pass.set_bind_group(0, &self.layer_in_proj_bgs[li], &[]);
+              pass.dispatch_workgroups((l as u32 + tile - 1) / tile, (dip + tile - 1) / tile, 1); }
 
-            // SSM scan (GPU shader)
-            self.encode_ssm_scan(&mut enc, li, l as u32);
+            // SSM prep
+            { let mut pass = enc.begin_compute_pass(&Default::default());
+              pass.set_pipeline(&self.ssm_prep_pipeline);
+              pass.set_bind_group(0, &self.layer_prep_bgs[li], &[]);
+              pass.dispatch_workgroups(nh, 1, 1); }
 
-            // Out-proj matmul (GPU)
-            self.encode_matmul(&mut enc, &self.scan_out_buf, &gl.out_proj_w, &gl.y_out_buf, l as u32, di as u32, d as u32);
+            // SSM scan
+            { let mut pass = enc.begin_compute_pass(&Default::default());
+              pass.set_pipeline(&self.gpu.pipeline);
+              pass.set_bind_group(0, &self.layer_scan_bgs[li], &[]);
+              pass.dispatch_workgroups(nh, 1, 1); }
 
-            // Residual: x += scale * y_out (GPU)
-            self.encode_residual(&mut enc, &self.x_buf, &gl.y_out_buf, (l * d) as u32, gl.scale);
+            // Out-proj matmul
+            { let mut pass = enc.begin_compute_pass(&Default::default());
+              pass.set_pipeline(&self.gpu.matmul_pipeline);
+              pass.set_bind_group(0, &self.layer_out_proj_bgs[li], &[]);
+              pass.dispatch_workgroups((l as u32 + tile - 1) / tile, (d as u32 + tile - 1) / tile, 1); }
+
+            // Residual
+            { let mut pass = enc.begin_compute_pass(&Default::default());
+              pass.set_pipeline(&self.residual_pipeline);
+              pass.set_bind_group(0, &self.layer_residual_bgs[li], &[]);
+              pass.dispatch_workgroups(((l * d) as u32 + 255) / 256, 1, 1); }
         }
 
-        // Final norm + LM head
-        self.encode_norm(&mut enc, &self.x_buf, &self.final_norm_w, &self.final_norm_b, l as u32, d as u32);
-        self.encode_matmul(&mut enc, &self.x_buf, &self.embed_w, &self.logits_buf, l as u32, d as u32, v as u32);
+        // Final norm + LM head — pre-built
+        { let mut pass = enc.begin_compute_pass(&Default::default());
+          pass.set_pipeline(&self.norm_pipeline);
+          pass.set_bind_group(0, &self.final_norm_bg, &[]);
+          pass.dispatch_workgroups(l as u32, 1, 1); }
+        { let mut pass = enc.begin_compute_pass(&Default::default());
+          pass.set_pipeline(&self.gpu.matmul_pipeline);
+          pass.set_bind_group(0, &self.head_matmul_bg, &[]);
+          pass.dispatch_workgroups((l as u32 + tile - 1) / tile, (v as u32 + tile - 1) / tile, 1); }
 
         // === THE ONLY READBACK ===
         enc.copy_buffer_to_buffer(&self.logits_buf, 0, &self.staging, 0, (l * v * 4) as u64);
@@ -282,7 +466,7 @@ impl FullGpuModel {
         struct P { l: u32, di: u32, ds: u32, nh: u32, hd: u32, dip: u32, na: u32, _p: u32 }
         let p = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None, contents: bytemuck::bytes_of(&P { l, di, ds, nh, hd, dip, na, _p: 0 }),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let bg = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None, layout: &self.ssm_prep_layout,
@@ -316,7 +500,7 @@ impl FullGpuModel {
         struct SP { b: u32, l: u32, h: u32, hd: u32, ds: u32 }
         let p = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None, contents: bytemuck::bytes_of(&SP { b: 1, l, h: nh, hd, ds }),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let bg = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None, layout: &self.gpu.bind_group_layout,
@@ -343,7 +527,7 @@ impl FullGpuModel {
         struct P { seq_len: u32, d: u32, _p0: u32, _p1: u32 }
         let p = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None, contents: bytemuck::bytes_of(&P { seq_len, d, _p0: 0, _p1: 0 }),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let bg = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None, layout: &self.norm_layout,
@@ -366,7 +550,7 @@ impl FullGpuModel {
         struct P { m: u32, k: u32, n: u32, _pad: u32 }
         let p = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None, contents: bytemuck::bytes_of(&P { m, k, n, _pad: 0 }),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let bg = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None, layout: &self.gpu.matmul_layout,
@@ -390,7 +574,7 @@ impl FullGpuModel {
         struct P { n: u32, scale_bits: u32, _p1: u32, _p2: u32 }
         let p = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None, contents: bytemuck::bytes_of(&P { n, scale_bits: scale.to_bits(), _p1: 0, _p2: 0 }),
-            usage: wgpu::BufferUsages::UNIFORM,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let bg = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None, layout: &self.residual_layout,
