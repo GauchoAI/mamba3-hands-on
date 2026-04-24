@@ -413,7 +413,7 @@ extern "C" __global__ void argmax_f32(
     __shared__ float smax[32];
     __shared__ int sidx[32];
 
-    float local_max = -INFINITY;
+    float local_max = -3.4028235e38f;  // -FLT_MAX (INFINITY macro unavailable in NVRTC)
     int local_idx = 0;
     for (int v = tid; v < V; v += blockDim.x) {
         float val = logits[t * V + v];
@@ -441,7 +441,7 @@ extern "C" __global__ void argmax_f32(
 
     if (warp == 0) {
         int nwarps = blockDim.x / 32;
-        float mv = (lane < nwarps) ? smax[lane] : -INFINITY;
+        float mv = (lane < nwarps) ? smax[lane] : -3.4028235e38f;
         int mi = (lane < nwarps) ? sidx[lane] : 0;
         for (int off = 16; off > 0; off >>= 1) {
             float other_mv = __shfl_xor_sync(0xffffffff, mv, off);
