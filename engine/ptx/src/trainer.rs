@@ -30,6 +30,10 @@ pub struct PtxTrainer {
     pub v_d_param: Vec<CudaSlice<f32>>,
     pub m_dt_bias: Vec<CudaSlice<f32>>,
     pub v_dt_bias: Vec<CudaSlice<f32>>,
+    pub m_layer_norm_w: Vec<CudaSlice<f32>>,
+    pub v_layer_norm_w: Vec<CudaSlice<f32>>,
+    pub m_layer_norm_b: Vec<CudaSlice<f32>>,
+    pub v_layer_norm_b: Vec<CudaSlice<f32>>,
 
     pub step: u32,
     pub lr: f32,
@@ -67,6 +71,10 @@ impl PtxTrainer {
         let mut v_d_param = Vec::with_capacity(nl);
         let mut m_dt_bias = Vec::with_capacity(nl);
         let mut v_dt_bias = Vec::with_capacity(nl);
+        let mut m_layer_norm_w = Vec::with_capacity(nl);
+        let mut v_layer_norm_w = Vec::with_capacity(nl);
+        let mut m_layer_norm_b = Vec::with_capacity(nl);
+        let mut v_layer_norm_b = Vec::with_capacity(nl);
         for _ in 0..nl {
             m_in_proj.push(stream.alloc_zeros::<f32>(dip * d)?);
             v_in_proj.push(stream.alloc_zeros::<f32>(dip * d)?);
@@ -76,6 +84,10 @@ impl PtxTrainer {
             v_d_param.push(stream.alloc_zeros::<f32>(nh)?);
             m_dt_bias.push(stream.alloc_zeros::<f32>(nh)?);
             v_dt_bias.push(stream.alloc_zeros::<f32>(nh)?);
+            m_layer_norm_w.push(stream.alloc_zeros::<f32>(d)?);
+            v_layer_norm_w.push(stream.alloc_zeros::<f32>(d)?);
+            m_layer_norm_b.push(stream.alloc_zeros::<f32>(d)?);
+            v_layer_norm_b.push(stream.alloc_zeros::<f32>(d)?);
         }
         let m_fnorm_w = stream.alloc_zeros::<f32>(d)?;
         let v_fnorm_w = stream.alloc_zeros::<f32>(d)?;
@@ -92,6 +104,8 @@ impl PtxTrainer {
             m_fnorm_b, v_fnorm_b,
             m_d_param, v_d_param,
             m_dt_bias, v_dt_bias,
+            m_layer_norm_w, v_layer_norm_w,
+            m_layer_norm_b, v_layer_norm_b,
             step: 0,
             lr,
             weight_decay,
@@ -266,6 +280,19 @@ impl PtxTrainer {
             // dt_bias optimizer disabled (see note in layer_backward).
             let _ = &self.m_dt_bias[li];
             let _ = &self.v_dt_bias[li];
+            // Per-layer pre-norm weights
+            launch_adamw(&stream, &ptx,
+                &mut layer.layer_norm_w, &self.train_scratch.d_layer_norm_w[li],
+                &mut self.m_layer_norm_w[li], &mut self.v_layer_norm_w[li],
+                self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+                d,
+            )?;
+            launch_adamw(&stream, &ptx,
+                &mut layer.layer_norm_b, &self.train_scratch.d_layer_norm_b[li],
+                &mut self.m_layer_norm_b[li], &mut self.v_layer_norm_b[li],
+                self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+                d,
+            )?;
         }
         // Final norm
         launch_adamw(&stream, &ptx,
@@ -321,6 +348,8 @@ impl PtxTrainer {
             zero(&mut self.train_scratch.d_out_proj_w[li], d * di)?;
             zero(&mut self.train_scratch.d_d_param[li], nh)?;
             zero(&mut self.train_scratch.d_dt_bias[li], nh)?;
+            zero(&mut self.train_scratch.d_layer_norm_w[li], d)?;
+            zero(&mut self.train_scratch.d_layer_norm_b[li], d)?;
         }
         // d_x, d_y_out, d_y_inner, d_y_pregate, d_scan_inp, d_proj are fully
         // overwritten each layer; only d_proj needs zeroing as backward
@@ -525,18 +554,47 @@ impl PtxTrainer {
             };
             unsafe { lb.launch(cfg)? };
         }
-        // d_x_from_layer into d_y_out (reusing buffer)
+        // d_x_normed = d_proj @ in_proj_w  (L, dip) × (dip, d) → (L, d)
+        // Write into d_y_out (reused as temp).
         let in_proj_w_ref: &CudaSlice<f32> = &self.model.layers[li].in_proj_w;
         launch_matmul_ab(stream, ptx,
             &self.train_scratch.d_proj,
             in_proj_w_ref,
-            &mut self.train_scratch.d_y_out,  // temp
+            &mut self.train_scratch.d_y_out,
             l, d, dip,
         )?;
 
-        // Step H: residual combine: d_x = d_residual + scale * d_x_from_layer
-        // d_x already holds d_residual (the input). Add scale * d_y_out to it.
-        launch_residual_add(stream, ptx, &mut self.train_scratch.d_x, &self.train_scratch.d_y_out, scale, l * d)?;
+        // Step G.5: pre-layer-norm backward.
+        // In: d_y_out (d_x_normed), x_in = layer_inputs[li], w = layer_norm_w
+        // Out: d_x_in written into first l*d slots of d_proj (scratch reuse);
+        //      d_layer_norm_w[li], d_layer_norm_b[li] accumulated via atomicAdd.
+        {
+            let input_off = li * self.train_scratch.layer_input_stride;
+            let input_len = l * d;
+            let x_in_view = self.train_scratch.layer_inputs.slice(input_off..input_off + input_len);
+            let ln_w_ref: &CudaSlice<f32> = &self.model.layers[li].layer_norm_w;
+            let l_i = l as i32;
+            let d_i = d as i32;
+            let mut lb = stream.launch_builder(&ptx.k.layer_norm_bwd);
+            lb.arg(&self.train_scratch.d_y_out);       // d_out = d_x_normed
+            lb.arg(&x_in_view);                        // x = x_in (pre-LN)
+            lb.arg(ln_w_ref);                          // w = layer_norm_w
+            lb.arg(&mut self.train_scratch.d_proj);    // d_x written into first l*d slots
+            lb.arg(&mut self.train_scratch.d_layer_norm_w[li]);
+            lb.arg(&mut self.train_scratch.d_layer_norm_b[li]);
+            lb.arg(&l_i);
+            lb.arg(&d_i);
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (64, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+
+        // Step H: residual combine: d_x = d_residual + scale * d_x_in
+        // d_x_in is now in first l*d slots of d_proj.
+        launch_residual_add(stream, ptx, &mut self.train_scratch.d_x, &self.train_scratch.d_proj, scale, l * d)?;
 
         Ok(())
     }
