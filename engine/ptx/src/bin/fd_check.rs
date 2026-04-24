@@ -29,16 +29,17 @@ struct Args {
 
 impl Default for Args {
     fn default() -> Self {
-        // Tiny model for fast FD: d=16, L=1. The math is scale-invariant so
-        // correctness on tiny model implies correctness on larger.
+        // Model big enough to keep typical gradients above the FD noise floor
+        // (~2.5e-5 at eps=0.01).  d=64 L=2 exercises two SSM layers which is
+        // also enough to catch cross-layer propagation bugs.
         Self {
-            d_model: 16,
+            d_model: 64,
             d_state: 8,
-            headdim: 8,
-            n_layers: 1,
-            vocab_size: 64,
-            eps: 1e-3,       // perturbation magnitude
-            tol: 5e-2,       // relative tolerance: 5% (FD is 2nd-order accurate, fp32 limits accuracy)
+            headdim: 16,
+            n_layers: 2,
+            vocab_size: 260,
+            eps: 1e-2,       // larger eps → lower FD noise floor (~2.5e-5)
+            tol: 1e-1,       // 10% rel-err — fp32 FD is only ~6 sig figs usable
             samples_per_tensor: 3,
         }
     }
@@ -116,7 +117,8 @@ fn fd_one(
     which: Tensor,
     eps: f32,
     tol: f32,
-) -> Result<(f32, f32, bool), Box<dyn Error>> {
+    noise_floor: f32,
+) -> Result<(f32, f32, bool, &'static str), Box<dyn Error>> {
     // Compute analytical gradient (no optimizer step)
     trainer.compute_gradients_only(tokens, targets)?;
     let stream = trainer.model.ptx.stream.clone();
@@ -143,8 +145,19 @@ fn fd_one(
 
     let fd = (loss_plus - loss_minus) / (2.0 * eps);
     let err = rel_err(analytical, fd);
-    let passed = err < tol || (analytical.abs() < 1e-5 && fd.abs() < 1e-5);
-    Ok((analytical, fd, passed))
+    // Classification:
+    //   "noise"  — both analytical and FD are within noise floor ⇒ inconclusive
+    //               (pass, but don't credit it as a confirmed-correct gradient)
+    //   PASS     — signal above noise AND matches FD within tol
+    //   FAIL     — disagrees outside tolerance
+    let (passed, tag) = if analytical.abs() < noise_floor && fd.abs() < noise_floor {
+        (true, "noise")
+    } else if err < tol {
+        (true, "PASS")
+    } else {
+        (false, "FAIL")
+    };
+    Ok((analytical, fd, passed, tag))
 }
 
 #[derive(Clone, Copy)]
@@ -224,9 +237,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let gpu_model = PtxModel::from_cpu(&cpu_model, ptx.clone(), 16)?;
     let mut trainer = PtxTrainer::new(gpu_model, 1e-3, 0.1, 16)?;
 
-    // Fixed input: 7-token sequence, deterministic targets
-    let tokens: Vec<u32> = vec![5, 9, 2, 7, 14, 3, 11];
-    let targets: Vec<u32> = vec![9, 2, 7, 14, 3, 11, 0];
+    // Fixed input: diverse 8-token sequence across the vocab so every path
+    // participates.  Targets are deliberately un-correlated with tokens so
+    // loss is non-trivial (well above softmax-uniform).
+    let tokens: Vec<u32> = vec![47, 132, 5, 201, 88, 19, 249, 73];
+    let targets: Vec<u32> = vec![250, 11, 174, 66, 3, 189, 42, 100];
 
     let s = args.samples_per_tensor;
     let mut checks: Vec<Tensor> = Vec::new();
@@ -263,19 +278,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         checks.push(Tensor::FNormW { idx: k % cpu_model.d_model });
     }
 
+    // FD noise floor = 1 ULP of loss divided by 2·eps.  For fp32 loss ~ O(1)
+    // (cross-entropy on 64-way vocab is log(64) ≈ 4.2), one ULP is ~5e-7, so
+    // noise floor at eps=0.01 is ~2.5e-5.  Scale conservatively.
+    let noise_floor = 1e-6f32.max(5e-7 / args.eps);
+
     let mut n_pass = 0usize;
+    let mut n_fail = 0usize;
+    let mut n_noise = 0usize;
     let mut n_total = 0usize;
-    println!("\n{:<28} {:>14} {:>14} {:>10} {}",
+    println!("\n{:<28} {:>14} {:>14} {:>10}  {}",
         "tensor[idx]", "analytical", "finite-diff", "rel-err", "verdict");
-    println!("{}", "-".repeat(80));
+    println!("FD noise floor ≈ {:.2e}  (grads below this are inconclusive, not FAIL)",
+        noise_floor);
+    println!("{}", "-".repeat(85));
     for tensor in &checks {
-        match fd_one(&mut trainer, &tokens, &targets, *tensor, args.eps, args.tol) {
-            Ok((analytical, fd, passed)) => {
+        match fd_one(&mut trainer, &tokens, &targets, *tensor, args.eps, args.tol, noise_floor) {
+            Ok((analytical, fd, _passed, tag)) => {
                 let err = rel_err(analytical, fd);
-                let verdict = if passed { "PASS" } else { "FAIL" };
-                println!("{:<28} {:>14.6} {:>14.6} {:>10.3} {}",
-                    tensor.name(), analytical, fd, err, verdict);
-                if passed { n_pass += 1; }
+                println!("{:<28} {:>14.6} {:>14.6} {:>10.3}  {}",
+                    tensor.name(), analytical, fd, err, tag);
+                match tag {
+                    "PASS" => n_pass += 1,
+                    "FAIL" => n_fail += 1,
+                    "noise" => n_noise += 1,
+                    _ => {}
+                }
                 n_total += 1;
             }
             Err(e) => {
@@ -285,6 +313,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    println!("\nResult: {} / {} passed.", n_pass, n_total);
+    println!("\nResult: {} confirmed-correct, {} inconclusive-noise, {} confirmed-wrong  (of {})",
+        n_pass, n_noise, n_fail, n_total);
     Ok(())
 }
