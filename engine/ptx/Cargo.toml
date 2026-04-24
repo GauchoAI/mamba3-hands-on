@@ -16,6 +16,10 @@ path = "src/bin/main.rs"
 name = "test-train-kernels"
 path = "src/bin/test_train_kernels.rs"
 
+[[bin]]
+name = "test-forward-cached"
+path = "src/bin/test_forward_cached.rs"
+
 [dependencies]
 mamba3-engine = { path = "../wgpu" }
 cudarc = { version = "0.16", default-features = false, features = ["std", "driver", "nvrtc", "cuda-version-from-build-system", "dynamic-linking"] }

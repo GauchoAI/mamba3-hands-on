@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use crate::runtime::PtxContext;
 use crate::scratch::PtxScratch;
+use crate::train_scratch::TrainScratch;
 
 pub struct PtxLayer {
     pub in_proj_w: CudaSlice<f32>,
@@ -225,6 +226,333 @@ impl PtxModel {
             + l * d                      // y_out
             + block;                     // reduce_buf sized to block
         (floats * 4) as u32
+    }
+
+    /// Forward pass that also persists per-layer activations for backward.
+    /// Writes into `train_scratch.layer_*` and `train_scratch.x_before_head`.
+    /// Produces logits bit-identical to `forward()`.
+    pub fn forward_cached(
+        &self,
+        tokens: &[u32],
+        train_scratch: &mut TrainScratch,
+    ) -> Result<Vec<f32>, Box<dyn Error>> {
+        let stream = self.ptx.stream.clone();
+        let l = tokens.len();
+        let d = self.d_model;
+        let di = self.d_inner;
+        let ds = self.d_state;
+        let hd = self.headdim;
+        let nh = self.n_heads;
+        let v = self.vocab_size;
+
+        self.upload_tokens(&stream, tokens)?;
+
+        let mut scratch_ref = self.scratch.borrow_mut();
+        let scratch: &mut PtxScratch = &mut *scratch_ref;
+
+        // 1. Embed gather into scratch.x
+        {
+            let l_i = l as i32;
+            let d_i = d as i32;
+            let v_i = v as i32;
+            let mut lb = stream.launch_builder(&self.ptx.k.embed_gather);
+            lb.arg(&scratch.tokens);
+            lb.arg(&self.embed_w);
+            lb.arg(&mut scratch.x);
+            lb.arg(&l_i);
+            lb.arg(&d_i);
+            lb.arg(&v_i);
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (32, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+        // 2. Embed norm in-place
+        launch_layer_norm(
+            &stream, &self.ptx,
+            &mut scratch.x, &self.embed_norm_w, &self.embed_norm_b, l, d,
+        )?;
+
+        // 3. Layers
+        for (li, layer) in self.layers.iter().enumerate() {
+            // 3a. Save x INTO this layer → train_scratch.layer_inputs[li]
+            {
+                let off = li * train_scratch.layer_input_stride;
+                let n_copy = l * d;
+                let src = scratch.x.slice(0..n_copy);
+                let mut dst = train_scratch.layer_inputs.slice_mut(off..off + n_copy);
+                let n_i = n_copy as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+                lb.arg(&src);
+                lb.arg(&mut dst);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((n_copy as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+
+            // 3b. Copy x -> x_normed, pre-norm
+            {
+                let n_i = (l * d) as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+                lb.arg(&scratch.x);
+                lb.arg(&mut scratch.x_normed);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: (((l * d) as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+            launch_layer_norm(
+                &stream, &self.ptx,
+                &mut scratch.x_normed, &layer.layer_norm_w, &layer.layer_norm_b, l, d,
+            )?;
+
+            // 3c. in_proj matmul → DIRECTLY into train_scratch.layer_projs[li]
+            let dip = layer.d_in_proj;
+            let proj_off = li * train_scratch.layer_proj_stride;
+            let proj_len = l * dip;
+            let mut proj_dst = train_scratch.layer_projs.slice_mut(proj_off..proj_off + proj_len);
+            {
+                let m_i = l as i32;
+                let n_i = dip as i32;
+                let k_i = d as i32;
+                let func = if d % 16 == 0 { &self.ptx.k.matmul_t_tiled } else { &self.ptx.k.matmul_t };
+                let mut lb = stream.launch_builder(func);
+                lb.arg(&scratch.x_normed);
+                lb.arg(&layer.in_proj_w);
+                lb.arg(&mut proj_dst);
+                lb.arg(&m_i);
+                lb.arg(&n_i);
+                lb.arg(&k_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((dip as u32 + 15) / 16, (l as u32 + 15) / 16, 1),
+                    block_dim: (16, 16, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+            // From here on we read proj FROM train_scratch.layer_projs[li].
+            let proj_view = train_scratch.layer_projs.slice(proj_off..proj_off + proj_len);
+
+            // 3d. Fused SSM params + dt_mean
+            {
+                let l_i = l as i32;
+                let h_i = nh as i32;
+                let dip_i = dip as i32;
+                let di_i = di as i32;
+                let ds_i = ds as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.compute_ssm_params_and_dt_mean);
+                lb.arg(&proj_view);
+                lb.arg(&layer.dt_bias);
+                lb.arg(&mut scratch.dt);
+                lb.arg(&mut scratch.decay);
+                lb.arg(&mut scratch.trap);
+                lb.arg(&mut scratch.dt_mean);
+                lb.arg(&l_i); lb.arg(&h_i); lb.arg(&dip_i); lb.arg(&di_i); lb.arg(&ds_i);
+                let cfg = LaunchConfig {
+                    grid_dim: (l as u32, 1, 1),
+                    block_dim: (32, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+
+            // 3e. phase (sequential)
+            let n_angles = layer.num_rope_angles;
+            {
+                let l_i = l as i32;
+                let na_i = n_angles as i32;
+                let dip_i = dip as i32;
+                let di_i = di as i32;
+                let ds_i = ds as i32;
+                let h_i = nh as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.compute_phase);
+                lb.arg(&proj_view);
+                lb.arg(&scratch.dt_mean);
+                lb.arg(&mut scratch.phase);
+                lb.arg(&l_i); lb.arg(&na_i); lb.arg(&dip_i); lb.arg(&di_i); lb.arg(&ds_i); lb.arg(&h_i);
+                let cfg = LaunchConfig {
+                    grid_dim: (1, 1, 1),
+                    block_dim: (n_angles.max(1) as u32, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+
+            // 3f. extract bp, cp from proj_view
+            {
+                let l_i = l as i32;
+                let ds_i = ds as i32;
+                let di_i = di as i32;
+                let dip_i = dip as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.extract_bp_cp);
+                lb.arg(&proj_view);
+                lb.arg(&mut scratch.bp);
+                lb.arg(&mut scratch.cp);
+                lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&di_i); lb.arg(&dip_i);
+                let cfg = LaunchConfig {
+                    grid_dim: (l as u32, 1, 1),
+                    block_dim: (32, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+            launch_layer_norm(&stream, &self.ptx, &mut scratch.bp, &layer.b_norm_w, &layer.b_norm_b, l, ds)?;
+            launch_layer_norm(&stream, &self.ptx, &mut scratch.cp, &layer.c_norm_w, &layer.c_norm_b, l, ds)?;
+            launch_apply_rope(&stream, &self.ptx, &mut scratch.bp, &scratch.phase, l, ds, n_angles)?;
+            launch_apply_rope(&stream, &self.ptx, &mut scratch.cp, &scratch.phase, l, ds, n_angles)?;
+
+            // 3g. Save cp (post LN+RoPE) and decay for backward
+            {
+                let cp_off = li * train_scratch.layer_cp_stride;
+                let cp_len = l * ds;
+                let mut dst = train_scratch.layer_cps.slice_mut(cp_off..cp_off + cp_len);
+                let src = scratch.cp.slice(0..cp_len);
+                let n_i = cp_len as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+                lb.arg(&src);
+                lb.arg(&mut dst);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((cp_len as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+            {
+                let d_off = li * train_scratch.layer_decay_stride;
+                let d_len = l * nh;
+                let mut dst = train_scratch.layer_decays.slice_mut(d_off..d_off + d_len);
+                let src = scratch.decay.slice(0..d_len);
+                let n_i = d_len as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+                lb.arg(&src);
+                lb.arg(&mut dst);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((d_len as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+
+            // 3h. ssm_scan_cached — writes y_inner AND states to per-layer buffers
+            let y_off = li * train_scratch.layer_yinner_stride;
+            let y_len = l * nh * hd; // == l * di
+            let states_off = li * train_scratch.layer_states_stride;
+            let states_len = (l + 1) * nh * hd * ds;
+            let mut y_dst = train_scratch.layer_y_inners.slice_mut(y_off..y_off + y_len);
+            let mut states_dst = train_scratch.layer_states.slice_mut(states_off..states_off + states_len);
+            {
+                let l_i = l as i32;
+                let h_i = nh as i32;
+                let hd_i = hd as i32;
+                let ds_i = ds as i32;
+                let di_i = di as i32;
+                let dip_i = dip as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.ssm_scan_cached);
+                lb.arg(&proj_view);
+                lb.arg(&scratch.bp);
+                lb.arg(&scratch.cp);
+                lb.arg(&scratch.dt);
+                lb.arg(&scratch.decay);
+                lb.arg(&scratch.trap);
+                lb.arg(&layer.d_param);
+                lb.arg(&mut y_dst);
+                lb.arg(&mut states_dst);
+                lb.arg(&l_i); lb.arg(&h_i); lb.arg(&hd_i); lb.arg(&ds_i); lb.arg(&di_i); lb.arg(&dip_i);
+                let smem_bytes = ((hd * ds) + hd) as u32 * 4;
+                let cfg = LaunchConfig {
+                    grid_dim: (nh as u32, 1, 1),
+                    block_dim: ((hd * ds) as u32, 1, 1),
+                    shared_mem_bytes: smem_bytes,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+
+            // 3i. out_proj matmul: reads layer_y_inners[li], writes scratch.y_out
+            {
+                let m_i = l as i32;
+                let n_i = d as i32;
+                let k_i = di as i32;
+                let func = if di % 16 == 0 { &self.ptx.k.matmul_t_tiled } else { &self.ptx.k.matmul_t };
+                let y_src = train_scratch.layer_y_inners.slice(y_off..y_off + y_len);
+                let mut lb = stream.launch_builder(func);
+                lb.arg(&y_src);
+                lb.arg(&layer.out_proj_w);
+                lb.arg(&mut scratch.y_out);
+                lb.arg(&m_i);
+                lb.arg(&n_i);
+                lb.arg(&k_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((d as u32 + 15) / 16, (l as u32 + 15) / 16, 1),
+                    block_dim: (16, 16, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+
+            // 3j. residual: scratch.x += scale * y_out
+            {
+                let n_i = (l * d) as i32;
+                let scale_f = layer.scale;
+                let mut lb = stream.launch_builder(&self.ptx.k.residual_add);
+                lb.arg(&mut scratch.x);
+                lb.arg(&scratch.y_out);
+                lb.arg(&scale_f);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: (((l * d) as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+        }
+
+        // 4. Final norm
+        launch_layer_norm(
+            &stream, &self.ptx,
+            &mut scratch.x, &self.final_norm_w, &self.final_norm_b, l, d,
+        )?;
+
+        // 4b. Save x_before_head
+        {
+            let n_copy = l * d;
+            let src = scratch.x.slice(0..n_copy);
+            let mut dst = train_scratch.x_before_head.slice_mut(0..n_copy);
+            let n_i = n_copy as i32;
+            let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+            lb.arg(&src);
+            lb.arg(&mut dst);
+            lb.arg(&n_i);
+            let cfg = LaunchConfig {
+                grid_dim: ((n_copy as u32 + 255) / 256, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+
+        // 5. LM head
+        launch_matmul_t(
+            &stream, &self.ptx,
+            &scratch.x, &self.embed_w, &mut scratch.logits, l, v, d,
+        )?;
+
+        stream.synchronize()?;
+        let logits_slice = scratch.logits.slice(0..(l * v));
+        Ok(stream.memcpy_dtov(&logits_slice)?)
     }
 
     /// Forward pass via the cooperative-groups multi-block persistent kernel.

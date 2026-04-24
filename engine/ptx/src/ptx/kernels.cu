@@ -1395,6 +1395,78 @@ extern "C" __global__ void cross_entropy_fwd_bwd(
     }
 }
 
+// ---------- ssm_scan_cached ------------------------------------------------
+// Same forward math as ssm_scan_sequential, but ALSO writes the full state
+// sequence to `states[(t+1)*H*hd*ds + h*hd*ds + p*ds + n]`.  states[0] is
+// zero-initialized by the host; each timestep writes states[t+1].
+// This is the cache the backward adjoint scan reads.
+extern "C" __global__ void ssm_scan_cached(
+    const float* __restrict__ proj,
+    const float* __restrict__ bp,
+    const float* __restrict__ cp,
+    const float* __restrict__ dt_in,
+    const float* __restrict__ decay_in,
+    const float* __restrict__ trap_in,
+    const float* __restrict__ d_param,
+    float* __restrict__ y,
+    float* __restrict__ states,  // (L+1, H, hd, ds); states[0] = 0
+    int L, int H, int hd, int ds, int di, int dip
+) {
+    extern __shared__ float smem[];
+    float* y_reduce = &smem[hd * ds];
+
+    int h = blockIdx.x;
+    int tid = threadIdx.x;
+    if (h >= H || tid >= hd * ds) return;
+    int p = tid / ds;
+    int n = tid % ds;
+
+    int x_off = di;
+
+    float state = 0.0f;
+    float bx_prev = 0.0f;
+
+    for (int t = 0; t < L; t++) {
+        float bp_tn = bp[t * ds + n];
+        float cp_tn = cp[t * ds + n];
+        float dt_v = dt_in[t * H + h];
+        float dec = decay_in[t * H + h];
+        float tr = trap_in[t * H + h];
+        float x_val = proj[t * dip + x_off + h * hd + p];
+
+        float bx_cur = x_val * bp_tn;
+        float blended = __fmaf_rn(tr, bx_cur, (1.0f - tr) * bx_prev);
+        float inp_val = blended * dt_v;
+        bx_prev = bx_cur;
+        state = __fmaf_rn(dec, state, inp_val);
+
+        // Write state for backward: states[t+1, h, p, n]
+        states[(((t + 1) * H + h) * hd + p) * ds + n] = state;
+
+        smem[tid] = state * cp_tn;
+        __syncthreads();
+
+        for (int stride = ds >> 1; stride > 0; stride >>= 1) {
+            if (n < stride) smem[tid] += smem[tid + stride];
+            __syncthreads();
+        }
+
+        if (n == 0) {
+            float sum = smem[p * ds];
+            sum = __fmaf_rn(d_param[h], x_val, sum);
+            float z_raw = proj[t * dip + h * hd + p];
+            float z_silu = z_raw * sigmoid_f(z_raw);
+            y_reduce[p] = sum * z_silu;
+        }
+        __syncthreads();
+
+        if (tid < hd) {
+            y[(t * H + h) * hd + tid] = y_reduce[tid];
+        }
+        __syncthreads();
+    }
+}
+
 // ---------- residual_add ----------------------------------------------------
 // x[i] = x[i] + scale * y[i]
 // Grid: (ceil(n/256),), Block: (256,)
