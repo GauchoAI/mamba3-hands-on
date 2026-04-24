@@ -406,6 +406,24 @@ impl PtxModel {
                 };
                 unsafe { lb.launch(cfg)? };
             }
+            // 3e.5 — cache phase per layer for rope_bwd.
+            if n_angles > 0 {
+                let p_off = li * train_scratch.layer_phase_stride;
+                let p_len = l * n_angles;
+                let src = scratch.phase.slice(0..p_len);
+                let mut dst = train_scratch.layer_phases.slice_mut(p_off..p_off + p_len);
+                let n_i = p_len as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+                lb.arg(&src);
+                lb.arg(&mut dst);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((p_len as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
 
             // 3f. extract bp, cp from proj_view
             {

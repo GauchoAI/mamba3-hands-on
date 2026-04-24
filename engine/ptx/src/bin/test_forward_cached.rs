@@ -42,6 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         cpu_model.headdim,
         gpu_model.d_in_proj,
         cpu_model.vocab_size,
+        gpu_model.num_rope_angles.max(1),
     )?;
 
     let tokens: Vec<u32> = vec![256, 48, 32, 49, 32, 48, 258];

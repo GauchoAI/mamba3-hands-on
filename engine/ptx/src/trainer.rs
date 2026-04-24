@@ -58,7 +58,7 @@ impl PtxTrainer {
         let nl = model.n_layers;
 
         let train_scratch = TrainScratch::new(
-            &ctx, max_seq, nl, d, ds, di, nh, hd, dip, v,
+            &ctx, max_seq, nl, d, ds, di, nh, hd, dip, v, model.num_rope_angles.max(1),
         )?;
 
         let m_embed = stream.alloc_zeros::<f32>(v * d)?;
@@ -377,6 +377,7 @@ impl PtxTrainer {
         let di = self.model.d_inner;
 
         let nh = self.model.n_heads;
+        let ds = self.model.d_state;
         zero(&mut self.train_scratch.d_embed, v * d)?;
         zero(&mut self.train_scratch.d_fnorm_w, d)?;
         zero(&mut self.train_scratch.d_fnorm_b, d)?;
@@ -387,12 +388,155 @@ impl PtxTrainer {
             zero(&mut self.train_scratch.d_dt_bias[li], nh)?;
             zero(&mut self.train_scratch.d_layer_norm_w[li], d)?;
             zero(&mut self.train_scratch.d_layer_norm_b[li], d)?;
+            zero(&mut self.train_scratch.d_b_norm_w[li], ds)?;
+            zero(&mut self.train_scratch.d_b_norm_b[li], ds)?;
+            zero(&mut self.train_scratch.d_c_norm_w[li], ds)?;
+            zero(&mut self.train_scratch.d_c_norm_b[li], ds)?;
         }
-        // d_x, d_y_out, d_y_inner, d_y_pregate, d_scan_inp, d_proj are fully
-        // overwritten each layer; only d_proj needs zeroing as backward
-        // atomicAdd's into its slices. But we zero the entire used range.
+        // d_x, d_y_out, d_y_inner, d_y_pregate, d_scan_inp are overwritten
+        // each layer; d_proj needs zeroing because backward atomicAdd's into
+        // it. d_bp_post / d_cp_post are also atomic-accumulators but are
+        // per-layer scratch, re-zeroed in layer_backward's Step C.
         zero(&mut self.train_scratch.d_proj, l * dip)?;
         let _ = l;
+        let _ = ds;
+        Ok(())
+    }
+
+    /// Backward chain for the b_norm/c_norm + RoPE that sits between
+    /// proj[bp/cp_slice] and the post-LN+RoPE bp/cp fed into the SSM scan.
+    ///
+    /// Inputs (already populated):
+    ///   d_bp_post, d_cp_post   — grad w.r.t. post-LN+RoPE bp/cp
+    ///   layer_phases[li]       — cached rotation phases
+    ///   layer_projs[li]        — holds raw bp/cp slices in-place
+    ///
+    /// Outputs (accumulated into):
+    ///   d_proj[bp_slice], d_proj[cp_slice]   (atomic via scatter_add)
+    ///   d_b_norm_w/b[li], d_c_norm_w/b[li]   (atomic via layer_norm_bwd)
+    fn bp_cp_norm_bwd(
+        &mut self,
+        stream: &Arc<cudarc::driver::CudaStream>,
+        ptx: &Arc<PtxContext>,
+        li: usize,
+        l: usize,
+        _d: usize,
+        di: usize,
+        ds: usize,
+        dip: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        let n_angles = self.model.layers[li].num_rope_angles;
+        let l_i = l as i32;
+        let ds_i = ds as i32;
+        let dip_i = dip as i32;
+
+        // rope_bwd in-place (d_out: post-RoPE → post-LN).
+        if n_angles > 0 {
+            let phase_off = li * self.train_scratch.layer_phase_stride;
+            let phase_len = l * n_angles;
+            let phase_view = self.train_scratch.layer_phases.slice(phase_off..phase_off + phase_len);
+            let na_i = n_angles as i32;
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (n_angles as u32, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            // bp
+            {
+                let mut lb = stream.launch_builder(&ptx.k.rope_bwd);
+                lb.arg(&mut self.train_scratch.d_bp_post);
+                lb.arg(&phase_view);
+                lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&na_i);
+                unsafe { lb.launch(cfg)? };
+            }
+            // cp
+            {
+                let mut lb = stream.launch_builder(&ptx.k.rope_bwd);
+                lb.arg(&mut self.train_scratch.d_cp_post);
+                lb.arg(&phase_view);
+                lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&na_i);
+                unsafe { lb.launch(cfg)? };
+            }
+        }
+
+        // For each of {bp, cp}: gather raw slice from proj → bc_raw_tmp;
+        // run layer_norm_bwd(d_out=d_*_post, x=bc_raw_tmp, w=*_norm_w);
+        // writes d_x to d_ln_tmp; accumulates d_*_norm_w/b atomically;
+        // then scatter-add d_ln_tmp into d_proj[slice_off].
+        let proj_off = li * self.train_scratch.layer_proj_stride;
+        let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
+        let bd_gather = ds.min(256).max(32) as u32;
+        let gather_cfg = LaunchConfig {
+            grid_dim: (l as u32, 1, 1),
+            block_dim: (bd_gather, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let ln_cfg = LaunchConfig {
+            grid_dim: (l as u32, 1, 1),
+            block_dim: (64, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        // ---- bp chain ----
+        {
+            let bp_off_i = (2 * di) as i32;
+            {
+                let mut lb = stream.launch_builder(&ptx.k.gather_slice_from_proj);
+                lb.arg(&proj_view);
+                lb.arg(&mut self.train_scratch.bc_raw_tmp);
+                lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&dip_i); lb.arg(&bp_off_i);
+                unsafe { lb.launch(gather_cfg)? };
+            }
+            {
+                let mut lb = stream.launch_builder(&ptx.k.layer_norm_bwd);
+                lb.arg(&self.train_scratch.d_bp_post);
+                lb.arg(&self.train_scratch.bc_raw_tmp);
+                lb.arg(&self.model.layers[li].b_norm_w);
+                lb.arg(&mut self.train_scratch.d_ln_tmp);
+                lb.arg(&mut self.train_scratch.d_b_norm_w[li]);
+                lb.arg(&mut self.train_scratch.d_b_norm_b[li]);
+                lb.arg(&l_i); lb.arg(&ds_i);
+                unsafe { lb.launch(ln_cfg)? };
+            }
+            {
+                let mut lb = stream.launch_builder(&ptx.k.scatter_add_to_proj);
+                lb.arg(&self.train_scratch.d_ln_tmp);
+                lb.arg(&mut self.train_scratch.d_proj);
+                lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&dip_i); lb.arg(&bp_off_i);
+                unsafe { lb.launch(gather_cfg)? };
+            }
+        }
+
+        // ---- cp chain ----
+        {
+            let cp_off_i = (2 * di + ds) as i32;
+            {
+                let mut lb = stream.launch_builder(&ptx.k.gather_slice_from_proj);
+                lb.arg(&proj_view);
+                lb.arg(&mut self.train_scratch.bc_raw_tmp);
+                lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&dip_i); lb.arg(&cp_off_i);
+                unsafe { lb.launch(gather_cfg)? };
+            }
+            {
+                let mut lb = stream.launch_builder(&ptx.k.layer_norm_bwd);
+                lb.arg(&self.train_scratch.d_cp_post);
+                lb.arg(&self.train_scratch.bc_raw_tmp);
+                lb.arg(&self.model.layers[li].c_norm_w);
+                lb.arg(&mut self.train_scratch.d_ln_tmp);
+                lb.arg(&mut self.train_scratch.d_c_norm_w[li]);
+                lb.arg(&mut self.train_scratch.d_c_norm_b[li]);
+                lb.arg(&l_i); lb.arg(&ds_i);
+                unsafe { lb.launch(ln_cfg)? };
+            }
+            {
+                let mut lb = stream.launch_builder(&ptx.k.scatter_add_to_proj);
+                lb.arg(&self.train_scratch.d_ln_tmp);
+                lb.arg(&mut self.train_scratch.d_proj);
+                lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&dip_i); lb.arg(&cp_off_i);
+                unsafe { lb.launch(gather_cfg)? };
+            }
+        }
+
         Ok(())
     }
 
@@ -461,8 +605,13 @@ impl PtxTrainer {
             unsafe { lb.launch(cfg)? };
         }
 
-        // Step C: Zero d_proj (it accumulates via atomicAdd from gate/scan/bx)
+        // Step C: Zero per-layer atomic accumulators:
+        //   d_proj       (atomic-add'd by gate/scan/bx + scatter from LN bwd)
+        //   d_bp_post    (atomic-add'd by bx_bwd)
+        //   d_cp_post    (atomic-add'd by ssm_scan_bwd_full)
         launch_fill_zero(stream, ptx, &mut self.train_scratch.d_proj, l * dip)?;
+        launch_fill_zero(stream, ptx, &mut self.train_scratch.d_bp_post, l * ds)?;
+        launch_fill_zero(stream, ptx, &mut self.train_scratch.d_cp_post, l * ds)?;
 
         // Step D: gate_bwd writes d_proj[z slice] + d_y_pregate
         {
@@ -522,6 +671,7 @@ impl PtxTrainer {
             lb.arg(&st_view);
             lb.arg(d_param_ref);
             lb.arg(&mut self.train_scratch.d_proj);
+            lb.arg(&mut self.train_scratch.d_cp_post);
             lb.arg(&mut self.train_scratch.d_scan_inp);
             lb.arg(&mut self.train_scratch.d_decay);
             lb.arg(&mut self.train_scratch.d_d_param[li]);
@@ -573,10 +723,13 @@ impl PtxTrainer {
         }
         let _ = (dip, ds, di);
 
-        // Step F: bx_bwd — atomic adds into d_proj[bp] and d_proj[x]
+        // Step F: bx_bwd — accumulates d_proj[x_off] (atomic) and d_bp_post
+        // (atomic). Uses post-LN+RoPE bp from cache, not raw proj[bp_off].
         {
             let proj_off = li * self.train_scratch.layer_proj_stride;
+            let cp_off = li * self.train_scratch.layer_cp_stride;
             let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
+            let bp_view = self.train_scratch.layer_bps.slice(cp_off..cp_off + l * ds);
             let l_i = l as i32;
             let h_i = nh as i32;
             let hd_i = hd as i32;
@@ -587,8 +740,10 @@ impl PtxTrainer {
             let mut lb = stream.launch_builder(&ptx.k.bx_bwd);
             lb.arg(&self.train_scratch.d_scan_inp);
             lb.arg(&proj_view);
+            lb.arg(&bp_view);
             lb.arg(dt_bias_ref);
             lb.arg(&mut self.train_scratch.d_proj);
+            lb.arg(&mut self.train_scratch.d_bp_post);
             lb.arg(&l_i); lb.arg(&h_i); lb.arg(&hd_i); lb.arg(&ds_i); lb.arg(&di_i); lb.arg(&dip_i);
             let smem_bytes = (hd * ds) as u32 * 4;
             let cfg = LaunchConfig {
@@ -598,6 +753,12 @@ impl PtxTrainer {
             };
             unsafe { lb.launch(cfg)? };
         }
+
+        // Step F2: Chain d_{bp,cp}_post → rope_bwd → layer_norm_bwd →
+        // scatter-add into d_proj[{bp,cp}_slice]. Fixes the remaining
+        // in_proj_w[cp/bp_row] FAILs. Also accumulates d_{b,c}_norm_w/b
+        // (populated but not yet AdamW'd until verified).
+        self.bp_cp_norm_bwd(&stream, &ptx, li, l, d, di, ds, dip)?;
 
         // Step G: in_proj backward
         //   d_in_proj_w[li] = d_proj^T @ x_normed (dip, L) × (L, d) → (dip, d)

@@ -75,6 +75,27 @@ pub struct TrainScratch {
     // Intermediate buffers (shared across layers, overwritten each layer)
     pub d_decay: CudaSlice<f32>,            // (L, H)
     pub d_dt_from_inp: CudaSlice<f32>,      // (L, H)
+    // Post-LN+RoPE gradient slots for the bp/cp chain. Zero-init at step
+    // start; ssm_scan_bwd_full and bx_bwd atomicAdd into these; then rope_bwd
+    // + layer_norm_bwd produce the pre-LN raw gradient, which gets
+    // scatter-added into d_proj[bp_slice]/d_proj[cp_slice].
+    pub d_bp_post: CudaSlice<f32>,          // (L, ds)
+    pub d_cp_post: CudaSlice<f32>,          // (L, ds)
+    // Scratch for the bp/cp norm-bwd chain (each pass reuses both).
+    // bc_raw_tmp holds a contiguous (L, ds) gather of proj[bp_slice] or
+    // proj[cp_slice] as the `x` input to layer_norm_bwd.
+    pub bc_raw_tmp: CudaSlice<f32>,         // (L, ds)
+    // d_ln_tmp is the `d_x` output of layer_norm_bwd (the raw-side grad).
+    pub d_ln_tmp: CudaSlice<f32>,           // (L, ds)
+    // Per-layer phases cached in forward (needed for rope_bwd).
+    pub layer_phase_stride: usize,          // max_seq * max_n_angles
+    pub layer_phases: CudaSlice<f32>,       // (n_layers, L, n_angles)
+    // LN-param grads on bp/cp chain — computed but NOT applied until we're
+    // confident the chain is bit-clean.
+    pub d_b_norm_w: Vec<CudaSlice<f32>>,
+    pub d_b_norm_b: Vec<CudaSlice<f32>>,
+    pub d_c_norm_w: Vec<CudaSlice<f32>>,
+    pub d_c_norm_b: Vec<CudaSlice<f32>>,
 }
 
 impl TrainScratch {
@@ -89,6 +110,7 @@ impl TrainScratch {
         headdim: usize,
         max_dip: usize,
         vocab_size: usize,
+        max_n_angles: usize,
     ) -> Result<Self, Box<dyn Error>> {
         let stream = &ctx.stream;
         let li = max_seq * d_model;
@@ -104,6 +126,10 @@ impl TrainScratch {
         let mut d_dt_bias = Vec::with_capacity(n_layers);
         let mut d_layer_norm_w = Vec::with_capacity(n_layers);
         let mut d_layer_norm_b = Vec::with_capacity(n_layers);
+        let mut d_b_norm_w = Vec::with_capacity(n_layers);
+        let mut d_b_norm_b = Vec::with_capacity(n_layers);
+        let mut d_c_norm_w = Vec::with_capacity(n_layers);
+        let mut d_c_norm_b = Vec::with_capacity(n_layers);
         for _ in 0..n_layers {
             d_in_proj_w.push(stream.alloc_zeros::<f32>(max_dip * d_model)?);
             d_out_proj_w.push(stream.alloc_zeros::<f32>(d_model * d_inner)?);
@@ -111,7 +137,12 @@ impl TrainScratch {
             d_dt_bias.push(stream.alloc_zeros::<f32>(n_heads)?);
             d_layer_norm_w.push(stream.alloc_zeros::<f32>(d_model)?);
             d_layer_norm_b.push(stream.alloc_zeros::<f32>(d_model)?);
+            d_b_norm_w.push(stream.alloc_zeros::<f32>(d_state)?);
+            d_b_norm_b.push(stream.alloc_zeros::<f32>(d_state)?);
+            d_c_norm_w.push(stream.alloc_zeros::<f32>(d_state)?);
+            d_c_norm_b.push(stream.alloc_zeros::<f32>(d_state)?);
         }
+        let lphase = max_seq * max_n_angles.max(1);
 
         Ok(Self {
             max_seq,
@@ -152,6 +183,16 @@ impl TrainScratch {
             d_layer_norm_b,
             d_decay: stream.alloc_zeros::<f32>(max_seq * n_heads)?,
             d_dt_from_inp: stream.alloc_zeros::<f32>(max_seq * n_heads)?,
+            d_bp_post: stream.alloc_zeros::<f32>(lc)?,
+            d_cp_post: stream.alloc_zeros::<f32>(lc)?,
+            bc_raw_tmp: stream.alloc_zeros::<f32>(lc)?,
+            d_ln_tmp: stream.alloc_zeros::<f32>(lc)?,
+            layer_phase_stride: lphase,
+            layer_phases: stream.alloc_zeros::<f32>(n_layers * lphase)?,
+            d_b_norm_w,
+            d_b_norm_b,
+            d_c_norm_w,
+            d_c_norm_b,
         })
     }
 }

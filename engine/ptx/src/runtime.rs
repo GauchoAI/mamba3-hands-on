@@ -38,6 +38,9 @@ pub struct Kernels {
     pub ssm_param_grads: CudaFunction,
     pub bx_bwd: CudaFunction,
     pub embed_scatter_bwd: CudaFunction,
+    pub rope_bwd: CudaFunction,
+    pub scatter_add_to_proj: CudaFunction,
+    pub gather_slice_from_proj: CudaFunction,
 }
 
 pub struct PtxContext {
@@ -119,6 +122,9 @@ impl PtxContext {
             ssm_param_grads: module.load_function("ssm_param_grads")?,
             bx_bwd: module.load_function("bx_bwd")?,
             embed_scatter_bwd: module.load_function("embed_scatter_bwd")?,
+            rope_bwd: module.load_function("rope_bwd")?,
+            scatter_add_to_proj: module.load_function("scatter_add_to_proj")?,
+            gather_slice_from_proj: module.load_function("gather_slice_from_proj")?,
         };
 
         Ok(Self {

@@ -306,6 +306,67 @@ extern "C" __global__ void apply_rope(
     v[idx_o] = __fmaf_rn(e, s,  o * c);
 }
 
+// ---------- gather_slice_from_proj ------------------------------------------
+// Copies proj[t * dip + slice_off + n] into dst[t * ds + n] (contiguous).
+// Mirror of scatter_add_to_proj; used to feed the raw bp/cp slice into
+// layer_norm_bwd as its contiguous `x` input.
+// Grid: (L,), Block: (min(ds, 256),)
+extern "C" __global__ void gather_slice_from_proj(
+    const float* __restrict__ proj, // (L, dip)
+    float* __restrict__ dst,        // (L, ds)
+    int L, int ds, int dip, int slice_off
+) {
+    int t = blockIdx.x;
+    if (t >= L) return;
+    for (int n = threadIdx.x; n < ds; n += blockDim.x) {
+        dst[t * ds + n] = proj[t * dip + slice_off + n];
+    }
+}
+
+// ---------- scatter_add_to_proj ---------------------------------------------
+// Adds src[t, n] into d_proj[t * dip + slice_off + n] for all (t, n).
+// Used to fold d_bp_raw / d_cp_raw (post layer-norm bwd, shape L*ds) back
+// into the per-timestep proj gradient d_proj (L*dip).
+// Grid: (L,), Block: (min(ds, 256),)
+extern "C" __global__ void scatter_add_to_proj(
+    const float* __restrict__ src,   // (L, ds)
+    float* __restrict__ d_proj,      // (L, dip)
+    int L, int ds, int dip, int slice_off
+) {
+    int t = blockIdx.x;
+    if (t >= L) return;
+    for (int n = threadIdx.x; n < ds; n += blockDim.x) {
+        d_proj[t * dip + slice_off + n] += src[t * ds + n];
+    }
+}
+
+// ---------- rope_bwd --------------------------------------------------------
+// Inverse of apply_rope: rotate (dv_e, dv_o) by -phase[t, k]. Forward is:
+//   v'_e = v_e·c - v_o·s,   v'_o = v_e·s + v_o·c
+// Gradient w.r.t. v (treating phase as constant):
+//   dv_e =  dv'_e·c + dv'_o·s
+//   dv_o = -dv'_e·s + dv'_o·c
+// Operates in-place (d_v starts holding dv', ends holding dv).
+// Grid: (L,), Block: (n_angles,)
+extern "C" __global__ void rope_bwd(
+    float* __restrict__ d_v,
+    const float* __restrict__ phase,
+    int L, int ds, int n_angles
+) {
+    int t = blockIdx.x;
+    int k = threadIdx.x;
+    if (t >= L || k >= n_angles) return;
+    float a = phase[t * n_angles + k];
+    float c = __cosf(a);
+    float s = __sinf(a);
+    int idx_e = t * ds + 2 * k;
+    int idx_o = idx_e + 1;
+    float dpe = d_v[idx_e];
+    float dpo = d_v[idx_o];
+    d_v[idx_e] = __fmaf_rn(dpe, c,  dpo * s);
+    d_v[idx_o] = __fmaf_rn(dpo, c, -dpe * s);
+}
+
 // ---------- compute_z_silu --------------------------------------------------
 // z_silu[t, i] = z_raw[t, i] * sigmoid(z_raw[t, i])   (first di entries of proj)
 // Grid: (ceil(di/32), L), Block: (32,)
@@ -1575,6 +1636,7 @@ extern "C" __launch_bounds__(256, 2) __global__ void ssm_scan_bwd_full(
     const float* __restrict__ states,
     const float* __restrict__ d_param,
     float* __restrict__ d_proj,
+    float* __restrict__ d_cp_post,      // (L, ds) — d w.r.t. post-LN+RoPE cp
     float* __restrict__ d_scan_inp,
     float* __restrict__ d_decay,        // (L, H)
     float* __restrict__ d_d_param,      // (H,)
@@ -1607,9 +1669,11 @@ extern "C" __launch_bounds__(256, 2) __global__ void ssm_scan_bwd_full(
             atomicAdd(&d_d_param[h], dy_pre * x_val);
         }
 
-        // d_cp[t, n]: atomic across heads
+        // d_cp[t, n]: atomic across heads — goes to d_cp_post (post-LN+RoPE
+        // gradient slot). The chain d_cp_post → rope_bwd → layer_norm_bwd →
+        // d_proj[cp_slice] is applied in Rust after this kernel returns.
         float state_tp1 = states[(((t + 1) * H + h) * hd + p) * ds + n];
-        atomicAdd(&d_proj[t * dip + 2 * di + ds + n],
+        atomicAdd(&d_cp_post[t * ds + n],
                   dy_pre * state_tp1);
 
         // d_scan_inp[t, h, p, n] = current dh
@@ -1718,16 +1782,19 @@ extern "C" __global__ void ssm_param_grads(
 }
 
 // ---------- bx_bwd ----------------------------------------------------------
-// From d_scan_inp, produce d_proj[bp_off] (atomic) and d_proj[x_off] (atomic).
-// Per timestep/head/p: d_bx[n] = d_scan_inp[n] / (dt*trap + 1e-8);
-//                      d_proj[bp_off + n] += d_bx[n] * x_raw[h*hd+p]
-//                      d_proj[x_off + h*hd+p] += sum_n(d_bx[n] * bp_raw[n])
+// From d_scan_inp, produce d_bp_post (post-LN+RoPE gradient — chained to
+// d_proj[bp_slice] via rope_bwd + layer_norm_bwd in Rust) and d_proj[x_off].
+// Per timestep/head/p: d_bx[n] = d_scan_inp[n] · dt · trap;
+//                      d_bp_post[n] += d_bx[n] · x_val[h*hd+p]
+//                      d_proj[x_off + h*hd+p] += sum_n(d_bx[n] · bp[n])   (bp = post-LN+RoPE, from cache)
 // Grid: (H,), Block: (hd*ds,) — same layout as ssm_scan_bwd.
 extern "C" __global__ void bx_bwd(
     const float* __restrict__ d_scan_inp,
     const float* __restrict__ proj,
+    const float* __restrict__ bp,       // (L, ds) — post-LN+RoPE bp from cache
     const float* __restrict__ dt_bias,
     float* __restrict__ d_proj,
+    float* __restrict__ d_bp_post,      // (L, ds) — d w.r.t. post-LN+RoPE bp
     int L, int H, int hd, int ds, int di, int dip
 ) {
     int h = blockIdx.x;
@@ -1739,7 +1806,6 @@ extern "C" __global__ void bx_bwd(
     int dt_off = 2 * di + 2 * ds;
     int a_off = dt_off + H;
     int tr_off = a_off + H;
-    int bp_off = 2 * di;
 
     extern __shared__ float smem[];
     // Tree-reduce buffer per (h, p) for d_x_val sum over n.
@@ -1751,17 +1817,17 @@ extern "C" __global__ void bx_bwd(
         float tr_raw = proj[t * dip + tr_off + h];
         float tr = sigmoid_f(tr_raw);
 
-        // Correct math: inp_val = blended * dt, blended ≈ trap * bx_cur,
-        // so d_bx_cur = d_inp_val * dt * trap.  Previously divided.
+        // inp_val = blended · dt, blended ≈ trap · bx_cur, bx_cur = bp · x_val
+        // where bp is POST-LN+RoPE (from cache), NOT proj[bp_off+n].
         float d_bx = d_scan_inp[((t * H + h) * hd + p) * ds + n] * (dt_v * tr);
         float x_val = proj[t * dip + di + h * hd + p];
-        float bp_raw = proj[t * dip + bp_off + n];
+        float bp_tn = bp[t * ds + n];
 
-        // d_Bp[n] += d_bx * x_val   (x_val same for all n in thread's (h, p))
-        atomicAdd(&d_proj[t * dip + bp_off + n], d_bx * x_val);
+        // d_bp_post[t, n] += d_bx · x_val   (x_val same for all n in (h, p))
+        atomicAdd(&d_bp_post[t * ds + n], d_bx * x_val);
 
-        // d_x[h*hd+p] partial: d_bx * bp_raw; sum over n in p-group
-        smem[tid] = d_bx * bp_raw;
+        // d_x[h*hd+p] partial: d_bx · bp_tn; sum over n in p-group
+        smem[tid] = d_bx * bp_tn;
         __syncthreads();
 
         // Tree reduce across n for each p-group of ds threads
