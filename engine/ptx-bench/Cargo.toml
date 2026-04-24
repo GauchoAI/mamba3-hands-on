@@ -9,4 +9,4 @@ name = "ptx-bench"
 path = "src/main.rs"
 
 [dependencies]
-cudarc = { version = "0.16", default-features = false, features = ["std", "driver", "cuda-version-from-build-system"] }
+cudarc = { version = "0.16", default-features = false, features = ["std", "driver", "cuda-version-from-build-system", "dynamic-linking"] }
