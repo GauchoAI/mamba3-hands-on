@@ -626,23 +626,34 @@ extern "C" __global__ void mamba3_forward_persistent(
         }
         __syncthreads();
 
-        // 3h. SSM scan — one head at a time; each thread owns one (p, n)
+        // 3h. SSM scan — process HEADS_PARALLEL heads at a time, using
+        // num_threads / (hd*ds) head-slots simultaneously. With 1024 threads
+        // and hd*ds=256, we do 4 heads in parallel per outer iteration.
         const float* dparam = layers_d_param + l * H;
-        for (int h = 0; h < H; h++) {
+        int head_stride = hd * ds;                          // 256 threads per head slot
+        int heads_parallel = num_threads / head_stride;     // 4 slots with 1024 threads
+        int h_local = tid / head_stride;                    // 0..heads_parallel-1
+        int tid_in_head = tid - h_local * head_stride;
+        int p = tid_in_head / ds;
+        int n = tid_in_head - p * ds;
+        bool in_slot = tid < heads_parallel * head_stride;  // drops any tail threads
+
+        for (int h_base = 0; h_base < H; h_base += heads_parallel) {
+            int h = h_base + h_local;
+            bool head_ok = in_slot && (h < H);
             float state = 0.0f;
             float bx_prev = 0.0f;
-            bool active = tid < hd * ds;
-            int p = tid / ds;
-            int n = tid % ds;
+
             for (int t = 0; t < L; t++) {
+                // Preload state-advance inputs (per-thread).
                 float bp_tn = bp[t * ds + n];
                 float cp_tn = cp[t * ds + n];
-                float dt_v = dt[t * H + h];
-                float dec  = decay[t * H + h];
-                float tr   = trap[t * H + h];
-                float x_val = active ? proj[t * dip + di + h * hd + p] : 0.0f;
+                float dt_v = head_ok ? dt[t * H + h]      : 0.0f;
+                float dec  = head_ok ? decay[t * H + h]   : 0.0f;
+                float tr   = head_ok ? trap[t * H + h]    : 0.0f;
+                float x_val = head_ok ? proj[t * dip + di + h * hd + p] : 0.0f;
 
-                if (active) {
+                if (head_ok) {
                     float bx_cur = x_val * bp_tn;
                     float blended = __fmaf_rn(tr, bx_cur, (1.0f - tr) * bx_prev);
                     float inp_val = blended * dt_v;
@@ -651,15 +662,19 @@ extern "C" __global__ void mamba3_forward_persistent(
                     reduce_buf[tid] = state * cp_tn;
                 }
                 __syncthreads();
-                // Tree-halving reduction across n for each p-group of ds threads.
+
+                // Tree reduction across n within each head slot's p-group of ds threads.
                 for (int stride = ds >> 1; stride > 0; stride >>= 1) {
-                    if (active && n < stride) reduce_buf[tid] += reduce_buf[tid + stride];
+                    if (head_ok && n < stride) {
+                        reduce_buf[tid] += reduce_buf[tid + stride];
+                    }
                     __syncthreads();
                 }
-                if (active && n == 0) {
-                    float sum = reduce_buf[p * ds];
+
+                if (head_ok && n == 0) {
+                    float sum = reduce_buf[h_local * head_stride + p * ds];
                     sum = __fmaf_rn(dparam[h], x_val, sum);
-                    float z = proj[t * dip + h * hd + p]; // z_raw
+                    float z = proj[t * dip + h * hd + p];  // z_raw for this (h, p)
                     float z_silu = z * sigmoid_f(z);
                     y_inner[(t * H + h) * hd + p] = sum * z_silu;
                 }

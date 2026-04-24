@@ -191,6 +191,13 @@ impl PtxModel {
         })
     }
 
+    /// Block size for the persistent kernel. 1024 threads so that we run
+    /// num_threads / (hd * ds) SSM heads in parallel per iteration (4 at a time
+    /// for the run_length_next model with hd*ds=256).
+    pub fn persistent_block_size(&self) -> u32 {
+        1024
+    }
+
     /// Shared-memory footprint (in bytes) of the persistent kernel for a given
     /// sequence length.  Must match the SMEM layout in kernels.cu.
     pub fn persistent_smem_bytes(&self, l: usize) -> u32 {
@@ -198,9 +205,9 @@ impl PtxModel {
         let di = self.d_inner;
         let ds = self.d_state;
         let h = self.n_heads;
-        let hd = self.headdim;
         let na = self.num_rope_angles;
         let dip = self.d_in_proj;
+        let block = self.persistent_block_size() as usize;
         let floats = l * d               // x
             + l * d                      // x_normed
             + l * dip                    // proj
@@ -213,7 +220,7 @@ impl PtxModel {
             + l * ds                     // cp
             + l * di                     // y_inner
             + l * d                      // y_out
-            + hd * ds;                   // reduce_buf
+            + block;                     // reduce_buf sized to block
         (floats * 4) as u32
     }
 
@@ -285,10 +292,9 @@ impl PtxModel {
         lb.arg(&v_i);
         lb.arg(&dip_i);
 
-        let hd_ds = self.headdim * self.d_state;
         let cfg = LaunchConfig {
             grid_dim: (1, 1, 1),
-            block_dim: (hd_ds.max(256) as u32, 1, 1),
+            block_dim: (self.persistent_block_size(), 1, 1),
             shared_mem_bytes: smem,
         };
         unsafe { lb.launch(cfg)? };
