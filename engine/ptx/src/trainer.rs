@@ -117,6 +117,21 @@ impl PtxTrainer {
 
     /// Run one training step. Returns loss.
     pub fn train_step(&mut self, tokens: &[u32], targets: &[u32]) -> Result<f32, Box<dyn Error>> {
+        let loss = self.compute_gradients_only(tokens, targets)?;
+        self.apply_optimizer_step()?;
+        Ok(loss)
+    }
+
+    /// Forward + cross-entropy + backward, filling all gradient buffers in
+    /// `train_scratch`.  **Does not** advance the AdamW step or mutate weights.
+    /// Useful for finite-difference correctness tests and gradient inspection.
+    /// Does advance `self.step` so bias-corrected moments are computed for the
+    /// subsequent `apply_optimizer_step`.
+    pub fn compute_gradients_only(
+        &mut self,
+        tokens: &[u32],
+        targets: &[u32],
+    ) -> Result<f32, Box<dyn Error>> {
         self.step += 1;
         let l = tokens.len();
         assert_eq!(targets.len(), l, "targets must have same length as tokens");
@@ -244,7 +259,27 @@ impl PtxTrainer {
             unsafe { lb.launch(cfg)? };
         }
 
-        // --- OPTIMIZER ---
+        // Read back loss (single float) — gradients are now in train_scratch.d_*.
+        stream.synchronize()?;
+        let loss_host = stream.memcpy_dtov(&self.train_scratch.loss)?;
+        let _ = (l, d, di, ds, hd, nh, dip);
+        Ok(loss_host[0])
+    }
+
+    /// Apply one AdamW step using whatever gradients are currently in
+    /// `train_scratch.d_*`.  Called by `train_step` after
+    /// `compute_gradients_only`.  Safe to call multiple times for the same
+    /// gradients (each call advances moments).  Uses uniform weight decay
+    /// across all params (see comment inside).
+    pub fn apply_optimizer_step(&mut self) -> Result<(), Box<dyn Error>> {
+        let ptx = self.model.ptx.clone();
+        let stream = ptx.stream.clone();
+        let d = self.model.d_model;
+        let di = self.model.d_inner;
+        let v = self.model.vocab_size;
+        let dip = self.model.d_in_proj;
+        let nh = self.model.n_heads;
+
         let bc1_inv = 1.0f32 / (1.0 - self.beta1.powi(self.step as i32));
         let bc2_inv = 1.0f32 / (1.0 - self.beta2.powi(self.step as i32));
 
@@ -257,15 +292,12 @@ impl PtxTrainer {
         // have the full backward chain, everyone gets the same wd.
         let no_decay_wd = self.weight_decay;
 
-        // Embed (2-D, matrix): standard weight decay.
         launch_adamw(&stream, &ptx,
             &mut self.model.embed_w, &self.train_scratch.d_embed,
             &mut self.m_embed, &mut self.v_embed,
             self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
             v * d,
         )?;
-        // Per-layer
-        let nh = self.model.n_heads;
         for li in 0..self.model.n_layers {
             let layer = &mut self.model.layers[li];
             launch_adamw(&stream, &ptx,
@@ -280,14 +312,12 @@ impl PtxTrainer {
                 self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
                 d * di,
             )?;
-            // d_param (1-D): no weight decay.
             launch_adamw(&stream, &ptx,
                 &mut layer.d_param, &self.train_scratch.d_d_param[li],
                 &mut self.m_d_param[li], &mut self.v_d_param[li],
                 self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
                 nh,
             )?;
-            // dt_bias + layer_norm optimizers disabled for this bisection.
             let _ = &self.m_dt_bias[li];
             let _ = &self.v_dt_bias[li];
             let _ = &self.m_layer_norm_w[li];
@@ -295,7 +325,6 @@ impl PtxTrainer {
             let _ = &self.m_layer_norm_b[li];
             let _ = &self.v_layer_norm_b[li];
         }
-        // Final norm (1-D): no weight decay.
         launch_adamw(&stream, &ptx,
             &mut self.model.final_norm_w, &self.train_scratch.d_fnorm_w,
             &mut self.m_fnorm_w, &mut self.v_fnorm_w,
@@ -308,12 +337,7 @@ impl PtxTrainer {
             self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
             d,
         )?;
-
-        // Read back loss (single float)
-        stream.synchronize()?;
-        let loss_host = stream.memcpy_dtov(&self.train_scratch.loss)?;
-        let _ = (l, d, di, ds, hd, nh, dip);
-        Ok(loss_host[0])
+        Ok(())
     }
 
     fn zero_gradient_buffers(

@@ -33,6 +33,10 @@ name = "ptxd"
 path = "src/bin/ptxd.rs"
 
 [[bin]]
+name = "fd-check"
+path = "src/bin/fd_check.rs"
+
+[[bin]]
 name = "test-parity-accuracy"
 path = "src/bin/test_parity_accuracy.rs"
 
