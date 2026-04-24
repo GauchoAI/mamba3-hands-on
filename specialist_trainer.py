@@ -706,6 +706,13 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     except Exception:
         pass
 
+    # Sync full state to Firebase (models catalog, task progress, teachers)
+    try:
+        from server.push_state import push_state
+        push_state(_DB_PATH)
+    except Exception:
+        pass
+
     # Save specialist
     ckpt_dir = Path("checkpoints/specialists")
     ckpt_dir.mkdir(parents=True, exist_ok=True)

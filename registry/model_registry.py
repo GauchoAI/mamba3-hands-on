@@ -66,6 +66,11 @@ class ModelRegistry:
         self._index_ttl = now + 30
         return data
 
+    def list_models(self) -> dict:
+        """List ALL models (checkpoints) across all nodes, not just teachers.
+        Returns {task: {path, size_kb, node, available}}."""
+        return _firebase_get("mamba3/models") or {}
+
     def list_teachers(self) -> dict:
         """List all available teachers across all nodes.
         Returns {task: {accuracy, node, config, ...}}."""
