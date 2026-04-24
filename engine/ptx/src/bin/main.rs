@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("Uploading weights to device...");
     let t0 = Instant::now();
-    let gpu_model = PtxModel::from_cpu(&cpu_model, ptx.clone())?;
+    let gpu_model = PtxModel::from_cpu(&cpu_model, ptx.clone(), 64)?;
     println!("  uploaded in {:.2}s", t0.elapsed().as_secs_f64());
     println!();
 
