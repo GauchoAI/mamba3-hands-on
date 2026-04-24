@@ -359,6 +359,80 @@ def cmd_pull(args):
         print("Pull failed.")
 
 
+def cmd_card(args):
+    """Show full model card with hardware provenance, teachers, lineage."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from state_db import StateDB
+
+    db = StateDB(args.db)
+    card = db.build_model_card(args.task)
+    db.close()
+
+    if not card.get("config"):
+        print(f"No data for task '{args.task}'")
+        return
+
+    cfg = card["config"]
+    print(f"=== Model Card: {card['task']} ===")
+    print(f"  Best accuracy: {card['best_accuracy']:.0%}")
+    print(f"  Total rounds:  {card['total_rounds']}")
+    print()
+
+    # Confidence
+    conf = card.get("confidence", {})
+    if conf.get("n_samples", 0) > 0:
+        print(f"  Confidence: {conf['score']:.2%} (mean={conf['mean']:.0%} std={conf['std']:.2f} n={conf['n_samples']})")
+
+    # Architecture
+    print(f"\n--- Architecture ---")
+    print(f"  d_model:    {cfg.get('d_model', '?')}")
+    print(f"  layers:     {cfg.get('n_kernel_layers', '?')}")
+    print(f"  d_state:    {cfg.get('d_state', '?')}")
+    print(f"  headdim:    {cfg.get('headdim', '?')}")
+    n_params = cfg.get("d_model", 64) * 260 * 2  # rough estimate
+    print(f"  optimizer:  {cfg.get('optimizer', '?')}")
+    print(f"  loss_fn:    {cfg.get('loss_fn', '?')}")
+    print(f"  lr:         {cfg.get('lr', '?')}")
+
+    # Hardware provenance
+    hw = card.get("hardware", {})
+    if hw:
+        print(f"\n--- Hardware Provenance ---")
+        print(f"  Device:       {hw.get('device', '?')}")
+        print(f"  Backend:      {hw.get('scan_backend', '?')}")
+        print(f"  Total cycles: {hw.get('total_cycles', '?')}")
+        if hw.get("total_time_s"):
+            t = hw["total_time_s"]
+            if t > 3600:
+                print(f"  Training time: {t/3600:.1f} hours")
+            elif t > 60:
+                print(f"  Training time: {t/60:.1f} minutes")
+            else:
+                print(f"  Training time: {t:.0f} seconds")
+
+    # Distillation
+    prov = card.get("provenance", {})
+    distilled = prov.get("distilled_from", {})
+    if distilled:
+        print(f"\n--- Distillation ---")
+        print(f"  Distilled from: {distilled.get('value', '?')}")
+
+    # Teachers
+    teachers = card.get("teachers", [])
+    if teachers:
+        print(f"\n--- Teachers ({len(teachers)}) ---")
+        for t in teachers[:10]:
+            print(f"  {t['model']:30s} weight={t['weight']:.3f} (from round {t['from_round']})")
+
+    # Diagnostics
+    diag = card.get("diagnostics", {}).get("stats", [])
+    if diag:
+        print(f"\n--- Diagnostics ---")
+        for d in diag[:5]:
+            print(f"  {d.get('signal', '?'):20s} tried={d.get('tries', 0)} wins={d.get('wins', 0)}")
+
+
 def cmd_sync(args):
     """Sync teacher checkpoints between nodes for cross-node distillation."""
     import subprocess
@@ -477,6 +551,11 @@ def main():
     p_stop = sub.add_parser("stop", help="Stop training on a node")
     p_stop.add_argument("--node", type=str, required=True)
 
+    # card
+    p_card = sub.add_parser("card", help="Show model card with full provenance")
+    p_card.add_argument("--task", type=str, required=True)
+    p_card.add_argument("--db", type=str, default="three_pop/training.db")
+
     # sync
     p_sync = sub.add_parser("sync", help="Sync teacher checkpoints between nodes")
     p_sync.add_argument("--source", type=str, required=True, help="Source node ID")
@@ -501,6 +580,8 @@ def main():
         cmd_stop(args)
     elif args.command == "sync":
         cmd_sync(args)
+    elif args.command == "card":
+        cmd_card(args)
     else:
         parser.print_help()
 

@@ -279,7 +279,8 @@ if __name__ == "__main__":
                   f"predicted={ex['predicted']} {'✓' if ex['correct'] else '✗'}")
             print(f"  Max state change at '{ex['max_delta_token']}' "
                   f"(pos {ex['max_delta_pos']}, delta={ex['max_delta_value']:.1f})")
-            print(f"  State norms: {' '.join(f'{t['state_norm']:.0f}' for t in ex['per_token'])}")
+            norms = " ".join(f"{t['state_norm']:.0f}" for t in ex["per_token"])
+            print(f"  State norms: {norms}")
         save_and_push(args.task, report)
     else:
         print("No checkpoint found or inspection failed.")
