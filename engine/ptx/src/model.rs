@@ -191,11 +191,12 @@ impl PtxModel {
         })
     }
 
-    /// Block size for the persistent kernel. 1024 threads so that we run
-    /// num_threads / (hd * ds) SSM heads in parallel per iteration (4 at a time
-    /// for the run_length_next model with hd*ds=256).
+    /// Block size for the persistent kernel. 512 threads gives us
+    /// num_threads / (hd * ds) = 2 SSM heads in parallel per iteration for
+    /// the run_length_next model (4 serial passes for 8 heads). 1024 threads
+    /// would give 4 heads parallel but exceeds per-block register limits.
     pub fn persistent_block_size(&self) -> u32 {
-        1024
+        512
     }
 
     /// Shared-memory footprint (in bytes) of the persistent kernel for a given
