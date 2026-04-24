@@ -190,6 +190,34 @@ fn main() -> Result<(), Box<dyn Error>> {
         "PTX + CUDA Graph", graph_ms, graph_tps
     );
 
+    // --- v2.2 per-op + graph + argmax (28-byte readback, no explicit sync) ---
+    println!();
+    println!("Testing argmax path (per-op + graph + argmax)...");
+    let graph_am = gpu_model.capture_graph_argmax(tokens.len())?;
+    let am_preds = gpu_model.forward_graph_argmax(&tokens, &graph_am)?;
+    // Correctness vs CPU argmax
+    let cpu_preds = cpu_model.predict(&tokens);
+    let am_ok = am_preds == cpu_preds;
+    println!("Argmax vs CPU predictions: {}  ({:?})",
+        if am_ok { "PASS" } else { "FAIL" }, am_preds);
+
+    for _ in 0..5 {
+        let _ = gpu_model.forward_graph_argmax(&tokens, &graph_am)?;
+    }
+    let start = Instant::now();
+    let mut count = 0;
+    while start.elapsed().as_secs_f64() < 2.5 {
+        let _ = gpu_model.forward_graph_argmax(&tokens, &graph_am)?;
+        count += 1;
+    }
+    let am_ms = start.elapsed().as_secs_f64() * 1000.0 / count as f64;
+    let am_tps = tokens.len() as f64 / (am_ms / 1000.0);
+    println!("{:>24}  {:>14.3}  {:>14.0}", "PTX + graph + argmax", am_ms, am_tps);
+    println!(
+        "  vs CPU ({:.3}ms): {:.2}x",
+        cpu_ms, cpu_ms / am_ms
+    );
+
     // --- v2.7 Persistent single-kernel forward ---
     println!();
     println!("Testing persistent single-kernel forward...");

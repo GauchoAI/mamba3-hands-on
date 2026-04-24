@@ -398,6 +398,65 @@ extern "C" __global__ void ssm_scan_sequential(
     }
 }
 
+// ---------- argmax_f32 ------------------------------------------------------
+// Per-row argmax of logits: preds[t] = argmax_v(logits[t, v])
+// Grid: (L,), Block: (256,). Single warp reduction via shared memory.
+extern "C" __global__ void argmax_f32(
+    const float* __restrict__ logits,  // (L, V)
+    unsigned int* __restrict__ preds,  // (L,)
+    int L, int V
+) {
+    int t = blockIdx.x;
+    if (t >= L) return;
+    int tid = threadIdx.x;
+
+    __shared__ float smax[32];
+    __shared__ int sidx[32];
+
+    float local_max = -INFINITY;
+    int local_idx = 0;
+    for (int v = tid; v < V; v += blockDim.x) {
+        float val = logits[t * V + v];
+        if (val > local_max) {
+            local_max = val;
+            local_idx = v;
+        }
+    }
+    // Warp reduce
+    for (int off = 16; off > 0; off >>= 1) {
+        float other_max = __shfl_xor_sync(0xffffffff, local_max, off);
+        int other_idx  = __shfl_xor_sync(0xffffffff, local_idx, off);
+        if (other_max > local_max || (other_max == local_max && other_idx < local_idx)) {
+            local_max = other_max;
+            local_idx = other_idx;
+        }
+    }
+    int warp = tid >> 5;
+    int lane = tid & 31;
+    if (lane == 0) {
+        smax[warp] = local_max;
+        sidx[warp] = local_idx;
+    }
+    __syncthreads();
+
+    if (warp == 0) {
+        int nwarps = blockDim.x / 32;
+        float mv = (lane < nwarps) ? smax[lane] : -INFINITY;
+        int mi = (lane < nwarps) ? sidx[lane] : 0;
+        for (int off = 16; off > 0; off >>= 1) {
+            float other_mv = __shfl_xor_sync(0xffffffff, mv, off);
+            int other_mi  = __shfl_xor_sync(0xffffffff, mi, off);
+            if (other_mv > mv || (other_mv == mv && other_mi < mi)) {
+                mv = other_mv;
+                mi = other_mi;
+            }
+        }
+        if (lane == 0) {
+            preds[t] = (unsigned int)mi;
+        }
+    }
+}
+
 // ---------- mamba3_forward_persistent --------------------------------------
 //
 // THE persistent forward: entire Mamba-3 inference in a single kernel launch.

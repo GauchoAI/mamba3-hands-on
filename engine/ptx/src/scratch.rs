@@ -25,6 +25,7 @@ pub struct PtxScratch {
     pub y_inner: CudaSlice<f32>,
     pub y_out: CudaSlice<f32>,
     pub logits: CudaSlice<f32>,
+    pub preds: CudaSlice<u32>,
 }
 
 impl PtxScratch {
@@ -57,6 +58,7 @@ impl PtxScratch {
             y_inner: stream.alloc_zeros::<f32>(max_seq * d_inner)?,
             y_out: stream.alloc_zeros::<f32>(max_seq * d_model)?,
             logits: stream.alloc_zeros::<f32>(max_seq * vocab_size)?,
+            preds: stream.alloc_zeros::<u32>(max_seq)?,
         })
     }
 }

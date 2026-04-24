@@ -353,6 +353,72 @@ impl PtxModel {
         Ok(host)
     }
 
+    /// Forward pass via CUDA Graph, returning only argmax predictions
+    /// (L × u32) instead of full logits (L × V × f32). Reduces host readback
+    /// from 7.3 KB to 28 bytes for this model. Graph includes the argmax
+    /// kernel at the tail.
+    pub fn forward_graph_argmax(
+        &self,
+        tokens: &[u32],
+        graph: &CudaGraph,
+    ) -> Result<Vec<u32>, Box<dyn Error>> {
+        let stream = self.ptx.stream.clone();
+        self.upload_tokens(&stream, tokens)?;
+        graph.launch()?;
+        // No explicit stream.synchronize() — memcpy_dtov is synchronous and
+        // waits for the stream to drain. One sync boundary instead of two.
+        let l = tokens.len();
+        let scratch = self.scratch.borrow();
+        let slice = scratch.preds.slice(0..l);
+        let host = stream.memcpy_dtov(&slice)?;
+        Ok(host)
+    }
+
+    /// Capture the per-op forward + argmax as a CUDA graph. Argmax is the
+    /// last node; host reads only L × u32 from scratch.preds after replay.
+    pub fn capture_graph_argmax(&self, l: usize) -> Result<CudaGraph, Box<dyn Error>> {
+        let stream = self.ptx.stream.clone();
+        // Warmup
+        let dummy: Vec<u32> = vec![0; l];
+        self.upload_tokens(&stream, &dummy)?;
+        self.record_compute(&stream, l)?;
+        self.record_argmax(&stream, l)?;
+        stream.synchronize()?;
+
+        stream.begin_capture(CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)?;
+        let r1 = self.record_compute(&stream, l);
+        let r2 = self.record_argmax(&stream, l);
+        let g = stream
+            .end_capture(CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH);
+        r1?;
+        r2?;
+        let graph = g?.ok_or("Graph capture returned None")?;
+        Ok(graph)
+    }
+
+    fn record_argmax(
+        &self,
+        stream: &Arc<CudaStream>,
+        l: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut scratch_ref = self.scratch.borrow_mut();
+        let scratch: &mut PtxScratch = &mut *scratch_ref;
+        let l_i = l as i32;
+        let v_i = self.vocab_size as i32;
+        let mut lb = stream.launch_builder(&self.ptx.k.argmax_f32);
+        lb.arg(&scratch.logits);
+        lb.arg(&mut scratch.preds);
+        lb.arg(&l_i);
+        lb.arg(&v_i);
+        let cfg = LaunchConfig {
+            grid_dim: (l as u32, 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        unsafe { lb.launch(cfg)? };
+        Ok(())
+    }
+
     /// Forward pass via a pre-captured CUDA Graph. Eliminates per-kernel
     /// launch overhead — all kernel launches are fused into one graph replay.
     pub fn forward_graph(
