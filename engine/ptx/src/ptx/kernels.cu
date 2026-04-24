@@ -1626,18 +1626,15 @@ extern "C" __launch_bounds__(256, 2) __global__ void ssm_scan_bwd_full(
         if (tid == 0) d_decay[t * H + h] = smem[0];
         __syncthreads();
 
-        // Block-wide reduction: d_dt_from_inp[t, h] = Σ dh · blended
-        // blended = inp_val / dt_v,  inp_val = states[t+1] - decay·states[t]
-        float dt_v = dt_in[t * H + h];
-        float inp_val = state_tp1 - dec * state_t;
-        float blended = (dt_v > 1e-12f) ? (inp_val / dt_v) : 0.0f;
-        smem[tid] = dh * blended;
-        __syncthreads();
-        for (int stride = block_n >> 1; stride > 0; stride >>= 1) {
-            if (tid < stride) smem[tid] += smem[tid + stride];
-            __syncthreads();
-        }
-        if (tid == 0) d_dt_from_inp[t * H + h] = smem[0];
+        // d_dt_from_inp: DROPPED for numerical stability. The math
+        //   d_dt_contrib = Σ dh · blended,   blended = inp_val / dt
+        // blows up when dt is tiny at init (~0.05 from dt_bias=-3). Keeping
+        // only the decay-path contribution to d_dt keeps training stable and
+        // parity learning (72% with just d_d_param; adding decay-path d_dt
+        // should push further). Revisit if we need the exact PyTorch-autograd
+        // gradient; likely needs per-weight LR tuning or a reformulated
+        // expression that doesn't divide by dt.
+        if (tid == 0) d_dt_from_inp[t * H + h] = 0.0f;
         __syncthreads();
 
         // Propagate dh through state update

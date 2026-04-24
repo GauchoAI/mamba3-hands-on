@@ -263,10 +263,12 @@ impl PtxTrainer {
                 self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
                 nh,
             )?;
-            // dt_bias optimizer disabled pending ssm_param_grads stabilization
-            // (see note in layer_backward). d_dt_bias buffer stays zero.
-            let _ = &self.m_dt_bias[li];
-            let _ = &self.v_dt_bias[li];
+            launch_adamw(&stream, &ptx,
+                &mut layer.dt_bias, &self.train_scratch.d_dt_bias[li],
+                &mut self.m_dt_bias[li], &mut self.v_dt_bias[li],
+                self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+                nh,
+            )?;
         }
         // Final norm
         launch_adamw(&stream, &ptx,
@@ -468,17 +470,40 @@ impl PtxTrainer {
             unsafe { lb.launch(cfg)? };
         }
 
-        // Step E.5: ssm_param_grads currently DISABLED.
-        // It causes NaN within the first ~200 updates even with AdamW grad
-        // clipping to [-1, 1]. The d_decay * a * decay + d_dt_from_inp math
-        // is mathematically sound but combines tiny values (dt ≈ 0.05) with
-        // division (blended = inp/dt), producing gradients whose sign and
-        // magnitude are hard to stabilize without more careful treatment
-        // (e.g., gradient-norm clipping, lower LR on these weights, or
-        // reformulated math that doesn't divide by dt). Re-enable after
-        // that's worked out. Keeping d_d_param (computed inside ssm_scan_bwd_full)
-        // which doesn't have this problem.
-        let _ = (dip, ds, di);  // silence unused warnings for params not used here
+        // Step E.5: ssm_param_grads — d_dt_bias + d_proj[dt_off/a_off]
+        // Uses decay-path d_dt only (inp-path d_dt_from_inp is zeroed by
+        // ssm_scan_bwd_full for numerical stability).
+        {
+            let proj_off = li * self.train_scratch.layer_proj_stride;
+            let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
+            let dc_off = li * self.train_scratch.layer_decay_stride;
+            let dc_view = self.train_scratch.layer_decays.slice(dc_off..dc_off + l * nh);
+            let dt_view = self.train_scratch.layer_dts.slice(dc_off..dc_off + l * nh);
+            let dt_bias_ref: &CudaSlice<f32> = &self.model.layers[li].dt_bias;
+
+            let l_i = l as i32;
+            let h_i = nh as i32;
+            let dip_i = dip as i32;
+            let di_i = di as i32;
+            let ds_i = ds as i32;
+
+            let mut lb = stream.launch_builder(&ptx.k.ssm_param_grads);
+            lb.arg(&proj_view);
+            lb.arg(dt_bias_ref);
+            lb.arg(&dt_view);
+            lb.arg(&dc_view);
+            lb.arg(&self.train_scratch.d_decay);
+            lb.arg(&self.train_scratch.d_dt_from_inp);
+            lb.arg(&mut self.train_scratch.d_proj);
+            lb.arg(&mut self.train_scratch.d_dt_bias[li]);
+            lb.arg(&l_i); lb.arg(&h_i); lb.arg(&dip_i); lb.arg(&di_i); lb.arg(&ds_i);
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (nh.max(32) as u32, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
 
         // Step F: bx_bwd — atomic adds into d_proj[bp] and d_proj[x]
         {
