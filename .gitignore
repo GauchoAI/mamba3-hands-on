@@ -28,3 +28,5 @@ comparison.log
 dashboard_local/
 logs/
 *.tar.gz
+target/
+Cargo.lock

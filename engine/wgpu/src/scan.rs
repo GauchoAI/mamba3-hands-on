@@ -208,7 +208,7 @@ fn bgl_entry(binding: u32, read_write: bool) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn bg_entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry {
+fn bg_entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
     wgpu::BindGroupEntry {
         binding,
         resource: buffer.as_entire_binding(),

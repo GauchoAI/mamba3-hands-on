@@ -6,11 +6,12 @@ description = "Low-level SSM scan engine for Mamba-3 — portable GPU compute vi
 
 [lib]
 name = "mamba3_engine"
-crate-type = ["cdylib"]
+
+[[bin]]
+name = "mamba3-bench"
+path = "src/main.rs"
 
 [dependencies]
 wgpu = "24"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
-pyo3 = { version = "0.23", features = ["extension-module"] }
-numpy = "0.23"
