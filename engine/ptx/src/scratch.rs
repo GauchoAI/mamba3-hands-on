@@ -39,7 +39,7 @@ impl PtxScratch {
         max_n_angles: usize,
         vocab_size: usize,
     ) -> Result<Self, Box<dyn Error>> {
-        let stream = ctx.ctx.default_stream();
+        let stream = &ctx.stream;
         Ok(Self {
             max_seq,
             tokens: stream.alloc_zeros::<u32>(max_seq)?,

@@ -1,7 +1,7 @@
 //! CUDA runtime + kernel loading. Compiles kernels.cu → PTX at startup via
 //! NVRTC with strict FP32 flags.
 
-use cudarc::driver::{CudaContext, CudaFunction, CudaModule};
+use cudarc::driver::{CudaContext, CudaFunction, CudaModule, CudaStream};
 use cudarc::nvrtc::{compile_ptx_with_opts, CompileOptions};
 use std::error::Error;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ pub struct Kernels {
 
 pub struct PtxContext {
     pub ctx: Arc<CudaContext>,
+    pub stream: Arc<CudaStream>,
     pub _module: Arc<CudaModule>,
     pub k: Kernels,
 }
@@ -32,6 +33,9 @@ const KERNELS_CU: &str = include_str!("ptx/kernels.cu");
 impl PtxContext {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let ctx = CudaContext::new(0)?;
+        // Use a dedicated non-default stream so we can capture CUDA graphs
+        // (default/null stream is not capturable).
+        let stream = ctx.new_stream()?;
 
         // Strict FP32 flags. We explicitly enable FMA because our CPU reference
         // uses IEEE-style FMA (fma.rn), we want prec-div and prec-sqrt, we do
@@ -69,6 +73,7 @@ impl PtxContext {
 
         Ok(Self {
             ctx,
+            stream,
             _module: module,
             k,
         })

@@ -56,7 +56,7 @@ impl PtxModel {
         ptx: Arc<PtxContext>,
         max_seq: usize,
     ) -> Result<Self, Box<dyn Error>> {
-        let stream = ptx.ctx.default_stream();
+        let stream = ptx.stream.clone();
         let embed_w = stream.memcpy_stod(&model.embed_w)?;
         let embed_norm_w = stream.memcpy_stod(&model.embed_norm_w)?;
         let embed_norm_b = stream.memcpy_stod(&model.embed_norm_b)?;
@@ -119,7 +119,7 @@ impl PtxModel {
 
     /// Forward pass using persistent scratch buffers (no per-call allocation).
     pub fn forward(&self, tokens: &[u32]) -> Result<Vec<f32>, Box<dyn Error>> {
-        let stream = self.ptx.ctx.default_stream();
+        let stream = self.ptx.stream.clone();
         self.upload_tokens(&stream, tokens)?;
         self.record_compute(&stream, tokens.len())?;
         stream.synchronize()?;
@@ -138,7 +138,7 @@ impl PtxModel {
         tokens: &[u32],
         graph: &CudaGraph,
     ) -> Result<Vec<f32>, Box<dyn Error>> {
-        let stream = self.ptx.ctx.default_stream();
+        let stream = self.ptx.stream.clone();
         self.upload_tokens(&stream, tokens)?;
         graph.launch()?;
         stream.synchronize()?;
@@ -155,7 +155,7 @@ impl PtxModel {
     /// scratch.tokens via `forward_graph` on each replay — the graph only
     /// contains kernel launches, not the memcpy.
     pub fn capture_graph(&self, l: usize) -> Result<CudaGraph, Box<dyn Error>> {
-        let stream = self.ptx.ctx.default_stream();
+        let stream = self.ptx.stream.clone();
         // Warm JIT once (kernels compiled / resolved on first launch).
         let dummy: Vec<u32> = vec![0; l];
         self.upload_tokens(&stream, &dummy)?;
