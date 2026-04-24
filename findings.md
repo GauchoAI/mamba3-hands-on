@@ -1973,3 +1973,135 @@ tried JIT for alternating_next (which graduated at 100%).
 The Mamba community on Hugging Face (kernels-community/mamba-ssm)
 is building community kernels. A correct, tested kernel with a
 parity regression test would be a real contribution.
+
+---
+
+## Entry 27 — PTX engine: precision verified, gradient coverage is the real gap
+
+**Date:** 2026-04-24
+
+### Context
+
+Built `engine/ptx/` — a hand-written PTX Mamba-3 engine for H100. Forward
+pass lands bit-close to CPU (max diff 7.6e-6, runs 2.75× faster than CPU).
+Wrote a full backward chain that matches `engine/wgpu/src/train.rs::TrainState`
+step-by-step to 1e-6. Ran a parity training on it, hit 61%. Panicked —
+thought we'd regressed into a precision bug. Turns out the picture is
+different and more useful.
+
+### The precision test
+
+Loaded `/tmp/parity.bin` into both `Mamba3Model::forward` (Rust CPU) and
+`PtxModel::forward`. Ran 1000 random parity inputs across bit-lengths 3–8:
+
+```
+CPU↔PTX argmax mismatches: 0 / 1000
+max |CPU_rust − PTX| forward diff: 1.05e-5  (FP32 epsilon level)
+```
+
+Zero divergences. If we had inherited the Triton-style fp16-leaning bug
+from Entry 23, we'd see per-forward diffs ~1e-3 and argmax divergences.
+We see neither. The PTX scan is fp32 throughout; kernels compiled with
+`--fmad=true --ftz=false --prec-div=true --prec-sqrt=true`, every FMA
+via `__fmaf_rn` (IEEE round-to-nearest). Precision is clean.
+
+### The scope discovery
+
+My `PtxTrainer::train_step` matches `mamba3_engine::TrainState::train_step`
+bit-for-bit. Both get 61% on parity. But `parity_meta.json` shows 35
+lineage rounds of Python `specialist_trainer.py` also capping at 63%
+across various backends. So is parity broken in the codebase?
+
+**No.** `specialist_trainer.py --scan-backend jit --device cuda` with the
+winning config from line 1867 (`d=64, L=4, dS=8`) still trains parity
+to 100% in **one cycle (7.5 s)** on H100. Confirmed today:
+
+```
+cycle 1  loss=6.736  acc=100%  best=100%  7.5s    ← stage 1 mastered
+cycle 2  loss=0.023  acc=100%  (curriculum advanced to stage 2)
+cycle 3  loss=0.017  acc=100%  (stage 3, max_len=16)
+cycle 4  loss=0.000  acc=100%
+cycle 5  loss=0.000  acc=100%
+```
+
+No regression upstream. The 63% ceiling in parity_meta.json is because
+the GA rounds used `L=3 dS=16` champions and never properly explored
+the `L=4 dS=8` winner.
+
+### Why my PTX gets 61%, then
+
+`engine/wgpu/src/train.rs::backward_analytical` **deliberately zeros**
+the gradients of `dt_bias`, `d_param`, `b_norm_w/b`, `c_norm_w/b`, per-layer
+`layer_norm_w/b`, and `scale`. See lines 388–397:
+
+```rust
+lgrads.extend(vec![0.0f32; layer.dt_bias.len()]);   // dt_bias grad (approx 0)
+lgrads.extend(vec![0.0f32; layer.d_param.len()]);   // D grad
+lgrads.extend(vec![0.0f32; layer.b_norm_w.len()]);  // B norm
+...
+lgrads.push(0.0);                                    // scale
+```
+
+Without those gradients, SSM dynamics aren't trainable — parity needs
+`dt_bias` (time constant of state retention) and `d_param` (skip-path gain)
+to be tuned, and neither is reachable through just `in_proj_w`/`out_proj_w`.
+Easy tasks whose answer is a function of the last token converge without
+SSM-parameter grads; stateful tasks like parity can't.
+
+So my PTX faithfully reproduces the Rust reference's incompleteness.
+That's consistency, not correctness. To match PyTorch autograd, I need
+to actually compute all the gradients Rust TrainState skips.
+
+### The gap, precisely
+
+To close the gap between `PtxTrainer` and PyTorch autograd:
+
+1. `d_decay[t, h] = Σ_{p,n} dh[p,n] · states[t, h, p, n]` (compute before
+   `dh *= decay` propagation in scan_bwd)
+2. `d_dt[t, h]` from two paths:
+   - via decay: `d_decay[t, h] · a[t, h] · decay[t, h]` (scalar)
+   - via inp_val: `Σ_{p,n} d_inp_val · blended`
+3. `d_a[t, h] = d_decay[t, h] · dt[t, h] · decay[t, h]`
+4. `d_dt_bias[h] += Σ_t d_dt[t, h] · sigmoid(dd_dt[t, h] + dt_bias[h])`,
+   plus write to `d_proj[dt_off + h]` via the same sigmoid
+5. `d_dd_a → d_proj[a_off + h]` via softplus' derivative, clamp-aware
+6. `d_d_param[h] += Σ_{t,p} dy_pre[t,h,p] · x_raw[t, h*hd + p]`
+7. `d_trap` → `d_proj[trap_off + h]`: `d_trap = Σ_{p,n} d_blended · (bx_cur − bx_prev)`,
+   then `d_trap_raw = d_trap · trap · (1 − trap)`
+8. **Correct bx backward.** The current `TrainState` code `d_bx = d_scan_inp / (dt·trap + ε)`
+   divides where it should multiply — CPU-side bug. Real math:
+   `d_blended = d_inp_val · dt`,
+   `d_bx_cur[t] = d_blended[t] · trap[t] + d_blended[t+1] · (1 − trap[t+1])`
+   (the second term couples timesteps through `bx_prev`; reverse pass needed).
+9. `d_x_raw[t, h, p] = Σ_n d_bx_cur · bp_raw[t, n]`,
+   `d_bp_raw[t, n] += Σ_p d_bx_cur · x_raw[t, h*hd + p]` (atomic across heads)
+10. `layer_norm_bwd` on `bp_raw → bp` and `cp_raw → cp`, giving
+    `d_b_norm_w/b`, `d_c_norm_w/b`
+11. RoPE backward and sequential backward of `phase[t,k] = cumsum(angles·dt_mean)`,
+    producing `d_angles → d_proj[ang_off]`, and `d_dt_mean` → another contribution to `d_dt`
+12. Per-layer pre-LN backward (for `d_layer_norm_w/b`)
+13. `d_scale[l] = Σ_i d_x[i] · y_out[l, i]`
+
+### Plan
+
+**Track 1 (PTX backward closure):** implement items 1–13. Target:
+`cargo run --release --bin test-parity-train` reaches ≥95% in the same
+curriculum-number-of-cycles as `specialist_trainer.py --scan-backend jit
+--device cuda`. Reference will be PyTorch autograd's gradient output at
+step 0 — grad magnitudes should match to within ~1e-4 for each weight
+tensor.
+
+**Track 2 (CPU vs CUDA JIT divergence):** continuation of Entry 23.
+`specialist_trainer.py --scan-backend jit --device cpu` does NOT converge
+in the same step budget that `--device cuda` does. Smaller-blast-radius
+than the Triton fp16 bug, but real.
+
+### What doesn't need revisiting
+
+- PTX forward precision: **done**, verified, 1e-5 vs Rust CPU, zero
+  argmax mismatches over 1000 inputs. Any future accusation that "PTX
+  introduced a CUDA precision regression" can be rebutted with this.
+- The `ptxd` scheduler daemon (single-process, sequential JSON jobs
+  via stdin/stdout): wired up, works. Once Track 1 closes the gradient
+  gap, ptxd becomes a drop-in replacement for `specialist_trainer.py` in
+  `three_populations.py`, with PTX forward at 2.75× CPU.
