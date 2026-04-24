@@ -27,6 +27,11 @@ pub struct GpuPipeline {
     x_buf: wgpu::Buffer,        // (max_seq, d)
     staging: wgpu::Buffer,      // readback
 
+    // Pre-allocated upload buffers (reused via write_buffer)
+    a_bufs: Vec<wgpu::Buffer>,  // per-layer A upload buffer (largest needed)
+    param_bufs: Vec<wgpu::Buffer>, // per-dispatch params
+    logits_c_buf: wgpu::Buffer, // LM head output
+
     // Pipelines
     norm_pipeline: wgpu::ComputePipeline,
     norm_layout: wgpu::BindGroupLayout,
@@ -111,6 +116,30 @@ impl GpuPipeline {
             entry_point: Some("main"), compilation_options: Default::default(), cache: None,
         });
 
+        // Pre-allocate A upload buffers (one per layer for in_proj, out_proj, plus LM head)
+        let n_dispatches = model.layers.len() * 2 + 1; // in_proj + out_proj per layer + LM head
+        let max_a_size = model.layers.iter().map(|l| {
+            let in_size = max_seq * d;
+            let out_size = max_seq * di;
+            in_size.max(out_size)
+        }).max().unwrap_or(max_seq * d);
+
+        let mut a_bufs = Vec::new();
+        let mut param_bufs = Vec::new();
+        for _ in 0..n_dispatches {
+            a_bufs.push(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None, size: (max_a_size * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            param_bufs.push(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None, size: 16,  // 4 u32s
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+        let logits_c_buf = buf(max_seq * v);
+
         let total_mb = (model.embed_w.len() + model.final_norm_w.len() * 2
             + model.layers.iter().map(|l| l.in_proj_w.len() + l.out_proj_w.len() + l.layer_norm_w.len() * 2).sum::<usize>()
         ) as f64 * 4.0 / 1024.0 / 1024.0;
@@ -119,17 +148,19 @@ impl GpuPipeline {
         Self {
             cpu_model: model, gpu, embed_w, embed_norm_w, embed_norm_b,
             final_norm_w, final_norm_b, layers, x_buf, staging,
+            a_bufs, param_bufs, logits_c_buf,
             norm_pipeline, norm_layout, max_seq,
         }
     }
 
-    /// Forward pass — GPU matmuls + norms, CPU scan only.
-    /// One readback per layer (for SSM scan), one final readback for logits.
+    /// Forward pass — zero-alloc GPU dispatches with pre-allocated buffers.
+    /// Uses write_buffer (no allocation) instead of create_buffer_init.
     pub fn forward(&self, tokens: &[u32]) -> Vec<f32> {
         let l = tokens.len();
         let d = self.cpu_model.d_model;
         let v = self.cpu_model.vocab_size;
         let di = self.cpu_model.d_inner;
+        let mut dispatch_idx = 0usize;
 
         // 1. Embedding (CPU — lookup, tiny)
         let mut x = vec![0.0f32; l * d];
@@ -138,10 +169,8 @@ impl GpuPipeline {
             if tok < v { for i in 0..d { x[t * d + i] = self.cpu_model.embed_w[tok * d + i]; } }
         }
 
-        // Upload x to GPU
-        self.write_buffer(&self.x_buf, &x);
-
-        // GPU embed norm
+        // Upload x to GPU, run embed norm
+        self.gpu.queue.write_buffer(&self.x_buf, 0, bytemuck::cast_slice(&x));
         self.dispatch_norm(&self.x_buf, &self.embed_norm_w, &self.embed_norm_b, l as u32, d as u32);
 
         // 2. Layers
@@ -149,48 +178,94 @@ impl GpuPipeline {
             let lb = &self.layers[li];
             let dip = layer.d_in_proj;
 
-            // GPU: copy x → norm in-place for this layer
-            // We need x_normed but also keep x for residual. Copy x to proj_buf temporarily.
-            // Actually: read x back, norm on CPU (to preserve x for residual), upload x_normed, GPU matmul.
-            // This is the minimum-readback approach.
-
+            // Read x for residual + pre-norm
             let x_data = self.read_buffer(&self.x_buf, l * d);
-
-            // CPU: pre-norm (need original x for residual)
             let mut x_normed = x_data.clone();
             crate::model::layer_norm_pub(&mut x_normed, &layer.layer_norm_w, &layer.layer_norm_b, l, d);
 
-            // GPU in_proj
-            let proj = self.dispatch_matmul(&x_normed, &lb.in_proj_w, &lb.proj_buf, l as u32, d as u32, dip as u32);
+            // GPU in_proj — zero-alloc dispatch
+            let proj = self.dispatch_matmul_fast(
+                &x_normed, &lb.in_proj_w, &lb.proj_buf,
+                l as u32, d as u32, dip as u32, &mut dispatch_idx
+            );
 
-            // SSM: preprocess on CPU (splits, norms, RoPE, outer product), scan on GPU
+            // SSM: preprocess CPU + scan GPU
             let y_inner = self.run_ssm_gpu(&proj, layer, l);
 
-            // GPU out_proj
-            let y_out = self.dispatch_matmul(&y_inner, &lb.out_proj_w, &lb.y_out_buf, l as u32, di as u32, d as u32);
+            // GPU out_proj — zero-alloc dispatch
+            let y_out = self.dispatch_matmul_fast(
+                &y_inner, &lb.out_proj_w, &lb.y_out_buf,
+                l as u32, di as u32, d as u32, &mut dispatch_idx
+            );
 
-            // CPU residual (x = x_data + scale * y_out)
+            // Residual
             let mut new_x = x_data;
             for i in 0..l * d { new_x[i] += layer.scale * y_out[i]; }
-
-            // Upload updated x
-            self.write_buffer(&self.x_buf, &new_x);
+            self.gpu.queue.write_buffer(&self.x_buf, 0, bytemuck::cast_slice(&new_x));
         }
 
-        // 3. GPU final norm
+        // 3. Final norm
         self.dispatch_norm(&self.x_buf, &self.final_norm_w, &self.final_norm_b, l as u32, d as u32);
 
-        // 4. Read x, GPU LM head
+        // 4. LM head
         let x_final = self.read_buffer(&self.x_buf, l * d);
-        let logits_buf = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None, size: (l * v * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        self.dispatch_matmul_to(&x_final, &self.embed_w, &logits_buf, l as u32, d as u32, v as u32);
+        let logits = self.dispatch_matmul_fast(
+            &x_final, &self.embed_w, &self.logits_c_buf,
+            l as u32, d as u32, v as u32, &mut dispatch_idx
+        );
+        logits
+    }
 
-        // Read logits
-        self.read_buffer_from(&logits_buf, l * v)
+    /// Zero-allocation matmul dispatch: reuses pre-allocated A and params buffers.
+    fn dispatch_matmul_fast(
+        &self, a: &[f32], b_buf: &wgpu::Buffer, c_buf: &wgpu::Buffer,
+        m: u32, k: u32, n: u32, idx: &mut usize,
+    ) -> Vec<f32> {
+        let di = *idx;
+        *idx += 1;
+
+        // Write A data into pre-allocated buffer (zero allocation)
+        self.gpu.queue.write_buffer(&self.a_bufs[di], 0, bytemuck::cast_slice(a));
+
+        // Write params into pre-allocated buffer
+        #[repr(C)]
+        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+        struct P { m: u32, k: u32, n: u32, _pad: u32 }
+        self.gpu.queue.write_buffer(&self.param_bufs[di], 0, bytemuck::bytes_of(&P { m, k, n, _pad: 0 }));
+
+        // Bind group (still needs creation — wgpu requires it per-dispatch)
+        let bg = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None, layout: &self.gpu.matmul_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.a_bufs[di].as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: b_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: c_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 3, resource: self.param_bufs[di].as_entire_binding() },
+            ],
+        });
+
+        let tile = 16u32;
+        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = enc.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.gpu.matmul_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups((m + tile - 1) / tile, (n + tile - 1) / tile, 1);
+        }
+        let output_size = (m * n) as usize;
+        enc.copy_buffer_to_buffer(c_buf, 0, &self.staging, 0, (output_size * 4) as u64);
+        self.gpu.queue.submit(std::iter::once(enc.finish()));
+
+        let slice = self.staging.slice(..((output_size * 4) as u64));
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
+        self.gpu.device.poll(wgpu::Maintain::Wait);
+        rx.recv().unwrap().unwrap();
+        let data = slice.get_mapped_range();
+        let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
+        drop(data);
+        self.staging.unmap();
+        result
     }
 
     /// Run SSM: preprocess (CPU) → scan (GPU) → gate (CPU).
