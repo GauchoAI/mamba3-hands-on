@@ -139,7 +139,7 @@ fn run_parity_training() {
         ((rng_state >> 33) & 1) as u32
     };
 
-    let total_steps = 2000;
+    let total_steps = 5000;
     let start = Instant::now();
     let mut best_acc = 0.0f32;
 

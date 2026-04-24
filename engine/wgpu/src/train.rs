@@ -21,12 +21,7 @@ struct ForwardCache {
     // Per-layer SSM cache
     layer_projs: Vec<Vec<f32>>,      // in_proj output
     layer_y_inner: Vec<Vec<f32>>,    // y before out_proj (L, d_inner)
-    layer_scan_states: Vec<Vec<f32>>,// SSM states at each timestep (L+1, H, hD, dS)
-    layer_scan_inp: Vec<Vec<f32>>,   // SSM input (L, H, hD, dS)
-    layer_scan_decay: Vec<Vec<f32>>, // decay (L, H)
-    layer_scan_cp: Vec<Vec<f32>>,    // Cp (L, dS)
-    layer_scan_x: Vec<Vec<f32>>,     // x_raw (L, H, hD)
-    layer_scan_zsilu: Vec<Vec<f32>>, // z_silu (L, H, hD)
+    layer_scan_caches: Vec<ScanCache>,
     // Final
     x_before_head: Vec<f32>,         // after final norm
     x_after_norm_input: Vec<f32>,    // embedding output before layers (for embed grad)
@@ -88,12 +83,14 @@ impl TrainState {
         let mut layer_inputs = Vec::new();
         let mut layer_projs = Vec::new();
         let mut layer_y_inner = Vec::new();
+        let mut layer_scan_caches = Vec::new();
 
         for layer in &self.model.layers {
             layer_inputs.push(x.clone());
-            let (y, proj, y_inner) = self.ssm_layer_cached(&x, layer, l);
+            let (y, proj, y_inner, scan_cache) = self.ssm_layer_cached(&x, layer, l);
             layer_projs.push(proj);
             layer_y_inner.push(y_inner);
+            layer_scan_caches.push(scan_cache);
             for i in 0..l * d {
                 x[i] += layer.scale * y[i];
             }
@@ -122,6 +119,7 @@ impl TrainState {
             layer_inputs,
             layer_projs,
             layer_y_inner,
+            layer_scan_caches,
             x_before_head,
             x_after_norm_input: x_after_norm,
         };
@@ -130,7 +128,7 @@ impl TrainState {
     }
 
     fn ssm_layer_cached(&self, x_in: &[f32], lw: &LayerWeights, l: usize)
-        -> (Vec<f32>, Vec<f32>, Vec<f32>)
+        -> (Vec<f32>, Vec<f32>, Vec<f32>, ScanCache)
     {
         let d = self.model.d_model;
         let di = self.model.d_inner;
@@ -140,8 +138,8 @@ impl TrainState {
         let mut proj = vec![0.0f32; l * dip];
         matmul_t(&mut proj, x_in, &lw.in_proj_w, l, d, dip);
 
-        // Simplified SSM (same as model.rs forward)
-        let y_inner = self.model.run_ssm_from_proj(&proj, lw, l);
+        // SSM with state caching
+        let (y_inner, scan_cache) = self.model.run_ssm_from_proj(&proj, lw, l);
 
         // Out-projection
         let mut out = vec![0.0f32; l * d];
@@ -155,7 +153,7 @@ impl TrainState {
             }
         }
 
-        (out, proj, y_inner)
+        (out, proj, y_inner, scan_cache)
     }
 
     fn backward_analytical(&self, d_logits: &[f32], cache: &ForwardCache) -> Vec<f32> {
@@ -251,7 +249,7 @@ impl TrainState {
                 }
             }
 
-            // === SSM backward: propagate d_y_inner through scan + gate ===
+            // === SSM backward with proper adjoint scan ===
             let dip = layer.d_in_proj;
             let nh = self.model.n_heads;
             let hd = self.model.headdim;
@@ -259,58 +257,100 @@ impl TrainState {
             let mut d_in_proj_w = vec![0.0f32; dip * d];
             let mut d_proj = vec![0.0f32; l * dip];
 
-            // Re-run forward to get intermediates (z_silu, scan states, etc.)
+            let sc = &cache.layer_scan_caches[li];
             let proj = &cache.layer_projs[li];
             let z_raw = proj_slice(proj, l, dip, 0, di);
-            let x_raw = proj_slice(proj, l, dip, di, di);
 
-            // z_silu for gating
-            let z_silu: Vec<f32> = z_raw.iter().map(|&z| {
-                let s = sigmoid(z);
-                z * s
-            }).collect();
-
-            // d_y_inner = d_y_pregate * z_silu + d_z_silu_contribution
-            // But we need y_pregate... For the gate backward:
-            // y = y_pregate * z_silu
+            // Gate backward: y = y_pregate * z_silu
             // d_y_pregate = d_y * z_silu
             // d_z_silu = d_y * y_pregate
-            // d_z = d_z_silu * (sigmoid(z) + z * sigmoid(z) * (1 - sigmoid(z)))
-
-            // Compute d_z (gradient through silu gate into z projection)
+            let mut d_y_pregate = vec![0.0f32; l * di];
             for t in 0..l {
                 for i in 0..di {
+                    d_y_pregate[t * di + i] = d_y_inner[t * di + i] * sc.z_silu[t * di + i];
+                    // d_z via silu derivative
+                    let zs = sc.z_silu[t * di + i];
+                    let y_pre = if zs.abs() > 1e-8 { y_inner[t * di + i] / zs } else { 0.0 };
                     let z = z_raw[t * di + i];
                     let s = sigmoid(z);
-                    let dsilu_dz = s + z * s * (1.0 - s); // derivative of silu
-                    // y_pregate = y_inner / z_silu (but z_silu could be 0)
-                    let zs = z_silu[t * di + i];
-                    let y_pre = if zs.abs() > 1e-8 { y_inner[t * di + i] / zs } else { 0.0 };
-                    let d_zs = d_y_inner[t * di + i] * y_pre;
-                    // d_z into projection slot 0..di
-                    d_proj[t * dip + i] = d_zs * dsilu_dz;
+                    let dsilu_dz = s + z * s * (1.0 - s);
+                    d_proj[t * dip + i] = d_y_inner[t * di + i] * y_pre * dsilu_dz;
                 }
             }
 
-            // d_y_pregate flows into x (skip) and scan output
-            for t in 0..l {
-                for i in 0..di {
-                    let d_y_pre = d_y_inner[t * di + i] * z_silu[t * di + i];
-                    // x gets D * d_y_pregate
-                    let h_idx = i / hd;
-                    if h_idx < nh {
-                        // d_x_raw
-                        d_proj[t * dip + di + i] += d_y_pre * layer.d_param[h_idx];
+            // Adjoint scan: propagate d_y_pregate backwards through the SSM recurrence
+            // dh[t] = d_y_pregate[t] outer C[t] + decay[t+1] * dh[t+1]
+            let mut dh = vec![0.0f32; nh * hd * ds];
+            let mut d_scan_inp = vec![0.0f32; l * nh * hd * ds];
+
+            for t in (0..l).rev() {
+                for h in 0..nh {
+                    // Add output gradient to adjoint state
+                    for p in 0..hd {
+                        let dy_pre = d_y_pregate[t * di + h * hd + p];
+                        for n in 0..ds {
+                            dh[(h * hd + p) * ds + n] += dy_pre * sc.cp[t * ds + n];
+                        }
+                        // d_x from skip connection
+                        d_proj[t * dip + di + h * hd + p] += dy_pre * layer.d_param[h];
                     }
-                    // The scan state gradient is complex — approximate by
-                    // flowing d_y_pregate directly into Bp and Cp slots
-                    // This captures the dominant gradient path through the SSM
-                    let n_idx = i % ds;
-                    if n_idx < ds {
-                        // d_Bp (partial)
-                        d_proj[t * dip + 2 * di + n_idx] += d_y_pre * 0.1;
-                        // d_Cp (partial)
-                        d_proj[t * dip + 2 * di + ds + n_idx] += d_y_pre * 0.1;
+
+                    // d_Cp: += d_y_pregate * h[t]
+                    for n in 0..ds {
+                        let mut d_cp_n = 0.0f32;
+                        for p in 0..hd {
+                            d_cp_n += d_y_pregate[t * di + h * hd + p]
+                                * sc.states[((t + 1) * nh * hd * ds) + (h * hd + p) * ds + n];
+                        }
+                        // Cp is broadcast across heads — accumulate
+                        d_proj[t * dip + 2 * di + ds + n] += d_cp_n;
+                    }
+
+                    // d_inp[t] = dh (the adjoint state IS the gradient of inp)
+                    for p in 0..hd {
+                        for n in 0..ds {
+                            d_scan_inp[((t * nh + h) * hd + p) * ds + n] = dh[(h * hd + p) * ds + n];
+                        }
+                    }
+
+                    // Propagate adjoint: dh[t-1] = decay[t] * dh[t]
+                    let dec = sc.decay[t * nh + h];
+                    for p in 0..hd {
+                        for n in 0..ds {
+                            dh[(h * hd + p) * ds + n] *= dec;
+                        }
+                    }
+                }
+            }
+
+            // d_scan_inp → flows back through: inp = (trap * Bx + ...) * dt
+            // d_Bx = d_scan_inp * dt * trap (simplified, ignoring prev term)
+            // Bx = outer(x, Bp), so:
+            // d_x[p] = sum_n(d_Bx[p,n] * Bp[n])
+            // d_Bp[n] = sum_p(d_Bx[p,n] * x[p])
+            // Get Bp from cache (it was normalized)
+            let bp_proj = proj_slice(proj, l, dip, 2 * di, ds);
+            // Note: bp was layer-normed during forward. Use the raw projection as approx.
+
+            for t in 0..l {
+                for h in 0..nh {
+                    let dt_val = softplus(
+                        proj_slice(proj, l, dip, 2*di + 2*ds, nh)[t * nh + h] + layer.dt_bias[h]
+                    );
+                    let tr = sigmoid(
+                        proj_slice(proj, l, dip, 2*di + 2*ds + 2*nh, nh)[t * nh + h]
+                    );
+
+                    for p in 0..hd {
+                        let mut d_x_val = 0.0f32;
+                        for n in 0..ds {
+                            let d_bx = d_scan_inp[((t * nh + h) * hd + p) * ds + n] / (dt_val * tr + 1e-8);
+                            // d_Bp[n] += d_bx * x[p]
+                            d_proj[t * dip + 2 * di + n] += d_bx * sc.x_raw[t * di + h * hd + p];
+                            // d_x[p] += d_bx * Bp[n]
+                            d_x_val += d_bx * bp_proj[t * ds + n];
+                        }
+                        d_proj[t * dip + di + h * hd + p] += d_x_val;
                     }
                 }
             }
@@ -451,7 +491,7 @@ impl Mamba3Model {
     }
 
     /// Run SSM from already-computed projection (used by both forward and cached forward)
-    pub fn run_ssm_from_proj(&self, proj: &[f32], lw: &LayerWeights, l: usize) -> Vec<f32> {
+    pub fn run_ssm_from_proj(&self, proj: &[f32], lw: &LayerWeights, l: usize) -> (Vec<f32>, ScanCache) {
         let di = self.d_inner;
         let nh = self.n_heads;
         let hd = self.headdim;
@@ -513,8 +553,10 @@ impl Mamba3Model {
             }
         }
 
-        // Scan + gate
-        let mut state = vec![0.0f32; nh * hd * ds];
+        // Scan + gate — SAVE states for backward
+        let state_size = nh * hd * ds;
+        let mut states = vec![0.0f32; (l + 1) * state_size]; // states[0] = zeros (init)
+        let mut state = vec![0.0f32; state_size];
         let mut y = vec![0.0f32; l * di];
         let mut z_silu = vec![0.0f32; l * di];
         for i in 0..l * di {
@@ -540,10 +582,28 @@ impl Mamba3Model {
                     y[t * di + h * hd + p] = sum * z_silu[t * di + h * hd + p];
                 }
             }
+            // Save state for backward (after this timestep's update)
+            states[(t + 1) * state_size..(t + 2) * state_size].copy_from_slice(&state);
         }
 
-        y
+        (y, ScanCache { inp, decay, cp, x_raw: x_raw.clone(), z_silu, states, d_param: lw.d_param.clone(), l, nh, hd, ds, di })
     }
+}
+
+/// Cached scan intermediates for backward
+struct ScanCache {
+    inp: Vec<f32>,      // (L, H, hD, dS)
+    decay: Vec<f32>,    // (L, H)
+    cp: Vec<f32>,       // (L, dS)
+    x_raw: Vec<f32>,    // (L, d_inner) — x values for skip
+    z_silu: Vec<f32>,   // (L, d_inner)
+    states: Vec<f32>,   // (L+1, H, hD, dS)
+    d_param: Vec<f32>,  // (H,)
+    l: usize,
+    nh: usize,
+    hd: usize,
+    ds: usize,
+    di: usize,
 }
 
 fn sigmoid(x: f32) -> f32 { 1.0 / (1.0 + (-x).exp()) }
