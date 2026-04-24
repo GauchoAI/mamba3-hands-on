@@ -149,7 +149,8 @@ impl PtxModel {
         assert!(l <= self.scratch.borrow().max_seq, "sequence exceeds max_seq");
 
         // Upload tokens into persistent buffer.
-        let mut scratch = self.scratch.borrow_mut();
+        let mut scratch_ref = self.scratch.borrow_mut();
+        let scratch: &mut PtxScratch = &mut *scratch_ref;
         {
             // memcpy_htod into an existing slice: use cudarc API
             // Slice into first l elements, then memcpy.
