@@ -25,6 +25,7 @@ struct Args {
     eps: f32,
     tol: f32,
     samples_per_tensor: usize,
+    warmup_steps: usize,
 }
 
 impl Default for Args {
@@ -41,6 +42,7 @@ impl Default for Args {
             eps: 1e-2,       // larger eps → lower FD noise floor (~2.5e-5)
             tol: 1e-1,       // 10% rel-err — fp32 FD is only ~6 sig figs usable
             samples_per_tensor: 3,
+            warmup_steps: 20,
         }
     }
 }
@@ -61,6 +63,7 @@ fn parse_args() -> Args {
             "--eps"     => { a.eps = val().parse().unwrap(); i += 2; }
             "--tol"     => { a.tol = val().parse().unwrap(); i += 2; }
             "--samples" => { a.samples_per_tensor = val().parse().unwrap(); i += 2; }
+            "--warmup"  => { a.warmup_steps = val().parse().unwrap(); i += 2; }
             _ => { eprintln!("unknown arg: {}", key); std::process::exit(2); }
         }
     }
@@ -225,9 +228,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args = parse_args();
     println!("=== Finite-difference gradient check ===");
     println!(
-        "Model: d={}, L={}, dS={}, hd={}, V={}  eps={}  tol={}",
+        "Model: d={}, L={}, dS={}, hd={}, V={}  eps={}  tol={}  warmup={}",
         args.d_model, args.n_layers, args.d_state, args.headdim,
-        args.vocab_size, args.eps, args.tol
+        args.vocab_size, args.eps, args.tol, args.warmup_steps
     );
     let ptx = Arc::new(PtxContext::new()?);
 
@@ -242,6 +245,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     // loss is non-trivial (well above softmax-uniform).
     let tokens: Vec<u32> = vec![47, 132, 5, 201, 88, 19, 249, 73];
     let targets: Vec<u32> = vec![250, 11, 174, 66, 3, 189, 42, 100];
+
+    // Warm up the model: at fresh init most gradients sit under the FD noise
+    // floor, so FD tags them "noise" (inconclusive). A handful of training
+    // steps pushes weights off the symmetric init and grows the signal.
+    if args.warmup_steps > 0 {
+        print!("warming up: {} train steps ... ", args.warmup_steps);
+        let mut last_loss = 0.0f32;
+        for _ in 0..args.warmup_steps {
+            last_loss = trainer.train_step(&tokens, &targets)?;
+        }
+        println!("loss={:.4}", last_loss);
+    }
 
     // Populate gradients once, then pick the indices with the LARGEST
     // analytical gradient magnitude per tensor — those are above FD noise
