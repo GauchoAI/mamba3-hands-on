@@ -2118,30 +2118,66 @@ to `d_dt`). Fixed two earlier bugs along the way:
   CPU reference `train.rs` has the same math bug. Fixed to `d_bx = d_scan_inp * dt * trap`.
 
 **Result on parity (d=64 L=4 dS=8, 5000 steps, batch=64):**
-- Baseline (only `in_proj`, `out_proj`, `embed`, `fnorm` grads): **61% best**
-- With `d_d_param` enabled: **72% best**, status "LEARNING"
-- No NaN, stable throughout
+- Baseline (only `in_proj`, `out_proj`, `embed`, `fnorm` grads): 58–61% best
+- With `d_d_param` enabled: 58–72% best; single peak at 72% (step 400),
+  mostly 50–58%. Slightly better on average but not robustly converging.
+- With `d_d_param + d_dt_bias` (decay-path only): **worse**, 58% and
+  training diverges around step 2400 (loss ramps from 0.44 to ≥1.6).
+- With `d_d_param + d_layer_norm_w/b` (per-layer pre-norm bwd):
+  **slower convergence**, 58% best. The correct LN backward gives a smaller
+  gradient than the "skip LN" approximation my earlier code was using, and
+  the model doesn't reach the same early peak.
+- With `d_d_param + d_dt_bias` (via `ssm_param_grads`, inp-path enabled):
+  NaN by step 200. The `blended = inp_val / dt` division amplifies by ~20×
+  at init; AdamW grad clipping to [-1, 1] isn't enough.
 
-**Stalled on d_dt_bias.** Added `ssm_param_grads` kernel (computes `d_dt_bias`
-from `d_decay + d_dt_from_inp` through softplus derivatives). Even with AdamW
-gradient clipping to [-1, 1], training NaNs within the first 200 steps.
-Suspect the `blended = inp_val / dt` division produces pathologically large
-values when `dt ≈ 0.05` (typical after initialization), compounded across
-(p, n) reductions. Currently disabled; kernel definition remains in
-`kernels.cu` for later fix. Possible fixes:
-- Tighter gradient clipping on `d_dt_bias` path specifically (not uniform)
-- Reformulate `d_dt_from_inp` to avoid the division
-- Per-weight-group learning rate (smaller LR for dt_bias)
+**Conclusion of iteration 1.** Adding individual gradient paths one at a time
+is hitting a wall. Each "mathematically correct" addition either:
+(a) doesn't improve the peak meaningfully (single-noise peak at 72% is not
+reproducible), or
+(b) destabilizes training because magnitudes interact badly with the fixed
+LR/WD/clip triple that works for the baseline weights.
 
-**Next items in gradient closure (unordered):**
-- Stabilize `d_dt_bias` (above)
-- `d_b_norm_w/b`, `d_c_norm_w/b` via `layer_norm_bwd` on the bp/cp chain
-- `d_layer_norm_w/b` per layer via `layer_norm_bwd` on the pre-norm path
-- `d_scale[l]` via `scale = Σ_i d_x[i] · y_out[l, i]`
-- RoPE backward and `d_angles`
-- Correct bx backward with the `bx_prev` timestep coupling (current uses
-  single-timestep approximation; may underweight gradient propagation through
-  the recurrence)
+The baseline weights (in_proj, out_proj, embed, fnorm) are large matrices
+that average a lot of gradients — their update magnitudes are naturally
+moderate. The SSM parameters (dt_bias, d_param, layer_norm_w) are smaller,
+receive sparser gradients with different scale, and benefit from different
+LR or separate weight-decay (PyTorch's standard practice: `no_decay` group
+for biases and norm parameters).
 
-Each should push `best_acc` higher. Parity hitting ≥95% is the stopping
-condition for Track 1.
+**What's needed to close the loop to 95%:**
+
+This is more than a mechanical translation of PyTorch autograd. PyTorch's
+`specialist_trainer.py` with the winning config hits 100% in one cycle
+because:
+1. It computes the FULL gradient (every path, correctly scaled)
+2. It uses `no_decay` parameter groups so norm/bias params don't get decayed
+   away
+3. It may use `torch.nn.utils.clip_grad_norm_` (norm-based clipping, not
+   elementwise) so directions are preserved
+4. The curriculum starts short (min_len=2) which helps the model learn the
+   simpler mapping first
+
+To reach 95% on PTX:
+1. Implement the *norm-based* gradient clipping (not just elementwise) so
+   whole-weight-tensor directions are preserved
+2. Exempt norm weights and biases from weight decay (per-parameter-group WD)
+3. Implement all remaining gradient paths: bp/cp norm, RoPE/angles, d_scale,
+   correct bx coupling across timesteps
+4. Implement the curriculum (progressive bit-length) in `test-parity-train`
+   — currently we train on fixed n_bits=4; PyTorch curriculum starts at
+   min_len=2 (easier)
+
+These are real pieces of work. The session's conclusion:
+
+- **PTX precision: solid.** 7e-6 forward diff vs CPU, zero argmax mismatches.
+- **PTX infrastructure: works.** forward_cached, AdamW, cross-entropy, backward
+  kernels — all bit-exact against Rust CPU `TrainState` to 1e-6.
+- **PTX training capability: limited by gradient coverage, not by hardware
+  or precision.** The Rust CPU `TrainState` ceiling (~61%) and my PTX ceiling
+  (~58–72%) are effectively the same — both are training with incomplete
+  gradients. Neither has been closed to the full autograd gradient that
+  PyTorch computes.
+
+This is a plateau to rest at, not a wall. Track 1 restart needs the four
+items above to land simultaneously, not incrementally.

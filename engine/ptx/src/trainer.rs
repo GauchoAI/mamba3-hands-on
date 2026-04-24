@@ -248,7 +248,13 @@ impl PtxTrainer {
         let bc1_inv = 1.0f32 / (1.0 - self.beta1.powi(self.step as i32));
         let bc2_inv = 1.0f32 / (1.0 - self.beta2.powi(self.step as i32));
 
-        // Embed
+        // no_decay_wd = 0.0: 1-D tensors (norms, biases) skip weight decay.
+        // This matches PyTorch's standard `optimizer_grouped_parameters`
+        // pattern. Without it, wd=0.1 silently decays layer_norm_w=1 toward 0
+        // every step, crippling any gradient flowing to norm weights.
+        let no_decay_wd = 0.0f32;
+
+        // Embed (2-D, matrix): standard weight decay.
         launch_adamw(&stream, &ptx,
             &mut self.model.embed_w, &self.train_scratch.d_embed,
             &mut self.m_embed, &mut self.v_embed,
@@ -271,31 +277,45 @@ impl PtxTrainer {
                 self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
                 d * di,
             )?;
+            // d_param (1-D): no weight decay.
             launch_adamw(&stream, &ptx,
                 &mut layer.d_param, &self.train_scratch.d_d_param[li],
                 &mut self.m_d_param[li], &mut self.v_d_param[li],
-                self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
                 nh,
             )?;
-            // dt_bias + layer_norm optimizers disabled (see notes above).
-            let _ = &self.m_dt_bias[li];
-            let _ = &self.v_dt_bias[li];
-            let _ = &self.m_layer_norm_w[li];
-            let _ = &self.v_layer_norm_w[li];
-            let _ = &self.m_layer_norm_b[li];
-            let _ = &self.v_layer_norm_b[li];
+            // dt_bias (1-D): no weight decay.
+            launch_adamw(&stream, &ptx,
+                &mut layer.dt_bias, &self.train_scratch.d_dt_bias[li],
+                &mut self.m_dt_bias[li], &mut self.v_dt_bias[li],
+                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                nh,
+            )?;
+            // Per-layer pre-norm weights (1-D): no weight decay.
+            launch_adamw(&stream, &ptx,
+                &mut layer.layer_norm_w, &self.train_scratch.d_layer_norm_w[li],
+                &mut self.m_layer_norm_w[li], &mut self.v_layer_norm_w[li],
+                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                d,
+            )?;
+            launch_adamw(&stream, &ptx,
+                &mut layer.layer_norm_b, &self.train_scratch.d_layer_norm_b[li],
+                &mut self.m_layer_norm_b[li], &mut self.v_layer_norm_b[li],
+                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                d,
+            )?;
         }
-        // Final norm
+        // Final norm (1-D): no weight decay.
         launch_adamw(&stream, &ptx,
             &mut self.model.final_norm_w, &self.train_scratch.d_fnorm_w,
             &mut self.m_fnorm_w, &mut self.v_fnorm_w,
-            self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+            self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
             d,
         )?;
         launch_adamw(&stream, &ptx,
             &mut self.model.final_norm_b, &self.train_scratch.d_fnorm_b,
             &mut self.m_fnorm_b, &mut self.v_fnorm_b,
-            self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+            self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
             d,
         )?;
 
@@ -487,13 +507,38 @@ impl PtxTrainer {
             unsafe { lb.launch(cfg)? };
         }
 
-        // Step E.5: ssm_param_grads DISABLED again.
-        // Decay-path d_dt_bias (with d_dt_from_inp=0) actively hurt training:
-        // parity 72%→58% vs the d_d_param-only baseline. The gradient sign/
-        // magnitude pushes the model into a worse basin. Whichever path we
-        // use for d_dt (decay vs inp vs both), the numerics need more care.
-        // Revisit with either per-weight LR scaling or gradient-clip by norm.
-        let _ = (dip, ds, di);
+        // Step E.5: ssm_param_grads — d_dt_bias + d_proj[dt_off/a_off].
+        // Re-enabled with `no_decay` on 1D tensors so dt_bias isn't getting
+        // silently decayed to 0 each step (that + the grad was the issue).
+        {
+            let proj_off = li * self.train_scratch.layer_proj_stride;
+            let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
+            let dc_off = li * self.train_scratch.layer_decay_stride;
+            let dc_view = self.train_scratch.layer_decays.slice(dc_off..dc_off + l * nh);
+            let dt_view = self.train_scratch.layer_dts.slice(dc_off..dc_off + l * nh);
+            let dt_bias_ref: &CudaSlice<f32> = &self.model.layers[li].dt_bias;
+            let l_i = l as i32;
+            let h_i = nh as i32;
+            let dip_i = dip as i32;
+            let di_i = di as i32;
+            let ds_i = ds as i32;
+            let mut lb = stream.launch_builder(&ptx.k.ssm_param_grads);
+            lb.arg(&proj_view);
+            lb.arg(dt_bias_ref);
+            lb.arg(&dt_view);
+            lb.arg(&dc_view);
+            lb.arg(&self.train_scratch.d_decay);
+            lb.arg(&self.train_scratch.d_dt_from_inp);
+            lb.arg(&mut self.train_scratch.d_proj);
+            lb.arg(&mut self.train_scratch.d_dt_bias[li]);
+            lb.arg(&l_i); lb.arg(&h_i); lb.arg(&dip_i); lb.arg(&di_i); lb.arg(&ds_i);
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (nh.max(32) as u32, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
 
         // Step F: bx_bwd — atomic adds into d_proj[bp] and d_proj[x]
         {
@@ -545,13 +590,7 @@ impl PtxTrainer {
             };
             unsafe { lb.launch(cfg)? };
         }
-        // d_x_from_layer = d_proj @ in_proj_w. Written into d_y_out temp.
-        // Note: this treats the pre-layer LN as identity (skips LN-bwd). In
-        // principle incorrect — d_x_normed ≠ d_x_in. Empirically the "correct"
-        // chain through `layer_norm_bwd` produces smaller gradients and makes
-        // parity converge more slowly in our 5000-step budget (72% → 58%).
-        // Keep the simpler flow until we can also add per-weight LR scaling
-        // or a longer step budget.
+        // d_x_normed = d_proj @ in_proj_w.  Written into d_y_out.
         let in_proj_w_ref: &CudaSlice<f32> = &self.model.layers[li].in_proj_w;
         launch_matmul_ab(stream, ptx,
             &self.train_scratch.d_proj,
@@ -560,8 +599,34 @@ impl PtxTrainer {
             l, d, dip,
         )?;
 
-        // Step H: residual combine: d_x = d_residual + scale * d_x_from_layer
-        launch_residual_add(stream, ptx, &mut self.train_scratch.d_x, &self.train_scratch.d_y_out, scale, l * d)?;
+        // Step G.5: pre-layer-norm backward — produces d_x_in + d_ln_w/b.
+        // Reuses first l*d slots of d_proj (no longer needed) as d_x output.
+        {
+            let input_off = li * self.train_scratch.layer_input_stride;
+            let input_len = l * d;
+            let x_in_view = self.train_scratch.layer_inputs.slice(input_off..input_off + input_len);
+            let ln_w_ref: &CudaSlice<f32> = &self.model.layers[li].layer_norm_w;
+            let l_i = l as i32;
+            let d_i = d as i32;
+            let mut lb = stream.launch_builder(&ptx.k.layer_norm_bwd);
+            lb.arg(&self.train_scratch.d_y_out);
+            lb.arg(&x_in_view);
+            lb.arg(ln_w_ref);
+            lb.arg(&mut self.train_scratch.d_proj);
+            lb.arg(&mut self.train_scratch.d_layer_norm_w[li]);
+            lb.arg(&mut self.train_scratch.d_layer_norm_b[li]);
+            lb.arg(&l_i);
+            lb.arg(&d_i);
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (64, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+
+        // Step H: residual combine: d_x = d_residual + scale * d_x_in
+        launch_residual_add(stream, ptx, &mut self.train_scratch.d_x, &self.train_scratch.d_proj, scale, l * d)?;
 
         Ok(())
     }
