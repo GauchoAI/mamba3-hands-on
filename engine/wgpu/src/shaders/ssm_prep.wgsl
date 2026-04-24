@@ -30,11 +30,11 @@ struct Params {
 @group(0) @binding(10) var<storage, read_write> z_silu: array<f32>;   // (L, H, hD)
 @group(0) @binding(11) var<uniform> params: Params;
 
-// Workgroup shared: B and C after norm, for all timesteps
-var<workgroup> bp_normed: array<f32, 1024>;  // max L*dS = 64*16
-var<workgroup> cp_normed: array<f32, 1024>;
-var<workgroup> phase: array<f32, 512>;        // max L*n_angles = 64*8
-var<workgroup> bx_prev: array<f32, 4096>;     // max H*hD*dS = 8*16*16 = 2048
+// Per-workgroup local arrays (each head gets its own copy)
+var<private> bp_normed: array<f32, 1024>;  // max L*dS = 64*16
+var<private> cp_normed: array<f32, 1024>;
+var<private> phase: array<f32, 512>;        // max L*n_angles = 64*8
+var<private> bx_prev: array<f32, 4096>;     // max H*hD*dS = hd*dS = 256
 
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
