@@ -35,6 +35,8 @@ pub struct TrainScratch {
     pub layer_cps: CudaSlice<f32>,
     // decay per layer (needed by adjoint scan). (L, n_heads)
     pub layer_decays: CudaSlice<f32>,
+    // dt per layer (needed for parameter-grad kernels). (L, n_heads)
+    pub layer_dts: CudaSlice<f32>,
     // Full scan state sequence per layer. Shape: (L+1, n_heads, hd, ds)
     // states[0] is zero.
     pub layer_states: CudaSlice<f32>,
@@ -113,6 +115,7 @@ impl TrainScratch {
             layer_y_inners: stream.alloc_zeros::<f32>(n_layers * ly)?,
             layer_cps: stream.alloc_zeros::<f32>(n_layers * lc)?,
             layer_decays: stream.alloc_zeros::<f32>(n_layers * ld)?,
+            layer_dts: stream.alloc_zeros::<f32>(n_layers * ld)?,
             layer_states: stream.alloc_zeros::<f32>(n_layers * ls)?,
             x_before_head: stream.alloc_zeros::<f32>(max_seq * d_model)?,
             x_before_final_norm: stream.alloc_zeros::<f32>(max_seq * d_model)?,

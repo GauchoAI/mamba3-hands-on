@@ -428,68 +428,18 @@ impl PtxTrainer {
             unsafe { lb.launch(cfg)? };
         }
 
-        // Step E: ssm_scan_bwd_full — writes d_proj[x_skip] atomic, d_proj[cp] atomic,
-        // d_scan_inp, d_decay (per (t, h)), d_dt_from_inp (per (t, h)), and
-        // atomic d_d_param (per h).
+        // Step E: ssm_scan_bwd_full — atomic writes to d_proj[x_skip], d_proj[cp],
+        // plus d_scan_inp, d_decay, d_dt_from_inp, atomic d_d_param.
         {
             let proj_off = li * self.train_scratch.layer_proj_stride;
-            let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
             let cp_off = li * self.train_scratch.layer_cp_stride;
-            let cp_view = self.train_scratch.layer_cps.slice(cp_off..cp_off + l * ds);
             let dc_off = li * self.train_scratch.layer_decay_stride;
-            let dc_view = self.train_scratch.layer_decays.slice(dc_off..dc_off + l * nh);
             let st_off = li * self.train_scratch.layer_states_stride;
+            let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
+            let cp_view = self.train_scratch.layer_cps.slice(cp_off..cp_off + l * ds);
+            let dc_view = self.train_scratch.layer_decays.slice(dc_off..dc_off + l * nh);
+            let dt_view = self.train_scratch.layer_dts.slice(dc_off..dc_off + l * nh);
             let st_view = self.train_scratch.layer_states.slice(st_off..st_off + (l + 1) * nh * hd * ds);
-            // dt values are in scratch.dt (from forward_cached — still latest)
-            let dt_ref: &CudaSlice<f32> = &self.model.scratch.borrow().dt;
-            // Actually we need per-layer dt; but scratch.dt was overwritten across layers.
-            // We did NOT save per-layer dt in TrainScratch. For now, recompute or save.
-            // Workaround: recompute dt by softplus(proj[dt_off+h] + dt_bias[h]). Since we
-            // have proj and dt_bias, we can do this in-kernel; but current
-            // ssm_scan_bwd_full expects dt_in pointer. Recompute into a scratch?
-            // Simpler: since dt is small (L*H), recompute into scratch.dt ad-hoc here.
-            // But we ALSO need dt for in-step backward. For now: reuse scratch.dt,
-            // keeping in mind it was last written with the FINAL layer's dt. We must
-            // recompute per-layer.
-
-            // Recompute dt for this layer into scratch.dt
-            let mut scratch_ref_tmp = self.model.scratch.borrow_mut();
-            let scratch_tmp: &mut crate::scratch::PtxScratch = &mut *scratch_ref_tmp;
-            {
-                let l_i = l as i32;
-                let h_i = nh as i32;
-                let dip_i = dip as i32;
-                let di_i = di as i32;
-                let ds_i = ds as i32;
-                let mut lb = stream.launch_builder(&ptx.k.compute_ssm_params_and_dt_mean);
-                lb.arg(&proj_view);
-                lb.arg(&self.model.layers[li].dt_bias);
-                lb.arg(&mut scratch_tmp.dt);
-                lb.arg(&mut scratch_tmp.decay);
-                lb.arg(&mut scratch_tmp.trap);
-                lb.arg(&mut scratch_tmp.dt_mean);
-                lb.arg(&l_i); lb.arg(&h_i); lb.arg(&dip_i); lb.arg(&di_i); lb.arg(&ds_i);
-                let cfg = LaunchConfig {
-                    grid_dim: (l as u32, 1, 1),
-                    block_dim: (32, 1, 1),
-                    shared_mem_bytes: 0,
-                };
-                unsafe { lb.launch(cfg)? };
-            }
-            drop(scratch_ref_tmp);
-            let dt_view = {
-                let sr = self.model.scratch.borrow();
-                // We need to pass &CudaSlice<f32>; we can't return a reference to borrowed
-                // storage. Instead, we just re-borrow scratch inside the launch below.
-                let _ = &sr.dt; // sanity
-                ()
-            };
-            let _ = dt_view;
-            let _ = dt_ref;
-
-            // Launch ssm_scan_bwd_full with scratch.dt (just recomputed)
-            let scratch_r = self.model.scratch.borrow();
-            let dt_ref: &CudaSlice<f32> = &scratch_r.dt;
 
             let l_i = l as i32;
             let h_i = nh as i32;
@@ -503,7 +453,7 @@ impl PtxTrainer {
             lb.arg(&proj_view);
             lb.arg(&cp_view);
             lb.arg(&dc_view);
-            lb.arg(dt_ref);
+            lb.arg(&dt_view);
             lb.arg(&st_view);
             lb.arg(d_param_ref);
             lb.arg(&mut self.train_scratch.d_proj);
@@ -518,17 +468,15 @@ impl PtxTrainer {
                 shared_mem_bytes: 0,
             };
             unsafe { lb.launch(cfg)? };
-            drop(scratch_r);
         }
 
-        // Step E.5: compute d_dt_bias, d_proj[dt_off/a_off] via ssm_param_grads
+        // Step E.5: ssm_param_grads — d_dt_bias, d_proj[dt_off/a_off]
         {
             let proj_off = li * self.train_scratch.layer_proj_stride;
             let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
             let dc_off = li * self.train_scratch.layer_decay_stride;
             let dc_view = self.train_scratch.layer_decays.slice(dc_off..dc_off + l * nh);
-            let scratch_r = self.model.scratch.borrow();
-            let dt_ref: &CudaSlice<f32> = &scratch_r.dt;
+            let dt_view = self.train_scratch.layer_dts.slice(dc_off..dc_off + l * nh);
             let dt_bias_ref: &CudaSlice<f32> = &self.model.layers[li].dt_bias;
 
             let l_i = l as i32;
@@ -540,7 +488,7 @@ impl PtxTrainer {
             let mut lb = stream.launch_builder(&ptx.k.ssm_param_grads);
             lb.arg(&proj_view);
             lb.arg(dt_bias_ref);
-            lb.arg(dt_ref);
+            lb.arg(&dt_view);
             lb.arg(&dc_view);
             lb.arg(&self.train_scratch.d_decay);
             lb.arg(&self.train_scratch.d_dt_from_inp);
@@ -553,7 +501,6 @@ impl PtxTrainer {
                 shared_mem_bytes: 0,
             };
             unsafe { lb.launch(cfg)? };
-            drop(scratch_r);
         }
 
         // Step F: bx_bwd — atomic adds into d_proj[bp] and d_proj[x]
