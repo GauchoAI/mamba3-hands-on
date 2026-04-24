@@ -125,6 +125,48 @@ def push_state(db_path="three_pop/training.db"):
     _patch("mamba3/models", catalog)
     print(f"  Pushed {len(catalog)} models to catalog")
 
+    # 4. Learning rate — how fast are we mastering new tasks?
+    teachers_db = db.get_teachers()
+    if teachers_db:
+        mastery_order = sorted(teachers_db.items(), key=lambda x: x[1].get("graduated_at", 0))
+        learning_data = {
+            "total_teachers": len(mastery_order),
+            "tasks": {},
+        }
+        prev_time = None
+        first_cycles = None
+        for i, (task, info) in enumerate(mastery_order):
+            cycles = info.get("cycles", 0)
+            grad_time = info.get("graduated_at", 0)
+            # Skip tasks that mastered in <3 cycles (resumed from checkpoint)
+            if first_cycles is None and cycles >= 3:
+                first_cycles = cycles
+            entry = {
+                "order": i + 1,
+                "cycles": cycles,
+                "graduated_at": grad_time,
+            }
+            if prev_time and grad_time:
+                entry["time_since_prev_s"] = round(grad_time - prev_time, 1)
+            if first_cycles and cycles > 0:
+                entry["speedup_vs_first"] = round(first_cycles / max(cycles, 1), 2)
+            learning_data["tasks"][task] = entry
+            prev_time = grad_time
+
+        # Overall learning rate
+        if len(mastery_order) >= 2 and first_cycles:
+            last_cycles = mastery_order[-1][1].get("cycles", 0) or 1
+            learning_data["learning_ratio"] = round(last_cycles / first_cycles, 4)
+            learning_data["first_task"] = mastery_order[0][0]
+            learning_data["first_cycles"] = first_cycles
+            learning_data["last_task"] = mastery_order[-1][0]
+            learning_data["last_cycles"] = last_cycles
+
+        _patch("mamba3/learning_rate", learning_data)
+        lr = learning_data.get("learning_ratio")
+        if lr:
+            print(f"  Learning rate: {lr:.3f} (last/first cycles)")
+
     db.close()
     return len(all_status), len(teacher_data), len(catalog)
 

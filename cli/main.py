@@ -179,6 +179,40 @@ def cmd_run(args):
     subprocess.run(cmd)
 
 
+def cmd_lr(args):
+    """Show learning rate — is the system getting faster at mastering tasks?"""
+    from server.node_agent import _firebase_get
+
+    data = _firebase_get("mamba3/learning_rate")
+    if not data:
+        print("No learning rate data yet. Need at least 2 graduated teachers.")
+        return
+
+    ratio = data.get("learning_ratio")
+    first = data.get("first_task", "?")
+    first_c = data.get("first_cycles", 0)
+    last = data.get("last_task", "?")
+    last_c = data.get("last_cycles", 0)
+
+    print("=== Learning Rate ===")
+    if ratio:
+        label = "accelerating" if ratio < 1 else "slowing" if ratio > 1 else "steady"
+        print(f"  Ratio: {ratio:.3f} ({label})")
+    print(f"  First task: {first} ({first_c} cycles)")
+    print(f"  Last task:  {last} ({last_c} cycles)")
+
+    tasks = data.get("tasks", {})
+    if tasks:
+        ordered = sorted(tasks.items(), key=lambda x: x[1].get("order", 0))
+        print(f"\n{'#':>3s} {'Task':25s} {'Cycles':>8s} {'Speedup':>8s}")
+        print("-" * 50)
+        for task, info in ordered:
+            cycles = info.get("cycles", 0)
+            speedup = info.get("speedup_vs_first", 1.0)
+            bar = "█" * min(int(speedup), 20)
+            print(f"{info.get('order',0):>3d} {task:25s} {cycles:>8d} {speedup:>7.1f}x {bar}")
+
+
 def cmd_teachers(args):
     """Show all graduated teachers across all nodes."""
     from server.node_agent import _firebase_get, list_nodes
@@ -602,6 +636,9 @@ def main():
     p_run.add_argument("--port", type=int, default=8090)
     p_run.add_argument("-n", type=int, default=100, help="Number of examples")
 
+    # lr
+    p_lr = sub.add_parser("lr", help="Show learning rate — is the system accelerating?")
+
     # teachers
     p_teachers = sub.add_parser("teachers", help="List all graduated teachers across nodes")
 
@@ -649,6 +686,8 @@ def main():
         cmd_models(args)
     elif args.command == "run":
         cmd_run(args)
+    elif args.command == "lr":
+        cmd_lr(args)
     elif args.command == "teachers":
         cmd_teachers(args)
     elif args.command == "status":
