@@ -75,6 +75,31 @@
   <div id="nodes-list" class="mt-2 grid grid-cols-2 gap-2"></div>
 </div>
 
+<!-- Teacher Registry -->
+<div id="teacher-registry" class="bg-green-50 border border-green-200 rounded-lg px-4 py-3 mb-3">
+  <div class="flex justify-between items-center">
+    <span class="font-bold text-green-700 text-sm">Teacher Registry</span>
+    <span id="teacher-count" class="text-green-600 text-xs"></span>
+  </div>
+  <div id="teacher-grid" class="mt-2 grid grid-cols-5 gap-1"></div>
+</div>
+
+<!-- Task Progress Table -->
+<div class="bg-white rounded-lg shadow-sm p-3 mb-3">
+  <h2 class="text-xs font-bold text-gray-500 mb-2">Task Progress (all nodes)</h2>
+  <table class="w-full text-xs">
+    <thead><tr class="text-gray-400 border-b">
+      <th class="text-left py-1">Task</th>
+      <th class="text-right">Accuracy</th>
+      <th class="text-right">Stage</th>
+      <th class="text-center">Distilled</th>
+      <th class="text-left">Node</th>
+      <th class="text-right">Status</th>
+    </tr></thead>
+    <tbody id="task-table"></tbody>
+  </table>
+</div>
+
 <!-- Plateau banner -->
 <div id="plateau-banner" class="hidden bg-red-50 border border-red-200 rounded-lg px-4 py-2 mb-3 text-sm text-red-800">
   🔥 <b>PLATEAU MODE</b> <span id="plateau-details" class="text-red-600"></span>
@@ -194,6 +219,57 @@ const STAGE={parity:0,binary_pattern_next:0,same_different:1,odd_one_out:1,seque
 let threePopData = null;
 db.ref('mamba3/three_pop').on('value', s=>{
   threePopData = s.val();
+  if(!threePopData) return;
+
+  // Teacher Registry
+  const teachers = threePopData.teachers || {};
+  const tGrid = document.getElementById('teacher-grid');
+  const tCount = document.getElementById('teacher-count');
+  let tHtml = '';
+  const tKeys = Object.keys(teachers).sort();
+  tKeys.forEach(task => {
+    const t = teachers[task];
+    const acc = t.accuracy ? (t.accuracy <= 1 ? Math.round(t.accuracy*100) : Math.round(t.accuracy)) : 0;
+    const node = t.node || '?';
+    const bg = acc >= 95 ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800';
+    tHtml += '<div class="'+bg+' rounded px-2 py-1 text-center">'
+      + '<div class="font-mono text-[10px] font-bold truncate">'+task.replace(/_/g,' ')+'</div>'
+      + '<div class="text-sm font-bold">'+acc+'%</div>'
+      + '<div class="text-[9px] text-gray-500">'+node.substring(0,12)+'</div>'
+      + '</div>';
+  });
+  tGrid.innerHTML = tHtml;
+  tCount.textContent = tKeys.length + ' graduated';
+
+  // Task Progress Table
+  const tasks = threePopData.tasks || {};
+  const tbody = document.getElementById('task-table');
+  const allTasks = new Set([...Object.keys(teachers), ...Object.keys(tasks)]);
+  let rows = '';
+  [...allTasks].sort().forEach(task => {
+    const teacher = teachers[task];
+    const info = tasks[task] || {};
+    const acc = teacher ? teacher.accuracy : (info.best_accuracy || 0);
+    const accPct = acc <= 1 ? Math.round(acc*100) : Math.round(acc);
+    const status = teacher ? '🎓 mastered' : (info.status || 'training');
+    const stage = info.current_stage || 1;
+    const config = info.current_config;
+    const distilled = config && typeof config === 'object' && config.distilled_from ? '✓' : '';
+    const node = teacher ? (teacher.node||'').substring(0,12) : '';
+    const barW = Math.min(accPct, 100);
+    const barColor = accPct >= 95 ? 'bg-green-400' : accPct >= 80 ? 'bg-yellow-400' : 'bg-blue-400';
+    rows += '<tr class="border-b border-gray-50 hover:bg-gray-50">'
+      + '<td class="py-1 font-mono">'+task+'</td>'
+      + '<td class="text-right"><div class="flex items-center justify-end gap-1">'
+      + '<div class="w-16 bg-gray-100 rounded-full h-1.5"><div class="'+barColor+' h-1.5 rounded-full" style="width:'+barW+'%"></div></div>'
+      + '<span class="tabular-nums w-8 text-right">'+accPct+'%</span></div></td>'
+      + '<td class="text-right text-gray-400">'+stage+'</td>'
+      + '<td class="text-center">'+(distilled?'<span class="text-green-600">'+distilled+'</span>':'')+'</td>'
+      + '<td class="text-gray-400 text-[10px]">'+node+'</td>'
+      + '<td class="text-right">'+(status.includes('mastered')?'<span class="text-green-600">'+status+'</span>':'<span class="text-gray-400">'+status+'</span>')+'</td>'
+      + '</tr>';
+  });
+  tbody.innerHTML = rows;
 });
 
 // Nodes — real-time
