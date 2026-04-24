@@ -243,39 +243,49 @@ fn main() -> Result<(), Box<dyn Error>> {
     let tokens: Vec<u32> = vec![47, 132, 5, 201, 88, 19, 249, 73];
     let targets: Vec<u32> = vec![250, 11, 174, 66, 3, 189, 42, 100];
 
+    // Populate gradients once, then pick the indices with the LARGEST
+    // analytical gradient magnitude per tensor — those are above FD noise
+    // floor and thus FD-testable.  Random sampling puts us in noise almost
+    // everywhere at fresh init.
+    trainer.compute_gradients_only(&tokens, &targets)?;
+    let stream = trainer.model.ptx.stream.clone();
+
+    let top_indices = |buf: &CudaSlice<f32>, k: usize| -> Result<Vec<usize>, Box<dyn Error>> {
+        let vals = stream.memcpy_dtov(buf)?;
+        let mut paired: Vec<(usize, f32)> = vals.iter().enumerate()
+            .map(|(i, v)| (i, v.abs()))
+            .collect();
+        paired.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        Ok(paired.into_iter().take(k).map(|(i, _)| i).collect())
+    };
+
     let s = args.samples_per_tensor;
     let mut checks: Vec<Tensor> = Vec::new();
 
-    // Embed: sample 3 indices
-    let embed_n = cpu_model.embed_w.len();
-    for k in 0..s {
-        let idx = (k * 7 + 13) % embed_n;
+    for idx in top_indices(&trainer.train_scratch.d_embed, s)? {
         checks.push(Tensor::Embed { idx });
     }
     for li in 0..args.n_layers {
-        let in_proj_n = cpu_model.layers[li].in_proj_w.len();
-        let out_proj_n = cpu_model.layers[li].out_proj_w.len();
-        for k in 0..s {
-            let idx = (k * 11 + 3) % in_proj_n;
+        for idx in top_indices(&trainer.train_scratch.d_in_proj_w[li], s)? {
             checks.push(Tensor::InProj { layer: li, idx });
         }
-        for k in 0..s {
-            let idx = (k * 17 + 5) % out_proj_n;
+        for idx in top_indices(&trainer.train_scratch.d_out_proj_w[li], s)? {
             checks.push(Tensor::OutProj { layer: li, idx });
         }
-        for k in 0..cpu_model.n_heads.min(s) {
-            checks.push(Tensor::DParam { layer: li, idx: k });
+        for idx in top_indices(&trainer.train_scratch.d_d_param[li],
+                                cpu_model.n_heads.min(s))? {
+            checks.push(Tensor::DParam { layer: li, idx });
         }
-        for k in 0..cpu_model.n_heads.min(s) {
-            checks.push(Tensor::DtBias { layer: li, idx: k });
+        for idx in top_indices(&trainer.train_scratch.d_dt_bias[li],
+                                cpu_model.n_heads.min(s))? {
+            checks.push(Tensor::DtBias { layer: li, idx });
         }
-        for k in 0..s {
-            let idx = k % cpu_model.d_model;
+        for idx in top_indices(&trainer.train_scratch.d_layer_norm_w[li], s)? {
             checks.push(Tensor::LayerNormW { layer: li, idx });
         }
     }
-    for k in 0..s {
-        checks.push(Tensor::FNormW { idx: k % cpu_model.d_model });
+    for idx in top_indices(&trainer.train_scratch.d_fnorm_w, s)? {
+        checks.push(Tensor::FNormW { idx });
     }
 
     // FD noise floor = 1 ULP of loss divided by 2·eps.  For fp32 loss ~ O(1)
