@@ -345,35 +345,65 @@ impl PtxModel {
                 unsafe { lb.launch(cfg)? };
             }
 
-            // Fused: extract bp/cp + LayerNorm both + apply RoPE to both.
-            // Replaces 5 separate kernel launches with one.
+            // extract bp, cp
             {
                 let l_i = l as i32;
                 let ds_i = ds as i32;
-                let na_i = n_angles as i32;
                 let di_i = di as i32;
                 let dip_i = dip as i32;
-                let mut lb = stream.launch_builder(&self.ptx.k.prepare_bc);
+                let mut lb = stream.launch_builder(&self.ptx.k.extract_bp_cp);
                 lb.arg(&scratch.proj);
-                lb.arg(&layer.b_norm_w);
-                lb.arg(&layer.b_norm_b);
-                lb.arg(&layer.c_norm_w);
-                lb.arg(&layer.c_norm_b);
-                lb.arg(&scratch.phase);
                 lb.arg(&mut scratch.bp);
                 lb.arg(&mut scratch.cp);
                 lb.arg(&l_i);
                 lb.arg(&ds_i);
-                lb.arg(&na_i);
                 lb.arg(&di_i);
                 lb.arg(&dip_i);
                 let cfg = LaunchConfig {
                     grid_dim: (l as u32, 1, 1),
-                    block_dim: (32, 1, 1), // one warp; requires ds <= 32
+                    block_dim: (32, 1, 1),
                     shared_mem_bytes: 0,
                 };
                 unsafe { lb.launch(cfg)? };
             }
+
+            launch_layer_norm(
+                stream,
+                &self.ptx,
+                &mut scratch.bp,
+                &layer.b_norm_w,
+                &layer.b_norm_b,
+                l,
+                ds,
+            )?;
+            launch_layer_norm(
+                stream,
+                &self.ptx,
+                &mut scratch.cp,
+                &layer.c_norm_w,
+                &layer.c_norm_b,
+                l,
+                ds,
+            )?;
+
+            launch_apply_rope(
+                stream,
+                &self.ptx,
+                &mut scratch.bp,
+                &scratch.phase,
+                l,
+                ds,
+                n_angles,
+            )?;
+            launch_apply_rope(
+                stream,
+                &self.ptx,
+                &mut scratch.cp,
+                &scratch.phase,
+                l,
+                ds,
+                n_angles,
+            )?;
 
             // z_silu
             {
