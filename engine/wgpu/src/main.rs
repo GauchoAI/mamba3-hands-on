@@ -12,6 +12,16 @@ use std::path::Path;
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    if args.iter().any(|a| a == "--calibrate") {
+        let profile = mamba3_engine::calibrate::HardwareProfile::calibrate();
+        println!("\n=== Hardware Profile ===");
+        println!("  Host: {} ({})", profile.hostname, profile.arch);
+        println!("  CPU cores: {}", profile.cpu_cores);
+        println!("  GPU: {} ({})", if profile.has_gpu { "yes" } else { "no" }, profile.gpu_name);
+        println!("  Parallel threshold: {} ops", profile.parallel_threshold);
+        println!("  Use GPU matmul: {}", profile.use_gpu_matmul);
+        return;
+    }
     if args.iter().any(|a| a == "--parity") {
         run_parity_training();
     } else if let Some(pos) = args.iter().position(|a| a == "--model") {

@@ -404,7 +404,7 @@ fn softplus(x: f32) -> f32 { (1.0 + x.exp()).ln() }
 
 /// SIMD dot product — uses platform intrinsics
 #[inline]
-fn dot_simd(a: &[f32], b: &[f32], k: usize) -> f32 {
+pub fn dot_simd(a: &[f32], b: &[f32], k: usize) -> f32 {
     #[cfg(target_arch = "aarch64")]
     {
         use std::arch::aarch64::*;
@@ -470,53 +470,14 @@ fn layer_norm(x: &mut [f32], w: &[f32], b: &[f32], seq_len: usize, d: usize) {
 
 /// Matrix multiply: out = a × b^T. a is (m, k), b is (n, k), out is (m, n).
 /// Multithreaded via rayon for large matrices, SIMD for inner loops.
-/// Auto-calibrating matmul — picks single-thread SIMD or rayon based on problem size.
-/// Calibrates on first call, then uses the threshold for all subsequent calls.
+/// Matmul dispatcher — uses persisted calibration to choose strategy.
+/// Runs calibration once (stored in ~/.mamba3/calibration.json), then
+/// uses the optimal strategy for this hardware on all subsequent runs.
 pub fn matmul_t_pub(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
-    use std::sync::OnceLock;
-    static PARALLEL_THRESHOLD: OnceLock<usize> = OnceLock::new();
-
-    let threshold = *PARALLEL_THRESHOLD.get_or_init(|| {
-        // Calibrate: benchmark single vs parallel on a representative size
-        let test_m = 32;
-        let test_k = 128;
-        let test_n = 320;
-        let test_a = vec![0.1f32; test_m * test_k];
-        let test_b = vec![0.1f32; test_n * test_k];
-        let mut test_out = vec![0.0f32; test_m * test_n];
-
-        // Single-thread
-        let t0 = std::time::Instant::now();
-        for _ in 0..10 {
-            matmul_t(&mut test_out, &test_a, &test_b, test_m, test_k, test_n);
-        }
-        let single_ns = t0.elapsed().as_nanos() / 10;
-
-        // Parallel (rayon)
-        let t0 = std::time::Instant::now();
-        for _ in 0..10 {
-            use rayon::prelude::*;
-            test_out.par_chunks_mut(test_n).enumerate().for_each(|(i, row)| {
-                let a_row = &test_a[i * test_k..(i + 1) * test_k];
-                for j in 0..test_n {
-                    row[j] = dot_simd(a_row, &test_b[j * test_k..(j + 1) * test_k], test_k);
-                }
-            });
-        }
-        let par_ns = t0.elapsed().as_nanos() / 10;
-
-        let ops = test_m * test_n * test_k;
-        if par_ns < single_ns {
-            eprintln!("  Calibrated: parallel wins at {}ops ({}ns vs {}ns)", ops, par_ns, single_ns);
-            ops / 2  // use parallel for anything >= half this size
-        } else {
-            eprintln!("  Calibrated: single-thread wins ({}ns vs {}ns parallel)", single_ns, par_ns);
-            usize::MAX  // never use parallel
-        }
-    });
-
+    let profile = crate::calibrate::get_profile();
     let ops = m * n * k;
-    if ops >= threshold {
+
+    if ops >= profile.parallel_threshold {
         use rayon::prelude::*;
         out.par_chunks_mut(n).enumerate().for_each(|(i, row)| {
             let a_row = &a[i * k..(i + 1) * k];
