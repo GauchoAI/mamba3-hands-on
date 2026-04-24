@@ -33,24 +33,36 @@ struct Args {
 
 impl Default for Args {
     fn default() -> Self {
-        // findings.md line 1867: parity  d=64  L=4  dS=8  jit  cuda  100%
-        // PyTorch specialist_trainer defaults: batch=256, lr=1e-3, wd=0.1,
-        // steps_per_cycle=200, max_cycles=10 (converges in 1 cycle for this config).
+        // Defaults: the config that currently trains STABLY on the PTX
+        // backward we have. Not the PyTorch-winning config — that one needs
+        // the remaining gradient closures (bp/cp LN-bwd, RoPE-bwd,
+        // d_dt_bias, d_scale, correct bx-timestep coupling) to converge.
+        //
+        // To target the PyTorch winning config once those land, override:
+        //   --d-model 64 --layers 4 --d-state 8 --headdim 16
+        //   --batch 256 --steps-per-cycle 200 --max-cycles 10
+        //   --target-acc 0.95
+        //   (curriculum is already on by default)
+        //
+        // Reference: findings.md Entry 24 line 1867 — this config hits 100%
+        // parity in one cycle via `specialist_trainer.py --scan-backend jit
+        // --device cuda`. Our PTX reaches ~58% stably today; the gap is
+        // gradient-coverage, not precision.
         Self {
-            d_model: 64,
-            d_state: 8,
+            d_model: 32,
+            d_state: 16,
             headdim: 16,
-            n_layers: 4,
+            n_layers: 1,
             vocab_size: 260,
             lr: 1e-3,
             weight_decay: 0.1,
-            batch_size: 256,
+            batch_size: 16,
             steps_per_cycle: 200,
-            max_cycles: 30,
+            max_cycles: 25,  // enough for curriculum to try all stages
             target_acc: 0.95,
             seed: 12345,
             no_curriculum: false,
-            fixed_nbits: 4, // only used if --no-curriculum
+            fixed_nbits: 4,
         }
     }
 }
