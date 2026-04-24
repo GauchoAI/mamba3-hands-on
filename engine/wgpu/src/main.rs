@@ -117,6 +117,26 @@ fn run_model_inference(model_path: &str) {
         let max_diff: f32 = cpu_logits.iter().zip(gpu_logits.iter())
             .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         println!("GPU vs CPU max diff: {:.2e} {}", max_diff, if max_diff < 1e-3 { "PASS" } else { "FAIL" });
+
+        // GPU-resident model (persistent buffers)
+        let gpu_model = mamba3_engine::gpu_model::GpuModel::new(
+            Mamba3Model::from_bin(Path::new(model_path)).unwrap(), gpu
+        );
+        // Warmup
+        for _ in 0..3 { let _ = gpu_model.forward(&tokens); }
+        let n_res = 100;
+        let start = Instant::now();
+        for _ in 0..n_res { let _ = gpu_model.forward(&tokens); }
+        let total = start.elapsed();
+        let ms_res = total.as_secs_f64() * 1000.0 / n_res as f64;
+        let tps_res = tokens.len() as f64 / (ms_res / 1000.0);
+        println!("Benchmark (GPU-resident): {:.3}ms/inference, {:.0} tokens/sec", ms_res, tps_res);
+
+        // Verify
+        let res_logits = gpu_model.forward(&tokens);
+        let max_diff2: f32 = cpu_logits.iter().zip(res_logits.iter())
+            .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        println!("GPU-resident vs CPU max diff: {:.2e} {}", max_diff2, if max_diff2 < 1e-3 { "PASS" } else { "FAIL" });
     }
 
     // Profile: break down where time is spent

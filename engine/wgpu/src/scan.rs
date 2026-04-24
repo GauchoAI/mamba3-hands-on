@@ -21,8 +21,8 @@ pub struct GpuContext {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     // Matmul pipeline
-    matmul_pipeline: wgpu::ComputePipeline,
-    matmul_layout: wgpu::BindGroupLayout,
+    pub matmul_pipeline: wgpu::ComputePipeline,
+    pub matmul_layout: wgpu::BindGroupLayout,
 }
 
 impl GpuContext {

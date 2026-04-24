@@ -219,6 +219,9 @@ impl Mamba3Model {
     }
 
     /// Inner SSM computation: proj → y_inner (without in_proj and out_proj matmuls)
+    pub fn mamba3_block_inner_pub(&self, proj: &[f32], lw: &LayerWeights, l: usize) -> Vec<f32> {
+        self.mamba3_block_inner(proj, lw, l)
+    }
     fn mamba3_block_inner(&self, proj: &[f32], lw: &LayerWeights, l: usize) -> Vec<f32> {
         let di = self.d_inner;
         let nh = self.n_heads;
@@ -524,6 +527,9 @@ fn apply_rope(v: &mut [f32], angles: &[f32], l: usize, s: usize, n: usize) {
     }
 }
 
+pub fn layer_norm_pub(x: &mut [f32], w: &[f32], b: &[f32], seq_len: usize, d: usize) {
+    layer_norm(x, w, b, seq_len, d);
+}
 fn layer_norm(x: &mut [f32], w: &[f32], b: &[f32], seq_len: usize, d: usize) {
     let eps = 1e-5f32;
     for t in 0..seq_len {

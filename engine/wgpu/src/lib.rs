@@ -9,3 +9,4 @@ pub mod model;
 pub mod backward;
 pub mod train;
 pub mod calibrate;
+pub mod gpu_model;
