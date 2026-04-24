@@ -57,60 +57,95 @@ def cmd_nodes(args):
 
 
 def cmd_status(args):
-    """Show task training status. Reads from Firebase."""
+    """Global overview — all tasks, all nodes, learning rate, bandwidth."""
     from server.node_agent import _firebase_get
     import time
 
-    # Get task status from three_pop data
-    three_pop = _firebase_get("mamba3/three_pop")
-    if not three_pop:
-        print("No training data found in Firebase.")
-        return
-
-    # Show task leaderboard
+    three_pop = _firebase_get("mamba3/three_pop") or {}
     teachers = three_pop.get("teachers", {})
     tasks = three_pop.get("tasks", {})
-    worker_lb = three_pop.get("worker_leaderboard", {})
+    nodes_data = _firebase_get("mamba3/nodes") or {}
+    lr_data = _firebase_get("mamba3/learning_rate") or {}
+    now = time.time()
 
-    print("=== Task Status ===")
-    print(f"{'Task':25s} {'Accuracy':>8s} {'Status':>10s} {'Config':40s}")
-    print("-" * 90)
-
-    # Merge teacher and task data
+    # Header
+    n_teachers = len(teachers)
     all_tasks = set(list(teachers.keys()) + list(tasks.keys()))
+    n_tasks = len(all_tasks)
+    online = [nid for nid, info in nodes_data.items()
+              if isinstance(info, dict) and now - info.get("last_heartbeat", 0) < 120]
+
+    print(f"=== Mamba Platform Overview ===")
+    print(f"  Tasks: {n_tasks} | Teachers: {n_teachers} | Nodes: {len(online)} online")
+    lr = lr_data.get("learning_ratio")
+    if lr:
+        label = "accelerating" if lr < 0.8 else "steady" if lr < 1.2 else "harder tasks"
+        print(f"  Learning rate: {lr:.2f} ({label})")
+    print()
+
+    # Task table — grouped by level
+    l0, l1, l2, other = [], [], [], []
     for task in sorted(all_tasks):
         teacher = teachers.get(task, {})
         task_info = tasks.get(task, {})
-
         acc = teacher.get("accuracy") or task_info.get("best_accuracy", 0)
         if isinstance(acc, (int, float)):
-            acc_str = f"{acc:.0%}" if acc <= 1 else f"{acc:.0f}%"
+            acc_pct = round(acc * 100) if acc <= 1 else round(acc)
         else:
-            acc_str = str(acc)
+            acc_pct = 0
+        status = "mastered" if teacher else task_info.get("status", "training")
+        stage = task_info.get("current_stage", 1)
+        node = (teacher.get("node") or task_info.get("node") or "")[:15]
+        distilled = "D" if task_info.get("distilled_from") else ""
+        entry = (task, acc_pct, status, stage, node, distilled)
 
-        status = "mastered" if teacher else task_info.get("status", "unknown")
-
-        cfg = teacher.get("config", task_info.get("current_config", {}))
-        if isinstance(cfg, dict):
-            cfg_str = f"d={cfg.get('d_model', '?')} L={cfg.get('n_kernel_layers', '?')} lr={cfg.get('lr', '?')}"
-        elif isinstance(cfg, str):
-            cfg_str = cfg[:40]
+        # Classify by level
+        tags = []
+        if task in ["parity","binary_pattern_next","same_different","odd_one_out",
+                    "sequence_completion","pattern_period","run_length_next",
+                    "mirror_detection","repeat_count","arithmetic_next",
+                    "geometric_next","alternating_next","logic_gate","logic_chain","modus_ponens"]:
+            l0.append(entry)
+        elif task in ["cumulative_sum","max_element","min_element","sort_check",
+                     "duplicate_detect","element_position","reverse_sequence",
+                     "fibonacci_next","modular_arithmetic","comparison_chain"]:
+            l1.append(entry)
+        elif task in ["count_above_threshold","second_largest","range_of_sequence",
+                     "conditional_sum","majority_element"]:
+            l2.append(entry)
         else:
-            cfg_str = ""
+            other.append(entry)
 
-        print(f"{task:25s} {acc_str:>8s} {status:>10s} {cfg_str:40s}")
+    def _print_group(label, entries):
+        if not entries:
+            return
+        mastered = sum(1 for e in entries if e[2] == "mastered")
+        print(f"--- {label} ({mastered}/{len(entries)} mastered) ---")
+        print(f"  {'Task':25s} {'Acc':>5s} {'Stg':>3s} {'D':>1s} {'Node':>15s} {'Status':>10s}")
+        for task, acc, status, stage, node, dist in entries:
+            bar = "█" * (acc // 10) + "░" * (10 - acc // 10)
+            st = "✓" if status == "mastered" else " "
+            print(f"  {task:25s} {acc:>4d}% {stage:>3d} {dist:>1s} {node:>15s} {bar} {st}")
+        print()
 
-    # Show nodes
-    print()
-    nodes = _firebase_get("mamba3/nodes") or {}
-    now = time.time()
-    online = [nid for nid, info in nodes.items()
-              if isinstance(info, dict) and now - info.get("last_heartbeat", 0) < 120]
-    print(f"Nodes: {len(online)} online / {len(nodes)} registered")
-    for nid in online:
-        info = nodes[nid]
+    _print_group("Level 0 — Pattern Recognition", l0)
+    _print_group("Level 1 — Reasoning", l1)
+    _print_group("Level 2 — Composition", l2)
+    if other:
+        _print_group("Other", other)
+
+    # Nodes
+    print(f"--- Nodes ({len(online)}/{len(nodes_data)}) ---")
+    for nid, info in sorted(nodes_data.items()):
+        if not isinstance(info, dict):
+            continue
+        age = now - info.get("last_heartbeat", 0)
+        status = "online" if age < 60 else "stale" if age < 300 else "offline"
         backends = ", ".join(info.get("backends", []))
-        print(f"  {nid}: {backends} ({info.get('gpu_name', info.get('arch', ''))})")
+        gpu = info.get("gpu_name", "")[:25]
+        vram = f"{info.get('vram_mb', 0) // 1024}GB"
+        dot = "●" if status == "online" else "○"
+        print(f"  {dot} {nid:25s} {status:8s} {backends:20s} {vram:>5s} {gpu}")
 
 
 def cmd_models(args):

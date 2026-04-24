@@ -21,8 +21,21 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 FIREBASE_URL = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app"
 
 
+def _firebase_get(path):
+    try:
+        resp = urllib.request.urlopen(f"{FIREBASE_URL}/{path}.json", timeout=5)
+        return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+_bandwidth_bytes = 0  # track bytes sent this session
+
+
 def _put(path, data):
+    global _bandwidth_bytes
     body = json.dumps(data).encode("utf-8")
+    _bandwidth_bytes += len(body)
     req = urllib.request.Request(
         f"{FIREBASE_URL}/{path}.json", data=body, method="PUT",
         headers={"Content-Type": "application/json"})
@@ -36,7 +49,9 @@ def _put(path, data):
 
 def _patch(path, data):
     """PATCH merges into existing data instead of overwriting."""
+    global _bandwidth_bytes
     body = json.dumps(data).encode("utf-8")
+    _bandwidth_bytes += len(body)
     req = urllib.request.Request(
         f"{FIREBASE_URL}/{path}.json", data=body, method="PATCH",
         headers={"Content-Type": "application/json"})
@@ -82,9 +97,18 @@ def push_state(db_path="three_pop/training.db"):
                 entry["distilled_from"] = str(cfg["distilled_from"])
         all_status[t["task"]] = entry
 
-    # Use PATCH so nodes merge their data instead of overwriting each other
-    _patch("mamba3/three_pop/tasks", all_status)
-    print(f"  Pushed {len(all_status)} task statuses")
+    # Merge with existing Firebase data — only update if our accuracy is higher
+    existing_tasks = _firebase_get("mamba3/three_pop/tasks") or {}
+    merged = {}
+    for task, entry in all_status.items():
+        existing = existing_tasks.get(task, {})
+        existing_acc = existing.get("best_accuracy", 0)
+        our_acc = entry.get("best_accuracy", 0)
+        if our_acc >= existing_acc:
+            merged[task] = entry
+    if merged:
+        _patch("mamba3/three_pop/tasks", merged)
+    print(f"  Pushed {len(merged)} task statuses (of {len(all_status)}, merged by best accuracy)")
 
     # 2. Push teachers
     teachers = db.get_teachers()
@@ -166,6 +190,13 @@ def push_state(db_path="three_pop/training.db"):
         lr = learning_data.get("learning_ratio")
         if lr:
             print(f"  Learning rate: {lr:.3f} (last/first cycles)")
+
+    # 5. Bandwidth tracking — estimate Firebase usage
+    _patch("mamba3/bandwidth", {
+        "last_push_bytes": _bandwidth_bytes,
+        "last_push_at": time.time(),
+        "node": node_id,
+    })
 
     db.close()
     return len(all_status), len(teacher_data), len(catalog)

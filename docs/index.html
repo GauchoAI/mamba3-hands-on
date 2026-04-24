@@ -205,6 +205,15 @@
   </div>
 </div>
 
+<!-- Firebase Bandwidth -->
+<div class="bg-gray-50 rounded-lg border border-gray-200 px-4 py-2 mb-3">
+  <div class="flex justify-between items-center text-xs text-gray-500">
+    <span>Firebase: <span id="fb-usage" class="font-mono">-</span></span>
+    <span id="fb-warning" class="text-red-500 font-bold hidden">⚠ Approaching 10GB limit</span>
+    <span>Schema: <span class="font-mono text-gray-400">/mamba3/{nodes, models, three_pop/{teachers,tasks}, learning_rate, bandwidth}</span></span>
+  </div>
+</div>
+
 <footer class="text-gray-300 text-xs mt-4 border-t pt-2">
   Mamba-3 · GauchoAI · Firebase Real-time · <span id="gen-counter"></span>
 </footer>
@@ -312,6 +321,20 @@ db.ref('mamba3/learning_rate').on('value', s=>{
   chart.innerHTML = bars;
   summary.innerHTML = 'First: '+(d.first_task||'?')+' ('+d.first_cycles+' cycles)<br>'
     + 'Last: '+(d.last_task||'?')+' ('+d.last_cycles+' cycles)';
+});
+
+// Firebase bandwidth tracking
+db.ref('mamba3/bandwidth').on('value', s=>{
+  const d = s.val(); if(!d) return;
+  const el = document.getElementById('fb-usage');
+  const warn = document.getElementById('fb-warning');
+  const bytes = d.last_push_bytes || 0;
+  // Rough estimate: push_state runs ~every 5 min per node, 2 nodes
+  const pushesPerDay = 2 * 288; // 2 nodes * 288 five-min intervals
+  const dailyMB = (bytes * pushesPerDay) / (1024*1024);
+  const monthlyGB = (dailyMB * 30) / 1024;
+  el.textContent = (bytes/1024).toFixed(1)+'KB/push, est '+monthlyGB.toFixed(2)+'GB/month';
+  if(monthlyGB > 8) { warn.classList.remove('hidden'); } else { warn.classList.add('hidden'); }
 });
 
 // Nodes — real-time
