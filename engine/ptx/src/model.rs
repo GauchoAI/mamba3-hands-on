@@ -3,7 +3,8 @@
 //! v1: per-op kernels, bit-exact vs CPU reference. Correctness first,
 //! creative iteration in v2+.
 
-use cudarc::driver::{CudaSlice, CudaStream, LaunchConfig, PushKernelArg};
+use cudarc::driver::sys::{CUgraphInstantiate_flags, CUstreamCaptureMode};
+use cudarc::driver::{CudaGraph, CudaSlice, CudaStream, LaunchConfig, PushKernelArg};
 use mamba3_engine::model::Mamba3Model;
 use std::cell::RefCell;
 use std::error::Error;
@@ -119,10 +120,10 @@ impl PtxModel {
     /// Forward pass using persistent scratch buffers (no per-call allocation).
     pub fn forward(&self, tokens: &[u32]) -> Result<Vec<f32>, Box<dyn Error>> {
         let stream = self.ptx.ctx.default_stream();
-        self.record_forward(&stream, tokens)?;
+        self.upload_tokens(&stream, tokens)?;
+        self.record_compute(&stream, tokens.len())?;
         stream.synchronize()?;
 
-        // Copy logits back to host
         let l = tokens.len();
         let scratch = self.scratch.borrow();
         let logits_slice = scratch.logits.slice(0..(l * self.vocab_size));
@@ -130,33 +131,77 @@ impl PtxModel {
         Ok(host)
     }
 
-    /// Record all kernel launches for a forward pass of length `tokens.len()`
-    /// onto `stream`. Pure launches, no synchronization. Tokens must be
-    /// pre-uploaded into scratch.tokens (or we upload here). Results land in
-    /// scratch.logits. This is the function captured by CUDA graphs.
-    pub fn record_forward(
+    /// Forward pass via a pre-captured CUDA Graph. Eliminates per-kernel
+    /// launch overhead — all kernel launches are fused into one graph replay.
+    pub fn forward_graph(
+        &self,
+        tokens: &[u32],
+        graph: &CudaGraph,
+    ) -> Result<Vec<f32>, Box<dyn Error>> {
+        let stream = self.ptx.ctx.default_stream();
+        self.upload_tokens(&stream, tokens)?;
+        graph.launch()?;
+        stream.synchronize()?;
+
+        let l = tokens.len();
+        let scratch = self.scratch.borrow();
+        let logits_slice = scratch.logits.slice(0..(l * self.vocab_size));
+        let host = stream.memcpy_dtov(&logits_slice)?;
+        Ok(host)
+    }
+
+    /// Capture the compute pipeline (all kernel launches for a forward of
+    /// length `l`) as a replayable CUDA graph. Tokens must be uploaded to
+    /// scratch.tokens via `forward_graph` on each replay — the graph only
+    /// contains kernel launches, not the memcpy.
+    pub fn capture_graph(&self, l: usize) -> Result<CudaGraph, Box<dyn Error>> {
+        let stream = self.ptx.ctx.default_stream();
+        // Warm up the kernels once (NVRTC cache, JIT) before capture.
+        let dummy: Vec<u32> = vec![0; l];
+        self.upload_tokens(&stream, &dummy)?;
+        self.record_compute(&stream, l)?;
+        stream.synchronize()?;
+
+        // Capture.
+        stream.begin_capture(CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)?;
+        self.record_compute(&stream, l)?;
+        let graph = stream
+            .end_capture(CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH)?
+            .ok_or("Graph capture returned None")?;
+        Ok(graph)
+    }
+
+    fn upload_tokens(
         &self,
         stream: &Arc<CudaStream>,
         tokens: &[u32],
     ) -> Result<(), Box<dyn Error>> {
         let l = tokens.len();
+        assert!(l <= self.scratch.borrow().max_seq, "sequence exceeds max_seq");
+        let mut scratch_ref = self.scratch.borrow_mut();
+        let scratch: &mut PtxScratch = &mut *scratch_ref;
+        let mut dst = scratch.tokens.slice_mut(0..l);
+        stream.memcpy_htod(tokens, &mut dst)?;
+        Ok(())
+    }
+
+    /// Issue all kernel launches for one forward pass of length `l`. Tokens
+    /// must already be in scratch.tokens. Results land in scratch.logits.
+    /// Purely asynchronous — no synchronization, no memcpy.
+    pub fn record_compute(
+        &self,
+        stream: &Arc<CudaStream>,
+        l: usize,
+    ) -> Result<(), Box<dyn Error>> {
         let d = self.d_model;
         let di = self.d_inner;
         let ds = self.d_state;
         let hd = self.headdim;
         let nh = self.n_heads;
         let v = self.vocab_size;
-        assert!(l <= self.scratch.borrow().max_seq, "sequence exceeds max_seq");
 
-        // Upload tokens into persistent buffer.
         let mut scratch_ref = self.scratch.borrow_mut();
         let scratch: &mut PtxScratch = &mut *scratch_ref;
-        {
-            // memcpy_htod into an existing slice: use cudarc API
-            // Slice into first l elements, then memcpy.
-            let mut dst = scratch.tokens.slice_mut(0..l);
-            stream.memcpy_htod(tokens, &mut dst)?;
-        }
 
         // 1. Embedding gather
         {

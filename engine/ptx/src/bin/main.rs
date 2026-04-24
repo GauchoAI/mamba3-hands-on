@@ -139,7 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "CPU (mamba3-engine)", cpu_ms, cpu_tps
     );
 
-    // PTX
+    // PTX (per-call launches)
     for _ in 0..5 {
         let _ = gpu_model.forward(&tokens)?;
     }
@@ -153,11 +153,53 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ptx_tps = tokens.len() as f64 / (ptx_ms / 1000.0);
     println!(
         "{:>24}  {:>14.3}  {:>14.0}",
-        "PTX (this engine)", ptx_ms, ptx_tps
+        "PTX (per-op launches)", ptx_ms, ptx_tps
+    );
+
+    // PTX with CUDA Graph
+    println!("Capturing CUDA Graph (L={})...", tokens.len());
+    let graph = gpu_model.capture_graph(tokens.len())?;
+
+    // Correctness check: graph replay must match per-op path
+    let graph_logits = gpu_model.forward_graph(&tokens, &graph)?;
+    let graph_diff: f32 = graph_logits
+        .iter()
+        .zip(ptx_logits.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    println!(
+        "Graph vs per-op PTX: max diff = {:.3e}   {}",
+        graph_diff,
+        if graph_diff < 1e-5 { "PASS" } else { "FAIL" }
+    );
+
+    for _ in 0..5 {
+        let _ = gpu_model.forward_graph(&tokens, &graph)?;
+    }
+    let start = Instant::now();
+    let mut count = 0;
+    while start.elapsed().as_secs_f64() < 2.5 {
+        let _ = gpu_model.forward_graph(&tokens, &graph)?;
+        count += 1;
+    }
+    let graph_ms = start.elapsed().as_secs_f64() * 1000.0 / count as f64;
+    let graph_tps = tokens.len() as f64 / (graph_ms / 1000.0);
+    println!(
+        "{:>24}  {:>14.3}  {:>14.0}",
+        "PTX + CUDA Graph", graph_ms, graph_tps
     );
 
     println!();
-    println!("Speedup PTX vs CPU: {:.2}x", cpu_ms / ptx_ms);
+    println!(
+        "PTX per-op    vs CPU: {:.2}x      vs wgpu-fused (21.2 ms): {:.1}x",
+        cpu_ms / ptx_ms,
+        21.2 / ptx_ms
+    );
+    println!(
+        "PTX + graph   vs CPU: {:.2}x      vs wgpu-fused (21.2 ms): {:.1}x",
+        cpu_ms / graph_ms,
+        21.2 / graph_ms
+    );
 
     Ok(())
 }
