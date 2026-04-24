@@ -113,6 +113,72 @@ def cmd_status(args):
         print(f"  {nid}: {backends} ({info.get('gpu_name', info.get('arch', ''))})")
 
 
+def cmd_models(args):
+    """Show all models across all nodes — the unified catalog."""
+    from server.node_agent import _firebase_get
+
+    models = _firebase_get("mamba3/models") or {}
+    teachers = (_firebase_get("mamba3/three_pop/teachers") or {})
+
+    if not models:
+        print("No models in catalog. Run 'python server/push_state.py' on a training node.")
+        return
+
+    print(f"{'Task':25s} {'Size':>8s} {'Acc':>5s} {'Node':20s} {'Status':>10s}")
+    print("-" * 75)
+    for task in sorted(models.keys()):
+        m = models[task]
+        t = teachers.get(task, {})
+        acc = t.get("accuracy", 0)
+        acc_s = f"{acc:.0%}" if isinstance(acc, (int, float)) and acc > 0 else "  -"
+        node = str(m.get("node", "?"))[:20]
+        size = f"{m.get('size_kb', 0):.0f}KB"
+        status = "teacher" if task in teachers else "training"
+        print(f"{task:25s} {size:>8s} {acc_s:>5s} {node:20s} {status:>10s}")
+    print(f"\nTotal: {len(models)} models, {len(teachers)} teachers")
+
+
+def cmd_run(args):
+    """Run inference on any model from the catalog."""
+    import subprocess
+
+    # Resolve checkpoint — local or fetch from catalog
+    ckpt = args.checkpoint
+    if not Path(ckpt).exists():
+        # Try checkpoints/specialists/<name>.pt
+        ckpt = f"checkpoints/specialists/{args.checkpoint}.pt"
+    if not Path(ckpt).exists():
+        # Try fetching via ModelRegistry
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from registry.model_registry import ModelRegistry
+            reg = ModelRegistry()
+            local = reg.ensure_local(args.checkpoint)
+            if local:
+                ckpt = str(local)
+            else:
+                print(f"Model '{args.checkpoint}' not found locally or in catalog.")
+                return
+        except Exception as e:
+            print(f"Error: {e}")
+            return
+
+    cmd = [sys.executable, str(Path(__file__).parent.parent / "export" / "mamba_inference.py"),
+           "--checkpoint", ckpt, "--device", args.device or "cpu",
+           "--problems-dir", "problems"]
+
+    if args.eval:
+        cmd.extend(["--eval", "--n-examples", str(args.n or 100)])
+    elif args.bench:
+        cmd.append("--bench")
+    elif args.serve:
+        cmd.extend(["--serve", "--port", str(args.port or 8090)])
+    else:
+        cmd.append("--eval")
+
+    subprocess.run(cmd)
+
+
 def cmd_teachers(args):
     """Show all graduated teachers across all nodes."""
     from server.node_agent import _firebase_get, list_nodes
@@ -523,6 +589,19 @@ def main():
     # nodes
     p_nodes = sub.add_parser("nodes", help="List registered training nodes")
 
+    # models
+    p_models = sub.add_parser("models", help="Show all models in unified catalog")
+
+    # run
+    p_run = sub.add_parser("run", help="Run inference on any model from catalog")
+    p_run.add_argument("checkpoint", help="Task name or path to .pt checkpoint")
+    p_run.add_argument("--device", default="cpu")
+    p_run.add_argument("--eval", action="store_true", help="Evaluate on fresh examples")
+    p_run.add_argument("--bench", action="store_true", help="Benchmark throughput")
+    p_run.add_argument("--serve", action="store_true", help="Start HTTP server")
+    p_run.add_argument("--port", type=int, default=8090)
+    p_run.add_argument("-n", type=int, default=100, help="Number of examples")
+
     # teachers
     p_teachers = sub.add_parser("teachers", help="List all graduated teachers across nodes")
 
@@ -566,6 +645,10 @@ def main():
 
     if args.command == "nodes":
         cmd_nodes(args)
+    elif args.command == "models":
+        cmd_models(args)
+    elif args.command == "run":
+        cmd_run(args)
     elif args.command == "teachers":
         cmd_teachers(args)
     elif args.command == "status":

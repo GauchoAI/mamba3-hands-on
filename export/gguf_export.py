@@ -236,3 +236,112 @@ def _write_string(f, s: str):
     b = s.encode("utf-8")
     f.write(struct.pack("<Q", len(b)))
     f.write(b)
+
+
+# ── GGUF Reader ──────────────────────────────────────────────────
+
+def read_gguf(path: str) -> dict:
+    """Read a GGUF file and return metadata + tensors as numpy arrays.
+
+    Returns:
+        {"metadata": {key: value}, "tensors": {name: numpy_array}}
+    """
+    with open(path, "rb") as f:
+        # Header
+        magic = struct.unpack("<I", f.read(4))[0]
+        assert magic == GGUF_MAGIC, f"Not a GGUF file (magic={hex(magic)})"
+        version = struct.unpack("<I", f.read(4))[0]
+        n_tensors = struct.unpack("<Q", f.read(8))[0]
+        n_metadata = struct.unpack("<Q", f.read(8))[0]
+
+        # Metadata
+        metadata = {}
+        for _ in range(n_metadata):
+            key = _read_string(f)
+            vtype = struct.unpack("<I", f.read(4))[0]
+            if vtype == GGUF_TYPE_STRING:
+                metadata[key] = _read_string(f)
+            elif vtype == GGUF_TYPE_UINT32:
+                metadata[key] = struct.unpack("<I", f.read(4))[0]
+            elif vtype == GGUF_TYPE_INT32:
+                metadata[key] = struct.unpack("<i", f.read(4))[0]
+            elif vtype == GGUF_TYPE_FLOAT32:
+                metadata[key] = struct.unpack("<f", f.read(4))[0]
+            else:
+                break  # unsupported type
+
+        # Tensor infos
+        tensor_infos = []
+        for _ in range(n_tensors):
+            name = _read_string(f)
+            n_dims = struct.unpack("<I", f.read(4))[0]
+            dims = [struct.unpack("<Q", f.read(8))[0] for _ in range(n_dims)]
+            dtype = struct.unpack("<I", f.read(4))[0]
+            offset = struct.unpack("<Q", f.read(8))[0]
+            tensor_infos.append((name, dims, dtype, offset))
+
+        # Align to 32 bytes
+        pos = f.tell()
+        if pos % 32 != 0:
+            f.read(32 - (pos % 32))
+
+        data_start = f.tell()
+
+        # Read tensors
+        tensors = {}
+        for name, dims, dtype, offset in tensor_infos:
+            f.seek(data_start + offset)
+            n_elements = 1
+            for d in dims:
+                n_elements *= d
+            if dtype == GGUF_TENSOR_F32:
+                data = np.frombuffer(f.read(n_elements * 4), dtype=np.float32)
+            elif dtype == GGUF_TENSOR_F16:
+                data = np.frombuffer(f.read(n_elements * 2), dtype=np.float16)
+            else:
+                continue
+            tensors[name] = data.reshape(dims)
+
+    return {"metadata": metadata, "tensors": tensors}
+
+
+def load_from_gguf(path: str, device: str = "cpu"):
+    """Load a Mamba-3 model from a GGUF file. Returns (model, metadata)."""
+    import torch
+    from progressive_model import ProgressiveModel
+
+    data = read_gguf(path)
+    meta = data["metadata"]
+    tensors = data["tensors"]
+
+    model_type = meta.get("general.architecture", "mamba3")
+    d_model = meta.get(f"{model_type}.embedding_length", 64)
+    n_layers = meta.get(f"{model_type}.block_count", 1)
+    d_state = meta.get(f"{model_type}.ssm.d_state", 16)
+    headdim = meta.get(f"{model_type}.ssm.headdim", 16)
+
+    model = ProgressiveModel(
+        d_model=d_model, d_state=d_state, expand=2, headdim=headdim
+    ).to(device)
+    for _ in range(n_layers):
+        model.add_kernel_layer()
+
+    # Map GGUF tensors back to PyTorch state dict
+    state_dict = model.state_dict()
+    reverse_map = _build_tensor_map(state_dict, n_layers)
+    gguf_to_pt = {v2: k2 for k2, v2 in reverse_map.items()}
+
+    for gguf_name, arr in tensors.items():
+        pt_key = gguf_to_pt.get(gguf_name)
+        if pt_key and pt_key in state_dict:
+            state_dict[pt_key] = torch.from_numpy(arr.copy())
+
+    model.load_state_dict(state_dict)
+    model.eval()
+
+    return model, meta
+
+
+def _read_string(f) -> str:
+    length = struct.unpack("<Q", f.read(8))[0]
+    return f.read(length).decode("utf-8")

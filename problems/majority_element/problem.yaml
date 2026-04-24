@@ -1,0 +1,10 @@
+name: majority_element
+type: generator
+generator: generators.level2_composition:gen_majority_element
+target_accuracy: 0.95
+tags: [counting, comparison, level2]
+description: "Find the most frequent element"
+curriculum:
+  - {stage: 1, max_val: 3, min_len: 5, max_len: 7, advance_at: 0.90}
+  - {stage: 2, max_val: 5, min_len: 5, max_len: 9, advance_at: 0.90}
+  - {stage: 3, max_val: 8, min_len: 7, max_len: 11, advance_at: 0.95}

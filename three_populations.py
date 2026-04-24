@@ -69,16 +69,14 @@ def _acquire_lock():
     if lock_path.exists():
         try:
             old_pid = int(lock_path.read_text().strip())
-            os.kill(old_pid, 0)
-            print(f"Killing existing instance (PID {old_pid})...", flush=True)
-            os.kill(old_pid, signal.SIGTERM)
-            time.sleep(2)
-            try:
-                os.kill(old_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            os.kill(old_pid, 0)  # check if alive
+            # Don't kill — just warn. The old instance will exit on its own
+            # or the user can kill it manually. Prevents accidental kills on deploy.
+            print(f"Warning: existing instance (PID {old_pid}) still running.", flush=True)
+            print(f"  Kill it first: kill {old_pid}", flush=True)
+            sys.exit(1)
         except (ProcessLookupError, ValueError):
-            pass
+            pass  # old process is dead, safe to take over
     lock_path.write_text(str(os.getpid()))
     return lock_path
 
@@ -299,6 +297,11 @@ def run(args):
 
         # ── Sync to Firebase ──
         db.sync_to_firebase()
+        try:
+            from server.push_state import push_state
+            push_state(_db_path)
+        except Exception:
+            pass
 
         # ── Round summary ──
         all_status = db.get_all_task_status()

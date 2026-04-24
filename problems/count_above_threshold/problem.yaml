@@ -1,0 +1,10 @@
+name: count_above_threshold
+type: generator
+generator: generators.level2_composition:gen_count_above_threshold
+target_accuracy: 0.95
+tags: [counting, comparison, level2]
+description: "Count elements above a threshold"
+curriculum:
+  - {stage: 1, max_val: 5, max_threshold: 3, min_len: 3, max_len: 5, advance_at: 0.90}
+  - {stage: 2, max_val: 10, max_threshold: 8, min_len: 3, max_len: 8, advance_at: 0.90}
+  - {stage: 3, max_val: 20, max_threshold: 15, min_len: 4, max_len: 10, advance_at: 0.95}

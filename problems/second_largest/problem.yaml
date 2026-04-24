@@ -1,0 +1,10 @@
+name: second_largest
+type: generator
+generator: generators.level2_composition:gen_second_largest
+target_accuracy: 0.95
+tags: [comparison, sorting, level2]
+description: "Find the second largest element"
+curriculum:
+  - {stage: 1, max_val: 10, min_len: 3, max_len: 4, advance_at: 0.90}
+  - {stage: 2, max_val: 20, min_len: 3, max_len: 7, advance_at: 0.90}
+  - {stage: 3, max_val: 30, min_len: 4, max_len: 10, advance_at: 0.95}
