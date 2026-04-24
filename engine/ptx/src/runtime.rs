@@ -62,6 +62,10 @@ impl PtxContext {
                 "--prec-div=true".into(),
                 "--prec-sqrt=true".into(),
                 "-lineinfo".into(),
+                // Needed for #include <cooperative_groups.h>. NVRTC doesn't
+                // search CUDA toolkit headers by default.
+                "--include-path=/usr/local/cuda/include".into(),
+                "--include-path=/usr/local/cuda-12.8/targets/x86_64-linux/include".into(),
             ],
             ..Default::default()
         };
