@@ -153,6 +153,46 @@ extern "C" __global__ void compute_ssm_params_and_dt_mean(
     if (tid == 0) dt_mean[t] = my_dt / (float)H;
 }
 
+// ---------- matmul_t_tiled --------------------------------------------------
+// Tiled matmul: C[M, N] = A[M, K] @ B[N, K]^T. 16x16 block, 16x16 SMEM tiles.
+// Each thread computes one C element; block cooperates on tile loads.
+// Reduces HBM traffic by ~K/tile_k (16x for typical K).
+// Grid: (ceil(N/16), ceil(M/16)), Block: (16, 16)
+extern "C" __global__ void matmul_t_tiled(
+    const float* __restrict__ A,
+    const float* __restrict__ B,
+    float* __restrict__ C,
+    int M, int N, int K
+) {
+    __shared__ float As[16 * 16];
+    __shared__ float Bs[16 * 16];
+
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    int col = blockIdx.x * 16 + tx;
+    int row = blockIdx.y * 16 + ty;
+
+    float acc = 0.0f;
+
+    for (int k_tile = 0; k_tile < K; k_tile += 16) {
+        // Load A[row, k_tile + tx] → As[ty, tx]
+        int a_k = k_tile + tx;
+        As[ty * 16 + tx] = (row < M && a_k < K) ? A[row * K + a_k] : 0.0f;
+        // Load B[col, k_tile + ty] → Bs[tx, ty]  (swap so inner loop is strided by 1)
+        int b_k = k_tile + ty;
+        Bs[tx * 16 + ty] = (col < N && b_k < K) ? B[col * K + b_k] : 0.0f;
+        __syncthreads();
+
+        #pragma unroll
+        for (int k = 0; k < 16; k++) {
+            acc = __fmaf_rn(As[ty * 16 + k], Bs[tx * 16 + k], acc);
+        }
+        __syncthreads();
+    }
+
+    if (row < M && col < N) C[row * N + col] = acc;
+}
+
 // ---------- compute_ssm_params ---------------------------------------------
 // Per (t, h): dt = softplus(dd_dt + dt_bias); a = max(-softplus(dd_a), -1e-4);
 //             decay = exp(a*dt);  trap = sigmoid(trap_raw)

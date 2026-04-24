@@ -839,7 +839,14 @@ fn launch_matmul_t(
     let m_i = m as i32;
     let n_i = n as i32;
     let k_i = k as i32;
-    let mut lb = stream.launch_builder(&ptx.k.matmul_t);
+    // Tiled variant is preferred when K is a multiple of 16 (true for our
+    // d_model=64, d_inner=128 shapes). Falls back to naive for pathological K.
+    let func = if k % 16 == 0 {
+        &ptx.k.matmul_t_tiled
+    } else {
+        &ptx.k.matmul_t
+    };
+    let mut lb = stream.launch_builder(func);
     lb.arg(a);
     lb.arg(b);
     lb.arg(c);
