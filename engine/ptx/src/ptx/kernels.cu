@@ -1732,9 +1732,10 @@ extern "C" __global__ void bx_bwd(
         float dt_v = softplus_f(dt_raw);
         float tr_raw = proj[t * dip + tr_off + h];
         float tr = sigmoid_f(tr_raw);
-        float denom = dt_v * tr + 1e-8f;
 
-        float d_bx = d_scan_inp[((t * H + h) * hd + p) * ds + n] / denom;
+        // Correct math: inp_val = blended * dt, blended ≈ trap * bx_cur,
+        // so d_bx_cur = d_inp_val * dt * trap.  Previously divided.
+        float d_bx = d_scan_inp[((t * H + h) * hd + p) * ds + n] * (dt_v * tr);
         float x_val = proj[t * dip + di + h * hd + p];
         float bp_raw = proj[t * dip + bp_off + n];
 
@@ -1797,6 +1798,13 @@ extern "C" __global__ void adamw_step(
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     float g = grads[i];
+    // Simple per-element clipping: caps runaway gradients and NaN propagation
+    // that can arise from newly-enabled gradient paths (e.g. d_dt_bias when
+    // dt is small, making inp/dt blow up). Matches PyTorch's common
+    // clip_grad_norm behavior in spirit.
+    if (!isfinite(g)) g = 0.0f;
+    if (g > 1.0f)  g = 1.0f;
+    if (g < -1.0f) g = -1.0f;
     float p = params[i] * (1.0f - lr * wd);
     float mi = __fmaf_rn(1.0f - beta1, g, beta1 * m[i]);
     float vi = __fmaf_rn(1.0f - beta2, g * g, beta2 * v[i]);
