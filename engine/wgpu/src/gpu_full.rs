@@ -50,6 +50,9 @@ pub struct FullGpuModel {
     residual_layout: wgpu::BindGroupLayout,
     ssm_prep_pipeline: wgpu::ComputePipeline,
     ssm_prep_layout: wgpu::BindGroupLayout,
+    fused_pipeline: wgpu::ComputePipeline,
+    fused_layout: wgpu::BindGroupLayout,
+    fused_scale_layout: wgpu::BindGroupLayout,
 
     max_seq: usize,
 
@@ -63,6 +66,8 @@ pub struct FullGpuModel {
     layer_prep_bgs: Vec<wgpu::BindGroup>,
     layer_scan_bgs: Vec<wgpu::BindGroup>,
     head_matmul_bg: wgpu::BindGroup,
+    // Params buffers that need L updated each forward
+    all_param_bufs: Vec<wgpu::Buffer>,
 }
 
 struct FullGpuLayer {
@@ -336,6 +341,27 @@ impl FullGpuModel {
             }));
         }
 
+        // Fused layer pipeline (12 bindings in group 0, 1 in group 1)
+        let fused_shader = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None, source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fused_layer.wgsl").into()),
+        });
+        let fused_layout = gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None, entries: &[
+                bgl_rw(0), bgl_ro(1), bgl_ro(2), bgl_ro(3), bgl_ro(4),
+                bgl_ro(5), bgl_ro(6), bgl_ro(7), bgl_ro(8), bgl_ro(9), bgl_ro(10), bgl_u(11),
+            ],
+        });
+        let fused_scale_layout = gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None, entries: &[bgl_u(0)],
+        });
+        let fused_pl = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None, bind_group_layouts: &[&fused_layout, &fused_scale_layout], push_constant_ranges: &[],
+        });
+        let fused_pipeline = gpu.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: None, layout: Some(&fused_pl), module: &fused_shader,
+            entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+        });
+
         eprintln!("  FullGpuModel: {} layers, max_seq={}, pre-built {} bind groups",
             model.layers.len(), max_seq, 2 + layers.len() * 6 + 1);
 
@@ -348,6 +374,8 @@ impl FullGpuModel {
             layer_c_norm_w, layer_c_norm_b, layer_d_param,
             norm_pipeline, norm_layout, residual_pipeline, residual_layout,
             ssm_prep_pipeline, ssm_prep_layout,
+            fused_pipeline, fused_layout, fused_scale_layout,
+            all_param_bufs: Vec::new(),
             max_seq,
             embed_norm_bg, final_norm_bg, head_matmul_bg,
             layer_norm_bgs, layer_in_proj_bgs, layer_out_proj_bgs,
@@ -450,6 +478,102 @@ impl FullGpuModel {
         enc.copy_buffer_to_buffer(&self.logits_buf, 0, &self.staging, 0, (l * v * 4) as u64);
 
         // === SINGLE SUBMIT ===
+        self.gpu.queue.submit(std::iter::once(enc.finish()));
+        self.map_staging(l * v)
+    }
+
+    /// Fused forward: ONE dispatch per layer (norm+matmul+SSM+matmul+residual fused).
+    /// Total dispatches: 1 (embed_norm) + N (fused layers) + 1 (final_norm) + 1 (head) = N+3
+    /// vs old: 6N+3 dispatches. For 5 layers: 8 vs 33 dispatches.
+    pub fn forward_fused(&self, tokens: &[u32]) -> Vec<f32> {
+        let l = tokens.len();
+        let d = self.cpu_model.d_model;
+        let v = self.cpu_model.vocab_size;
+        let di = self.cpu_model.d_inner;
+
+        // Embedding (CPU)
+        let mut x = vec![0.0f32; l * d];
+        for (t, &tok) in tokens.iter().enumerate() {
+            let tok = tok as usize;
+            if tok < v { for i in 0..d { x[t * d + i] = self.cpu_model.embed_w[tok * d + i]; } }
+        }
+        self.gpu.queue.write_buffer(&self.x_buf, 0, bytemuck::cast_slice(&x));
+
+        let mut enc = self.gpu.device.create_command_encoder(&Default::default());
+        let l32 = l as u32;
+        let tile = 16u32;
+
+        // Embed norm
+        { let mut pass = enc.begin_compute_pass(&Default::default());
+          pass.set_pipeline(&self.norm_pipeline);
+          pass.set_bind_group(0, &self.embed_norm_bg, &[]);
+          pass.dispatch_workgroups(l32, 1, 1); }
+
+        // Fused layers — ONE dispatch each
+        for (li, gl) in self.layers.iter().enumerate() {
+            #[repr(C)]
+            #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+            struct FP { l: u32, d: u32, di: u32, ds: u32, nh: u32, hd: u32, dip: u32, na: u32 }
+            let fp = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::bytes_of(&FP {
+                    l: l32, d: d as u32, di: di as u32, ds: self.cpu_model.d_state as u32,
+                    nh: self.cpu_model.n_heads as u32, hd: self.cpu_model.headdim as u32,
+                    dip: gl.d_in_proj as u32, na: (self.cpu_model.d_state / 2) as u32,
+                }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+            #[repr(C)]
+            #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+            struct SC { sb: u32, _0: u32, _1: u32, _2: u32 }
+            let sc = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::bytes_of(&SC { sb: gl.scale.to_bits(), _0: 0, _1: 0, _2: 0 }),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+            let bg0 = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &self.fused_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: self.x_buf.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: gl.in_proj_w.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: gl.out_proj_w.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: self.layer_dt_bias[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 4, resource: self.layer_d_param[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 5, resource: self.layer_b_norm_w[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 6, resource: self.layer_b_norm_b[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 7, resource: self.layer_c_norm_w[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 8, resource: self.layer_c_norm_b[li].as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 9, resource: gl.norm_w.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 10, resource: gl.norm_b.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 11, resource: fp.as_entire_binding() },
+                ],
+            });
+            let bg1 = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None, layout: &self.fused_scale_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: sc.as_entire_binding() },
+                ],
+            });
+
+            let mut pass = enc.begin_compute_pass(&Default::default());
+            pass.set_pipeline(&self.fused_pipeline);
+            pass.set_bind_group(0, &bg0, &[]);
+            pass.set_bind_group(1, &bg1, &[]);
+            pass.dispatch_workgroups(1, 1, 1); // Single workgroup — all heads sequential
+        }
+
+        // Final norm + head
+        { let mut pass = enc.begin_compute_pass(&Default::default());
+          pass.set_pipeline(&self.norm_pipeline);
+          pass.set_bind_group(0, &self.final_norm_bg, &[]);
+          pass.dispatch_workgroups(l32, 1, 1); }
+        { let mut pass = enc.begin_compute_pass(&Default::default());
+          pass.set_pipeline(&self.gpu.matmul_pipeline);
+          pass.set_bind_group(0, &self.head_matmul_bg, &[]);
+          pass.dispatch_workgroups((l32 + tile - 1) / tile, (v as u32 + tile - 1) / tile, 1); }
+
+        enc.copy_buffer_to_buffer(&self.logits_buf, 0, &self.staging, 0, (l * v * 4) as u64);
         self.gpu.queue.submit(std::iter::once(enc.finish()));
         self.map_staging(l * v)
     }

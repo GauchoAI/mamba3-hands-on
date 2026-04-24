@@ -191,6 +191,20 @@ fn run_model_inference(model_path: &str) {
             let max_diff5: f32 = cpu_logits.iter().zip(f_logits.iter())
                 .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
             println!("GPU-full vs CPU max diff: {:.2e} {}", max_diff5, if max_diff5 < 1e-3 { "PASS" } else { "FAIL" });
+
+            // Fused forward
+            for _ in 0..3 { let _ = full_gpu.forward_fused(&tokens); }
+            let n_fused = 100;
+            let start = Instant::now();
+            for _ in 0..n_fused { let _ = full_gpu.forward_fused(&tokens); }
+            let total = start.elapsed();
+            let ms_fused = total.as_secs_f64() * 1000.0 / n_fused as f64;
+            let tps_fused = tokens.len() as f64 / (ms_fused / 1000.0);
+            println!("Benchmark (GPU-fused): {:.3}ms/inference, {:.0} tokens/sec", ms_fused, tps_fused);
+            let fused_logits = full_gpu.forward_fused(&tokens);
+            let max_diff6: f32 = cpu_logits.iter().zip(fused_logits.iter())
+                .map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            println!("GPU-fused vs CPU max diff: {:.2e} {}", max_diff6, if max_diff6 < 1e-3 { "PASS" } else { "FAIL" });
         }
     }
 
