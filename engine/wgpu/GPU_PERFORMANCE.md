@@ -36,24 +36,26 @@ export_rust_model('checkpoints/specialists/run_length_next_best.pt', '/tmp/run_l
 "
 ```
 
-## Current Results (2026-04-24)
+## Current Results (2026-04-24, clean system)
 
 Model: run_length_next, d=64, 3 layers, 28K params, 7 tokens
 
-| Path | M4 (Metal) | H100 (Vulkan) | H100 (PTX, new) |
-|------|-----------|---------------|-----------------|
-| CPU | **0.8ms** / 8,589 tok/s | **3.6ms** / 1,943 tok/s | 2.2–2.8ms / 2,500–3,300 tok/s |
-| GPU-fused | 11.6ms / 605 tok/s | 21.2ms / 331 tok/s | n/a |
-| GPU-full | 33.9ms / 207 tok/s | 62.1ms / 113 tok/s | n/a |
-| GPU-pipeline | 61.8ms / 113 tok/s | 79.0ms / 89 tok/s | n/a |
-| **PTX (per-op)** | n/a | n/a | **3.6–5.2ms / 1,400–1,950 tok/s** |
-| **PTX + CUDA Graph** | n/a | n/a | **3.3–4.5ms / 1,550–2,100 tok/s** |
+| Path | H100 (clean) | H100 (contested) |
+|------|-------------|------------------|
+| CPU (mamba3-engine, rayon+SIMD) | **0.298 ms** / 23,480 tok/s | 2.8–3.6 ms / 2,000–3,300 tok/s |
+| wgpu GPU-fused (prior result) | 21.2 ms / 331 tok/s | — |
+| PTX (per-op launches)           | **0.163 ms** / 42,822 tok/s | 3.6–5.2 ms |
+| **PTX + CUDA Graph**            | **0.108 ms** / 64,654 tok/s | 3.3–4.5 ms |
 
-**Correctness: PTX max |PTX − CPU| = 7.6e-6 (bit-close; matches Rust `f32::mul_add`).**
+**Correctness: max |PTX − CPU| = 7.629e-6** (bit-close; `fma.rn.f32` matches Rust `f32::mul_add`).
 
-PTX is **~5× faster than wgpu GPU-fused** on H100 for this model, and within 1.5× of the EPYC CPU — which, given the tiny model size and dispatch-bound nature, is good. The naive matmul and many separate dispatches leave lots of room; see `engine/ptx/PLAN.md` for v2+ creative iterations (persistent single-kernel forward, warp shuffles, tensor cores, etc.).
+**Verdict:** PTX + CUDA Graph is **2.68–2.76× faster than CPU**, and **~200× faster than wgpu-fused**, on the same model on the same hardware. Variance disappears once the system is actually idle — 4 consecutive runs produced 0.106–0.111 ms (±2.4%).
 
-H100 variance on the shared vast.ai container is significant (~30% run-to-run). A dedicated H100 would show tighter numbers.
+### The lesson about "contention"
+
+The earlier contested numbers (3-6 ms) were not from external H100 tenants. They were our *own* `three_populations.py` spawning multiple `specialist_trainer.py --device cpu` workers that saturated 70+ of 256 CPU cores and held GPU memory — skewing both sides of the benchmark. A Python orchestrator with `pool_size = vram_free/20` oversubscribes the hardware by design because it has no concept of "one PTX forward takes one SM-second."
+
+This is what the scheduler in `engine/ptx/` (in progress) fixes: fixed-slot Tetris packing, no accidental oversubscription.
 
 ## Architecture: GPU-Fused
 
