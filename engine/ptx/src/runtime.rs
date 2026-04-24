@@ -33,6 +33,14 @@ const KERNELS_CU: &str = include_str!("ptx/kernels.cu");
 impl PtxContext {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let ctx = CudaContext::new(0)?;
+        // Disable cudarc's event tracking BEFORE allocating any slices.
+        // Rationale: event tracking records wait/record CUDA events on each
+        // slice across launches for cross-stream synchronization. Those events
+        // then leak into captured graphs as cross-stream deps, triggering
+        // CUDA_ERROR_STREAM_CAPTURE_ISOLATION. We use a single stream so no
+        // cross-stream sync is needed; ordering is preserved by stream FIFO.
+        unsafe { ctx.disable_event_tracking() };
+
         // Use a dedicated non-default stream so we can capture CUDA graphs
         // (default/null stream is not capturable).
         let stream = ctx.new_stream()?;
