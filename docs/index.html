@@ -55,7 +55,7 @@
       <div class="text-[10px] text-gray-500">🔧 Workers</div>
     </div>
     <div class="bg-white rounded p-2 text-center">
-      <div class="text-lg font-bold text-green-600" id="tp-teachers">0/15</div>
+      <div class="text-lg font-bold text-green-600" id="tp-teachers">0/25</div>
       <div class="text-[10px] text-gray-500">🎓 Teachers</div>
     </div>
     <div class="bg-white rounded p-2 text-center">
@@ -64,6 +64,15 @@
     </div>
   </div>
   <div id="tp-teachers-list" class="mt-2 text-xs text-gray-600"></div>
+</div>
+
+<!-- Nodes panel -->
+<div id="nodes-panel" class="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 mb-3">
+  <div class="flex justify-between items-center">
+    <span class="font-bold text-blue-700 text-sm">Training Nodes</span>
+    <span id="nodes-count" class="text-blue-600 text-xs"></span>
+  </div>
+  <div id="nodes-list" class="mt-2 grid grid-cols-2 gap-2"></div>
 </div>
 
 <!-- Plateau banner -->
@@ -185,6 +194,37 @@ const STAGE={parity:0,binary_pattern_next:0,same_different:1,odd_one_out:1,seque
 let threePopData = null;
 db.ref('mamba3/three_pop').on('value', s=>{
   threePopData = s.val();
+});
+
+// Nodes — real-time
+db.ref('mamba3/nodes').on('value', s=>{
+  const nodes = s.val(); if(!nodes) return;
+  const now = Date.now()/1000;
+  const list = document.getElementById('nodes-list');
+  const count = document.getElementById('nodes-count');
+  let online=0, total=0, html='';
+  Object.entries(nodes).sort().forEach(([nid, info])=>{
+    if(!info||typeof info!=='object') return;
+    total++;
+    const age = now - (info.last_heartbeat||0);
+    const status = age<60?'online':age<300?'stale':'offline';
+    const dot = status==='online'?'text-green-500':status==='stale'?'text-yellow-500':'text-red-400';
+    const bg = status==='online'?'bg-white':'bg-gray-50';
+    if(status==='online') online++;
+    const backends = (info.backends||[]).join(', ');
+    const gpu = info.gpu_name||info.arch||'';
+    const vram = info.vram_mb ? Math.round(info.vram_mb/1024)+'GB' : '';
+    html += '<div class="'+bg+' rounded p-2 border border-gray-200">'
+      + '<div class="flex justify-between items-center">'
+      + '<span class="font-mono text-xs font-bold"><span class="'+dot+'">●</span> '+nid+'</span>'
+      + '<span class="text-[10px] text-gray-400">'+vram+'</span>'
+      + '</div>'
+      + '<div class="text-[10px] text-gray-500 mt-0.5">'+backends+'</div>'
+      + (gpu?'<div class="text-[10px] text-gray-400">'+gpu+'</div>':'')
+      + '</div>';
+  });
+  list.innerHTML = html;
+  count.textContent = online+' online / '+total+' registered';
 });
 
 let currentLeaderboard = 'all';
