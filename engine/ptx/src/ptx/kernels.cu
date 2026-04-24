@@ -236,6 +236,93 @@ extern "C" __global__ void compute_z_silu(
     z_silu[t * di + i] = z * sigmoid_f(z);
 }
 
+// ---------- prepare_bc ------------------------------------------------------
+// Fused: extract bp_raw/cp_raw from proj -> LayerNorm both -> apply RoPE both.
+// Replaces: extract_bp_cp + 2x layer_norm + 2x apply_rope  (4 dispatches -> 1).
+//
+// Per timestep t we need:
+//   bp[t,n] = rope(LN(proj[t, 2*di + n]), phase[t, n/2])
+//   cp[t,n] = rope(LN(proj[t, 2*di + ds + n]), phase[t, n/2])
+//
+// Block layout: one block per t (grid_dim.x = L). Block size must be >= ds.
+// Uses shared memory for the LayerNorm reduction and to stage rotated pairs.
+// Only supports ds <= 32 (single warp); bigger ds would need multi-warp reduce.
+extern "C" __global__ void prepare_bc(
+    const float* __restrict__ proj,       // (L, dip)
+    const float* __restrict__ b_norm_w,   // (ds,)
+    const float* __restrict__ b_norm_b,   // (ds,)
+    const float* __restrict__ c_norm_w,   // (ds,)
+    const float* __restrict__ c_norm_b,   // (ds,)
+    const float* __restrict__ phase,      // (L, n_angles)
+    float* __restrict__ bp,               // (L, ds)
+    float* __restrict__ cp,               // (L, ds)
+    int L, int ds, int n_angles, int di, int dip
+) {
+    int t = blockIdx.x;
+    int tid = threadIdx.x;
+    if (t >= L) return;
+    const float eps = 1e-5f;
+
+    int bp_off = 2 * di;
+    int cp_off = bp_off + ds;
+
+    // --- bp ---
+    float bv = (tid < ds) ? proj[t * dip + bp_off + tid] : 0.0f;
+    // LayerNorm reduction
+    float s = warp_reduce_sum(bv);
+    float mean = s / (float)ds;
+    float diff = bv - mean;
+    float vs = warp_reduce_sum((tid < ds) ? diff * diff : 0.0f);
+    float inv_std = rsqrtf(vs / (float)ds + eps);
+    float bn = (tid < ds) ? __fmaf_rn(diff * inv_std, b_norm_w[tid], b_norm_b[tid]) : 0.0f;
+
+    // Apply RoPE using phase[t, tid/2]
+    // After layer_norm, pairs (2k, 2k+1) rotate together. Thread tid handles
+    // one element of the pair; read partner's value via warp shuffle.
+    if (tid < ds) {
+        int k = tid >> 1;
+        int is_odd = tid & 1;
+        float partner = __shfl_xor_sync(0xffffffff, bn, 1);  // swap with neighbor lane
+        float a = phase[t * n_angles + k];
+        float c = __cosf(a);
+        float sn = __sinf(a);
+        float result;
+        if (is_odd == 0) {
+            // even index: result = even*c - odd*s; even=bn, odd=partner
+            result = __fmaf_rn(bn, c, -partner * sn);
+        } else {
+            // odd index: result = even*s + odd*c; even=partner, odd=bn
+            result = __fmaf_rn(partner, sn, bn * c);
+        }
+        bp[t * ds + tid] = result;
+    }
+
+    // --- cp --- (same pattern)
+    float cv = (tid < ds) ? proj[t * dip + cp_off + tid] : 0.0f;
+    s = warp_reduce_sum(cv);
+    mean = s / (float)ds;
+    diff = cv - mean;
+    vs = warp_reduce_sum((tid < ds) ? diff * diff : 0.0f);
+    inv_std = rsqrtf(vs / (float)ds + eps);
+    float cn = (tid < ds) ? __fmaf_rn(diff * inv_std, c_norm_w[tid], c_norm_b[tid]) : 0.0f;
+
+    if (tid < ds) {
+        int k = tid >> 1;
+        int is_odd = tid & 1;
+        float partner = __shfl_xor_sync(0xffffffff, cn, 1);
+        float a = phase[t * n_angles + k];
+        float c = __cosf(a);
+        float sn = __sinf(a);
+        float result;
+        if (is_odd == 0) {
+            result = __fmaf_rn(cn, c, -partner * sn);
+        } else {
+            result = __fmaf_rn(partner, sn, cn * c);
+        }
+        cp[t * ds + tid] = result;
+    }
+}
+
 // ---------- ssm_scan_sequential --------------------------------------------
 // For each head h (one block), sequential over t:
 //   - Compute bx_cur[p,n] = x_raw[h*hd+p] * bp[t,n]  (register per-thread)
