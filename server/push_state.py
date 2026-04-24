@@ -196,34 +196,72 @@ def push_state(db_path="three_pop/training.db"):
     total_cycles = db.conn.execute("SELECT COUNT(*) FROM cycle_history").fetchone()[0]
     total_lineage = db.conn.execute("SELECT COUNT(*) FROM lineage").fetchone()[0]
 
-    _patch("mamba3/meta", {
-        "schema": {
-            "nodes": {
-                "desc": "Training nodes with heartbeats",
-                "path": "/mamba3/nodes/{node_id}",
-                "example": {"backends": ["cuda","jit"], "vram_mb": 81079, "status": "online", "last_heartbeat": 1745366400},
-            },
-            "models": {
-                "desc": "Checkpoint catalog — every model available for inference",
-                "path": "/mamba3/models/{task}",
-                "example": {"path": "checkpoints/specialists/parity.pt", "size_kb": 208, "node": "h100-vast-001", "available": True},
-            },
-            "teachers": {
-                "desc": "Graduated specialists — passed confidence gate",
-                "path": "/mamba3/three_pop/teachers/{task}",
-                "example": {"accuracy": 1.0, "cycles": 25, "node": "h100-vast-001", "config": {"d_model": 64, "n_kernel_layers": 3}},
-            },
-            "tasks": {
-                "desc": "Per-task training progress (best accuracy wins across nodes)",
-                "path": "/mamba3/three_pop/tasks/{task}",
-                "example": {"best_accuracy": 0.96, "status": "training", "current_stage": 2, "confidence_score": 0.85, "node": "mac-mini"},
-            },
-            "learning_rate": {
-                "desc": "Meta-learning: cycles-to-mastery per task, speedup ratio",
-                "path": "/mamba3/learning_rate",
-                "example": {"learning_ratio": 0.8, "first_task": "parity", "first_cycles": 25, "last_task": "logic_gate", "last_cycles": 20},
-            },
+    # Build current schema definition
+    SCHEMA_VERSION = 4  # bump when schema changes
+    current_schema = {
+        "nodes": {
+            "desc": "Training nodes with heartbeats",
+            "path": "/mamba3/nodes/{node_id}",
+            "fields": "backends, vram_mb, status, last_heartbeat, ssh, gpu_name",
+            "example": {"backends": ["cuda","jit"], "vram_mb": 81079, "status": "online"},
+            "added_in": 1,
         },
+        "models": {
+            "desc": "Checkpoint catalog — every model available for inference",
+            "path": "/mamba3/models/{task}",
+            "fields": "path, size_kb, node, available, updated_at",
+            "example": {"path": "checkpoints/specialists/parity.pt", "size_kb": 208, "node": "h100", "available": True},
+            "added_in": 2,
+        },
+        "teachers": {
+            "desc": "Graduated specialists — passed confidence gate",
+            "path": "/mamba3/three_pop/teachers/{task}",
+            "fields": "accuracy, cycles, node, graduated_at, checkpoint, config",
+            "example": {"accuracy": 1.0, "cycles": 25, "node": "h100", "config": {"d_model": 64}},
+            "added_in": 1,
+        },
+        "tasks": {
+            "desc": "Per-task training progress (best accuracy wins across nodes)",
+            "path": "/mamba3/three_pop/tasks/{task}",
+            "fields": "best_accuracy, status, current_stage, confidence_score, node, config, distilled_from",
+            "example": {"best_accuracy": 0.96, "status": "training", "current_stage": 2, "distilled_from": "parity.pt"},
+            "added_in": 2,
+        },
+        "learning_rate": {
+            "desc": "Meta-learning: cycles-to-mastery per task, speedup ratio",
+            "path": "/mamba3/learning_rate",
+            "fields": "learning_ratio, first_task, first_cycles, last_task, last_cycles, tasks",
+            "example": {"learning_ratio": 0.8, "first_task": "parity", "last_cycles": 20},
+            "added_in": 3,
+        },
+        "meta": {
+            "desc": "Schema reference, usage stats, bandwidth tracking (self-documenting)",
+            "path": "/mamba3/meta",
+            "fields": "schema, usage, bandwidth, version, changelog",
+            "example": {"version": SCHEMA_VERSION, "usage": {"total_cycles": 925}},
+            "added_in": 4,
+        },
+    }
+
+    # Check if schema version changed — log to changelog
+    existing_meta = _firebase_get("mamba3/meta") or {}
+    old_version = existing_meta.get("version", 0)
+    changelog = existing_meta.get("changelog", {})
+    if old_version != SCHEMA_VERSION:
+        # Find what's new
+        new_paths = [k for k, v in current_schema.items()
+                     if v.get("added_in", 0) > old_version]
+        if new_paths:
+            changelog[str(SCHEMA_VERSION)] = {
+                "timestamp": time.time(),
+                "added": new_paths,
+                "description": f"Added: {', '.join(new_paths)}",
+            }
+
+    _patch("mamba3/meta", {
+        "version": SCHEMA_VERSION,
+        "schema": current_schema,
+        "changelog": changelog,
         "usage": {
             "total_cycles": total_cycles,
             "total_lineage_entries": total_lineage,
@@ -238,7 +276,6 @@ def push_state(db_path="three_pop/training.db"):
             "last_push_at": time.time(),
             "node": node_id,
             "estimated_per_push_kb": round(_bandwidth_bytes / 1024, 1),
-            # 2 nodes, ~12 pushes/hour (every round ~5min)
             "estimated_daily_mb": round(_bandwidth_bytes * 2 * 12 * 24 / (1024 * 1024), 1),
             "estimated_monthly_gb": round(_bandwidth_bytes * 2 * 12 * 24 * 30 / (1024 * 1024 * 1024), 2),
             "limit_gb": 10,

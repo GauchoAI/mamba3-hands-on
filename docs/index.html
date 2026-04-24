@@ -218,8 +218,9 @@
     <div class="text-center"><div id="fb-monthly" class="font-bold text-red-600">-</div><div class="text-[10px] text-gray-400">Est. Monthly</div></div>
   </div>
   <details class="text-xs text-gray-500">
-    <summary class="cursor-pointer font-bold text-gray-600">Schema Reference</summary>
-    <div id="fb-schema" class="mt-2 grid grid-cols-2 gap-2"></div>
+    <summary class="cursor-pointer font-bold text-gray-600">Schema v<span id="fb-version">?</span> — Reference & Changelog</summary>
+    <div id="fb-changelog" class="mt-2 mb-2 text-[10px] text-gray-400"></div>
+    <div id="fb-schema" class="grid grid-cols-2 gap-2"></div>
   </details>
 </div>
 
@@ -348,13 +349,28 @@ db.ref('mamba3/meta').on('value', s=>{
   document.getElementById('fb-monthly').textContent = monthly.toFixed(2)+'GB';
   if(monthly > 8) { warn.classList.remove('hidden'); } else { warn.classList.add('hidden'); }
 
+  // Version
+  document.getElementById('fb-version').textContent = d.version || '?';
+
+  // Changelog
+  const cl = d.changelog || {};
+  const clEl = document.getElementById('fb-changelog');
+  let clHtml = '';
+  Object.entries(cl).sort((a,b)=>b[0]-a[0]).forEach(([ver, info])=>{
+    const dt = info.timestamp ? new Date(info.timestamp*1000).toLocaleDateString() : '?';
+    clHtml += '<div>v'+ver+' ('+dt+'): '+info.description+'</div>';
+  });
+  clEl.innerHTML = clHtml || 'No changelog entries';
+
   // Schema reference
   const schemaEl = document.getElementById('fb-schema');
   let html = '';
-  Object.entries(schema).forEach(([key, info])=>{
+  Object.entries(schema).sort((a,b)=>(a[1].added_in||0)-(b[1].added_in||0)).forEach(([key, info])=>{
+    const badge = info.added_in ? '<span class="bg-blue-100 text-blue-600 rounded px-1">v'+info.added_in+'</span>' : '';
     html += '<div class="bg-white rounded p-2 border border-gray-200">'
-      + '<div class="font-mono font-bold text-[11px]">'+info.path+'</div>'
+      + '<div class="flex justify-between"><span class="font-mono font-bold text-[11px]">'+info.path+'</span>'+badge+'</div>'
       + '<div class="text-gray-400 mt-0.5">'+info.desc+'</div>'
+      + '<div class="text-[10px] text-gray-300 mt-0.5">Fields: '+info.fields+'</div>'
       + '<pre class="mt-1 bg-gray-100 rounded p-1 text-[10px] overflow-x-auto">'+JSON.stringify(info.example, null, 1)+'</pre>'
       + '</div>';
   });
