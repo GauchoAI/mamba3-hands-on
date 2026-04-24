@@ -1,68 +1,108 @@
-//! GPU-resident model — all weights on GPU, single command buffer per forward.
-//! Eliminates per-matmul upload/download overhead.
+//! GPU-resident model — pre-allocated buffers, minimal dispatch overhead.
 //!
-//! Flow:
-//!   1. Load model → upload all weights to GPU buffers (once)
-//!   2. Forward: upload input (tiny) → dispatch all layers → download logits
-//!   3. Total: 1 upload + 1 download per forward
+//! All weight buffers AND intermediate buffers are allocated at model load.
+//! Each forward: write input → submit dispatches → read output.
+//! No buffer allocation during inference.
 
-use crate::model::Mamba3Model;
+use crate::model::{Mamba3Model, LayerWeights};
 use crate::scan::GpuContext;
+use wgpu::util::DeviceExt;
 
-/// Model with weights resident on GPU
+/// Pre-allocated GPU buffers for one layer
+struct LayerBuffers {
+    in_proj_w: wgpu::Buffer,   // weight (persistent)
+    out_proj_w: wgpu::Buffer,  // weight (persistent)
+    proj_buf: wgpu::Buffer,    // intermediate: in_proj output (l * d_in_proj)
+    y_inner_buf: wgpu::Buffer, // intermediate: SSM output (l * d_inner)
+    y_out_buf: wgpu::Buffer,   // intermediate: out_proj output (l * d_model)
+}
+
 pub struct GpuModel {
-    pub cpu_model: Mamba3Model,  // keep CPU copy for SSM scan
+    pub cpu_model: Mamba3Model,
     pub gpu: GpuContext,
-    // Per-layer GPU buffers (uploaded once)
-    layer_in_proj_bufs: Vec<wgpu::Buffer>,
-    layer_out_proj_bufs: Vec<wgpu::Buffer>,
-    embed_buf: wgpu::Buffer,
+    // Pre-allocated buffers
+    embed_w_buf: wgpu::Buffer,
+    layer_bufs: Vec<LayerBuffers>,
+    // Reusable input/output buffers
+    x_buf: wgpu::Buffer,          // current hidden state (l * d_model)
+    x_normed_buf: wgpu::Buffer,   // normed input (l * d_model)
+    logits_buf: wgpu::Buffer,     // output logits (l * vocab)
+    staging_buf: wgpu::Buffer,    // readback staging
+    // Fixed params
+    max_seq_len: usize,
 }
 
 impl GpuModel {
-    pub fn new(model: Mamba3Model, gpu: GpuContext) -> Self {
-        // Upload all weight matrices to GPU
-        let embed_buf = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("embed_w"),
-            contents: bytemuck::cast_slice(&model.embed_w),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+    pub fn new(model: Mamba3Model, gpu: GpuContext, max_seq_len: usize) -> Self {
+        let d = model.d_model;
+        let di = model.d_inner;
+        let v = model.vocab_size;
 
-        let mut layer_in_proj_bufs = Vec::new();
-        let mut layer_out_proj_bufs = Vec::new();
+        let buf = |label: &str, size: usize| -> wgpu::Buffer {
+            gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: (size * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
 
+        let weight_buf = |label: &str, data: &[f32]| -> wgpu::Buffer {
+            gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(data),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+        };
+
+        // Weight buffers (persistent)
+        let embed_w_buf = weight_buf("embed_w", &model.embed_w);
+
+        let mut layer_bufs = Vec::new();
         for (i, layer) in model.layers.iter().enumerate() {
-            layer_in_proj_bufs.push(gpu.device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("in_proj_{}", i)),
-                    contents: bytemuck::cast_slice(&layer.in_proj_w),
-                    usage: wgpu::BufferUsages::STORAGE,
-                }
-            ));
-            layer_out_proj_bufs.push(gpu.device.create_buffer_init(
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("out_proj_{}", i)),
-                    contents: bytemuck::cast_slice(&layer.out_proj_w),
-                    usage: wgpu::BufferUsages::STORAGE,
-                }
-            ));
+            let dip = layer.d_in_proj;
+            layer_bufs.push(LayerBuffers {
+                in_proj_w: weight_buf(&format!("in_proj_{}", i), &layer.in_proj_w),
+                out_proj_w: weight_buf(&format!("out_proj_{}", i), &layer.out_proj_w),
+                proj_buf: buf(&format!("proj_{}", i), max_seq_len * dip),
+                y_inner_buf: buf(&format!("y_inner_{}", i), max_seq_len * di),
+                y_out_buf: buf(&format!("y_out_{}", i), max_seq_len * d),
+            });
         }
 
-        let n_weights: usize = model.embed_w.len()
-            + model.layers.iter().map(|l| l.in_proj_w.len() + l.out_proj_w.len()).sum::<usize>();
-        eprintln!("  Uploaded {} weight floats ({:.1} MB) to GPU",
-            n_weights, n_weights as f64 * 4.0 / 1024.0 / 1024.0);
+        // Reusable buffers
+        let x_buf = buf("x", max_seq_len * d);
+        let x_normed_buf = buf("x_normed", max_seq_len * d);
+        let logits_buf = buf("logits", max_seq_len * v);
 
-        Self { cpu_model: model, gpu, layer_in_proj_bufs, layer_out_proj_bufs, embed_buf }
+        let staging_size = max_seq_len * v;  // largest readback = logits
+        let staging_buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("staging"),
+            size: (staging_size * 4) as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let total_gpu_bytes = model.embed_w.len() * 4
+            + model.layers.iter().map(|l| (l.in_proj_w.len() + l.out_proj_w.len()) * 4).sum::<usize>()
+            + layer_bufs.len() * max_seq_len * (d + di + d) * 4  // intermediates
+            + max_seq_len * (d + d + v) * 4;  // x, x_normed, logits
+        eprintln!("  GPU memory: {:.2} MB ({} weight + {} intermediate)",
+            total_gpu_bytes as f64 / 1024.0 / 1024.0,
+            model.layers.len(), layer_bufs.len());
+
+        Self { cpu_model: model, gpu, embed_w_buf, layer_bufs, x_buf, x_normed_buf, logits_buf, staging_buf, max_seq_len }
     }
 
-    /// Forward pass — GPU matmuls with persistent buffers, CPU for SSM scan.
+    /// Forward: matmuls on GPU, SSM scan on CPU, zero buffer allocation.
     pub fn forward(&self, tokens: &[u32]) -> Vec<f32> {
         let l = tokens.len();
         let d = self.cpu_model.d_model;
         let v = self.cpu_model.vocab_size;
+        let di = self.cpu_model.d_inner;
 
-        // 1. Embedding + norm (CPU — small)
+        // 1. Embedding + norm (CPU — tiny, not worth GPU)
         let mut x = vec![0.0f32; l * d];
         for (t, &tok) in tokens.iter().enumerate() {
             let tok = tok as usize;
@@ -72,25 +112,27 @@ impl GpuModel {
         }
         crate::model::layer_norm_pub(&mut x, &self.cpu_model.embed_norm_w, &self.cpu_model.embed_norm_b, l, d);
 
-        // 2. Layers — GPU matmuls + CPU scan
+        // 2. Layers
         for (li, layer) in self.cpu_model.layers.iter().enumerate() {
+            let lb = &self.layer_bufs[li];
+
+            // Pre-norm (CPU)
             let mut x_normed = x.clone();
             crate::model::layer_norm_pub(&mut x_normed, &layer.layer_norm_w, &layer.layer_norm_b, l, d);
 
-            // GPU in_proj using persistent buffer
+            // GPU in_proj: x_normed × in_proj_w^T → proj
             let dip = layer.d_in_proj;
-            let proj = self.gpu_matmul_persistent(
-                &x_normed, &self.layer_in_proj_bufs[li],
+            let proj = self.gpu_matmul_prealloc(
+                &x_normed, &lb.in_proj_w, &lb.proj_buf,
                 l as u32, d as u32, dip as u32
             );
 
-            // CPU SSM scan (sequential)
+            // CPU SSM scan
             let y_inner = self.cpu_model.mamba3_block_inner_pub(&proj, layer, l);
 
-            // GPU out_proj using persistent buffer
-            let di = self.cpu_model.d_inner;
-            let y_out = self.gpu_matmul_persistent(
-                &y_inner, &self.layer_out_proj_bufs[li],
+            // GPU out_proj: y_inner × out_proj_w^T → y_out
+            let y_out = self.gpu_matmul_prealloc(
+                &y_inner, &lb.out_proj_w, &lb.y_out_buf,
                 l as u32, di as u32, d as u32
             );
 
@@ -100,34 +142,29 @@ impl GpuModel {
         // 3. Final norm (CPU)
         crate::model::layer_norm_pub(&mut x, &self.cpu_model.final_norm_w, &self.cpu_model.final_norm_b, l, d);
 
-        // 4. GPU LM head using persistent embed buffer
-        let logits = self.gpu_matmul_persistent(
-            &x, &self.embed_buf, l as u32, d as u32, v as u32
+        // 4. GPU LM head
+        let logits = self.gpu_matmul_prealloc(
+            &x, &self.embed_w_buf, &self.logits_buf,
+            l as u32, d as u32, v as u32
         );
 
         logits
     }
 
-    /// Matmul using a pre-uploaded B buffer — only uploads A and downloads C.
-    fn gpu_matmul_persistent(&self, a: &[f32], b_buf: &wgpu::Buffer, m: u32, k: u32, n: u32) -> Vec<f32> {
+    /// Matmul with pre-allocated output buffer — only uploads A, no buffer creation.
+    fn gpu_matmul_prealloc(
+        &self, a: &[f32], b_buf: &wgpu::Buffer, c_buf: &wgpu::Buffer,
+        m: u32, k: u32, n: u32
+    ) -> Vec<f32> {
         let output_size = (m * n) as usize;
 
-        // Upload A (input — changes each call)
+        // Write A to a temporary upload buffer
         let buf_a = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("A"),
+            label: Some("A_upload"),
             contents: bytemuck::cast_slice(a),
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        // C output buffer
-        let buf_c = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("C"),
-            size: (output_size * 4) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-
-        // Params
         #[repr(C)]
         #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
         struct P { m: u32, k: u32, n: u32, _pad: u32 }
@@ -137,14 +174,13 @@ impl GpuModel {
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-        // Bind group — B uses the persistent buffer
         let bind_group = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("matmul"),
+            label: Some("mm"),
             layout: &self.gpu.matmul_layout,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: buf_a.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: b_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: buf_c.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: c_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 3, resource: buf_params.as_entire_binding() },
             ],
         });
@@ -158,16 +194,11 @@ impl GpuModel {
             pass.dispatch_workgroups((m + tile - 1) / tile, (n + tile - 1) / tile, 1);
         }
 
-        let staging = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("staging"),
-            size: (output_size * 4) as u64,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        encoder.copy_buffer_to_buffer(&buf_c, 0, &staging, 0, (output_size * 4) as u64);
+        // Read back from pre-allocated C buffer
+        encoder.copy_buffer_to_buffer(c_buf, 0, &self.staging_buf, 0, (output_size * 4) as u64);
         self.gpu.queue.submit(std::iter::once(encoder.finish()));
 
-        let slice = staging.slice(..);
+        let slice = self.staging_buf.slice(..((output_size * 4) as u64));
         let (tx, rx) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |r| { tx.send(r).unwrap(); });
         self.gpu.device.poll(wgpu::Maintain::Wait);
@@ -176,10 +207,8 @@ impl GpuModel {
         let data = slice.get_mapped_range();
         let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();
         drop(data);
-        staging.unmap();
+        self.staging_buf.unmap();
 
         result
     }
 }
-
-use wgpu::util::DeviceExt;

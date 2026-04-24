@@ -120,7 +120,7 @@ fn run_model_inference(model_path: &str) {
 
         // GPU-resident model (persistent buffers)
         let gpu_model = mamba3_engine::gpu_model::GpuModel::new(
-            Mamba3Model::from_bin(Path::new(model_path)).unwrap(), gpu
+            Mamba3Model::from_bin(Path::new(model_path)).unwrap(), gpu, 64  // max 64 tokens
         );
         // Warmup
         for _ in 0..3 { let _ = gpu_model.forward(&tokens); }
