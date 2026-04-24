@@ -50,8 +50,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     if (h >= nh) { return; }
 
-    // Only head 0 computes B/C norm and RoPE phase (shared across heads)
-    if (h == 0u) {
+    // Each head computes B/C norm and RoPE independently
+    // (each workgroup is a separate head — no shared memory between workgroups)
+    {
         // B and C norm for all timesteps
         let bp_off = 2u * di;
         let cp_off = 2u * di + ds;
@@ -133,9 +134,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
     }
 
-    workgroupBarrier();
-
-    // Now each head processes its timesteps
+    // Each head processes its timesteps (already in same scope)
     let dt_off = 2u * di + 2u * ds;
     let a_off = dt_off + nh;
     let trap_off = a_off + nh;
