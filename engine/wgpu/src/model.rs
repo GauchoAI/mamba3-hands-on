@@ -663,8 +663,6 @@ fn layer_norm(x: &mut [f32], w: &[f32], b: &[f32], seq_len: usize, d: usize) {
 /// Matrix multiply: out = a × b^T. a is (m, k), b is (n, k), out is (m, n).
 /// Multithreaded via rayon for large matrices, SIMD for inner loops.
 /// Matmul dispatcher — uses persisted calibration to choose strategy.
-/// Runs calibration once (stored in ~/.mamba3/calibration.json), then
-/// uses the optimal strategy for this hardware on all subsequent runs.
 pub fn matmul_t_pub(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
     let profile = crate::calibrate::get_profile();
     let ops = m * n * k;
@@ -681,6 +679,7 @@ pub fn matmul_t_pub(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n
         matmul_t(out, a, b, m, k, n);
     }
 }
+
 
 fn matmul_t(out: &mut [f32], a: &[f32], b: &[f32], m: usize, k: usize, n: usize) {
     #[cfg(target_arch = "aarch64")]
