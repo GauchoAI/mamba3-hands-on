@@ -39,6 +39,8 @@ pub struct PtxModel {
     pub n_heads: usize,
     pub n_layers: usize,
     pub vocab_size: usize,
+    pub num_rope_angles: usize,
+    pub d_in_proj: usize,
 
     pub embed_w: CudaSlice<f32>,
     pub embed_norm_w: CudaSlice<f32>,
@@ -46,6 +48,20 @@ pub struct PtxModel {
     pub layers: Vec<PtxLayer>,
     pub final_norm_w: CudaSlice<f32>,
     pub final_norm_b: CudaSlice<f32>,
+
+    // Concatenated layer weights for the persistent kernel path.
+    // Assumes uniform config across layers (verified in from_cpu).
+    pub l_in_proj_w: CudaSlice<f32>,   // (n_layers * dip * d,)
+    pub l_out_proj_w: CudaSlice<f32>,  // (n_layers * d * di,)
+    pub l_dt_bias: CudaSlice<f32>,     // (n_layers * H,)
+    pub l_d_param: CudaSlice<f32>,     // (n_layers * H,)
+    pub l_b_norm_w: CudaSlice<f32>,    // (n_layers * ds,)
+    pub l_b_norm_b: CudaSlice<f32>,    // (n_layers * ds,)
+    pub l_c_norm_w: CudaSlice<f32>,    // (n_layers * ds,)
+    pub l_c_norm_b: CudaSlice<f32>,    // (n_layers * ds,)
+    pub l_ln_w: CudaSlice<f32>,        // (n_layers * d,)
+    pub l_ln_b: CudaSlice<f32>,        // (n_layers * d,)
+    pub l_scale: CudaSlice<f32>,       // (n_layers,)
 
     pub scratch: RefCell<PtxScratch>,
 }
@@ -66,9 +82,42 @@ impl PtxModel {
         let mut layers = Vec::new();
         let mut max_dip = 0usize;
         let mut max_n_angles = 0usize;
+
+        // Build concatenated layer weight vectors on the host, then upload once.
+        let first = &model.layers[0];
+        let uniform_dip = first.d_in_proj;
+        let uniform_n_angles = first.num_rope_angles;
+        let mut cat_in_proj_w = Vec::with_capacity(model.n_layers * uniform_dip * model.d_model);
+        let mut cat_out_proj_w = Vec::with_capacity(model.n_layers * model.d_model * model.d_inner);
+        let mut cat_dt_bias = Vec::with_capacity(model.n_layers * model.n_heads);
+        let mut cat_d_param = Vec::with_capacity(model.n_layers * model.n_heads);
+        let mut cat_b_norm_w = Vec::with_capacity(model.n_layers * model.d_state);
+        let mut cat_b_norm_b = Vec::with_capacity(model.n_layers * model.d_state);
+        let mut cat_c_norm_w = Vec::with_capacity(model.n_layers * model.d_state);
+        let mut cat_c_norm_b = Vec::with_capacity(model.n_layers * model.d_state);
+        let mut cat_ln_w = Vec::with_capacity(model.n_layers * model.d_model);
+        let mut cat_ln_b = Vec::with_capacity(model.n_layers * model.d_model);
+        let mut cat_scale = Vec::with_capacity(model.n_layers);
+
         for lw in &model.layers {
             max_dip = max_dip.max(lw.d_in_proj);
             max_n_angles = max_n_angles.max(lw.num_rope_angles);
+            // Persistent kernel assumes uniform config across layers
+            assert_eq!(lw.d_in_proj, uniform_dip, "persistent kernel: non-uniform d_in_proj");
+            assert_eq!(lw.num_rope_angles, uniform_n_angles, "persistent kernel: non-uniform num_rope_angles");
+
+            cat_in_proj_w.extend_from_slice(&lw.in_proj_w);
+            cat_out_proj_w.extend_from_slice(&lw.out_proj_w);
+            cat_dt_bias.extend_from_slice(&lw.dt_bias);
+            cat_d_param.extend_from_slice(&lw.d_param);
+            cat_b_norm_w.extend_from_slice(&lw.b_norm_w);
+            cat_b_norm_b.extend_from_slice(&lw.b_norm_b);
+            cat_c_norm_w.extend_from_slice(&lw.c_norm_w);
+            cat_c_norm_b.extend_from_slice(&lw.c_norm_b);
+            cat_ln_w.extend_from_slice(&lw.layer_norm_w);
+            cat_ln_b.extend_from_slice(&lw.layer_norm_b);
+            cat_scale.push(lw.scale);
+
             layers.push(PtxLayer {
                 in_proj_w: stream.memcpy_stod(&lw.in_proj_w)?,
                 out_proj_w: stream.memcpy_stod(&lw.out_proj_w)?,
@@ -85,6 +134,18 @@ impl PtxModel {
                 num_rope_angles: lw.num_rope_angles,
             });
         }
+
+        let l_in_proj_w = stream.memcpy_stod(&cat_in_proj_w)?;
+        let l_out_proj_w = stream.memcpy_stod(&cat_out_proj_w)?;
+        let l_dt_bias = stream.memcpy_stod(&cat_dt_bias)?;
+        let l_d_param = stream.memcpy_stod(&cat_d_param)?;
+        let l_b_norm_w = stream.memcpy_stod(&cat_b_norm_w)?;
+        let l_b_norm_b = stream.memcpy_stod(&cat_b_norm_b)?;
+        let l_c_norm_w = stream.memcpy_stod(&cat_c_norm_w)?;
+        let l_c_norm_b = stream.memcpy_stod(&cat_c_norm_b)?;
+        let l_ln_w = stream.memcpy_stod(&cat_ln_w)?;
+        let l_ln_b = stream.memcpy_stod(&cat_ln_b)?;
+        let l_scale = stream.memcpy_stod(&cat_scale)?;
 
         let scratch = PtxScratch::new(
             &ptx,
@@ -107,14 +168,166 @@ impl PtxModel {
             n_heads: model.n_heads,
             n_layers: model.n_layers,
             vocab_size: model.vocab_size,
+            num_rope_angles: uniform_n_angles,
+            d_in_proj: uniform_dip,
             embed_w,
             embed_norm_w,
             embed_norm_b,
             layers,
             final_norm_w,
             final_norm_b,
+            l_in_proj_w,
+            l_out_proj_w,
+            l_dt_bias,
+            l_d_param,
+            l_b_norm_w,
+            l_b_norm_b,
+            l_c_norm_w,
+            l_c_norm_b,
+            l_ln_w,
+            l_ln_b,
+            l_scale,
             scratch: RefCell::new(scratch),
         })
+    }
+
+    /// Shared-memory footprint (in bytes) of the persistent kernel for a given
+    /// sequence length.  Must match the SMEM layout in kernels.cu.
+    pub fn persistent_smem_bytes(&self, l: usize) -> u32 {
+        let d = self.d_model;
+        let di = self.d_inner;
+        let ds = self.d_state;
+        let h = self.n_heads;
+        let hd = self.headdim;
+        let na = self.num_rope_angles;
+        let dip = self.d_in_proj;
+        let floats = l * d               // x
+            + l * d                      // x_normed
+            + l * dip                    // proj
+            + l * h                      // dt
+            + l * h                      // decay
+            + l * h                      // trap
+            + l                          // dt_mean
+            + l * na                     // phase
+            + l * ds                     // bp
+            + l * ds                     // cp
+            + l * di                     // y_inner
+            + l * d                      // y_out
+            + hd * ds;                   // reduce_buf
+        (floats * 4) as u32
+    }
+
+    /// Forward pass via the persistent single-kernel launch. Entire forward in
+    /// ONE CUDA kernel, one dispatch. Logits land in scratch.logits, copied
+    /// back to host.
+    pub fn forward_persistent(&self, tokens: &[u32]) -> Result<Vec<f32>, Box<dyn Error>> {
+        let stream = self.ptx.stream.clone();
+        self.upload_tokens(&stream, tokens)?;
+        self.launch_persistent(&stream, tokens.len())?;
+        stream.synchronize()?;
+
+        let l = tokens.len();
+        let scratch = self.scratch.borrow();
+        let logits_slice = scratch.logits.slice(0..(l * self.vocab_size));
+        let host = stream.memcpy_dtov(&logits_slice)?;
+        Ok(host)
+    }
+
+    /// Launch the persistent kernel (no upload, no sync, no copy). Used both
+    /// by forward_persistent and graph capture.
+    pub fn launch_persistent(
+        &self,
+        stream: &Arc<CudaStream>,
+        l: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut scratch_ref = self.scratch.borrow_mut();
+        let scratch: &mut PtxScratch = &mut *scratch_ref;
+        let smem = self.persistent_smem_bytes(l);
+
+        let l_i = l as i32;
+        let n_layers_i = self.n_layers as i32;
+        let d_i = self.d_model as i32;
+        let di_i = self.d_inner as i32;
+        let ds_i = self.d_state as i32;
+        let h_i = self.n_heads as i32;
+        let hd_i = self.headdim as i32;
+        let na_i = self.num_rope_angles as i32;
+        let v_i = self.vocab_size as i32;
+        let dip_i = self.d_in_proj as i32;
+
+        let mut lb = stream.launch_builder(&self.ptx.k.mamba3_forward_persistent);
+        lb.arg(&scratch.tokens);
+        lb.arg(&self.embed_w);
+        lb.arg(&self.embed_norm_w);
+        lb.arg(&self.embed_norm_b);
+        lb.arg(&self.l_in_proj_w);
+        lb.arg(&self.l_out_proj_w);
+        lb.arg(&self.l_dt_bias);
+        lb.arg(&self.l_d_param);
+        lb.arg(&self.l_b_norm_w);
+        lb.arg(&self.l_b_norm_b);
+        lb.arg(&self.l_c_norm_w);
+        lb.arg(&self.l_c_norm_b);
+        lb.arg(&self.l_ln_w);
+        lb.arg(&self.l_ln_b);
+        lb.arg(&self.l_scale);
+        lb.arg(&self.final_norm_w);
+        lb.arg(&self.final_norm_b);
+        lb.arg(&mut scratch.logits);
+        lb.arg(&l_i);
+        lb.arg(&n_layers_i);
+        lb.arg(&d_i);
+        lb.arg(&di_i);
+        lb.arg(&ds_i);
+        lb.arg(&h_i);
+        lb.arg(&hd_i);
+        lb.arg(&na_i);
+        lb.arg(&v_i);
+        lb.arg(&dip_i);
+
+        let hd_ds = self.headdim * self.d_state;
+        let cfg = LaunchConfig {
+            grid_dim: (1, 1, 1),
+            block_dim: (hd_ds.max(256) as u32, 1, 1),
+            shared_mem_bytes: smem,
+        };
+        unsafe { lb.launch(cfg)? };
+        Ok(())
+    }
+
+    /// Capture the persistent kernel launch as a CUDA graph for replay.
+    pub fn capture_graph_persistent(&self, l: usize) -> Result<CudaGraph, Box<dyn Error>> {
+        let stream = self.ptx.stream.clone();
+        // Warm-up: resolves JIT, SMEM carveout.
+        let dummy: Vec<u32> = vec![0; l];
+        self.upload_tokens(&stream, &dummy)?;
+        self.launch_persistent(&stream, l)?;
+        stream.synchronize()?;
+
+        stream.begin_capture(CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)?;
+        let r = self.launch_persistent(&stream, l);
+        let g = stream
+            .end_capture(CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH);
+        r?;
+        let graph = g?.ok_or("Graph capture returned None")?;
+        Ok(graph)
+    }
+
+    pub fn forward_graph_persistent(
+        &self,
+        tokens: &[u32],
+        graph: &CudaGraph,
+    ) -> Result<Vec<f32>, Box<dyn Error>> {
+        let stream = self.ptx.stream.clone();
+        self.upload_tokens(&stream, tokens)?;
+        graph.launch()?;
+        stream.synchronize()?;
+
+        let l = tokens.len();
+        let scratch = self.scratch.borrow();
+        let logits_slice = scratch.logits.slice(0..(l * self.vocab_size));
+        let host = stream.memcpy_dtov(&logits_slice)?;
+        Ok(host)
     }
 
     /// Forward pass using persistent scratch buffers (no per-call allocation).

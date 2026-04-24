@@ -190,6 +190,73 @@ fn main() -> Result<(), Box<dyn Error>> {
         "PTX + CUDA Graph", graph_ms, graph_tps
     );
 
+    // --- v2.7 Persistent single-kernel forward ---
+    println!();
+    println!("Testing persistent single-kernel forward...");
+
+    // Correctness
+    let pk_logits = gpu_model.forward_persistent(&tokens)?;
+    let pk_diff: f32 = cpu_logits
+        .iter()
+        .zip(pk_logits.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, |acc, d| if d.is_nan() { f32::INFINITY } else { acc.max(d) });
+    println!(
+        "Persistent vs CPU: max diff = {:.3e}   {}",
+        pk_diff,
+        if pk_diff < 1e-3 && pk_logits.iter().all(|v| v.is_finite()) { "PASS" } else { "FAIL" }
+    );
+
+    // Graph capture for persistent
+    let graph_pk = gpu_model.capture_graph_persistent(tokens.len())?;
+    let pkg_logits = gpu_model.forward_graph_persistent(&tokens, &graph_pk)?;
+    let pkg_diff: f32 = cpu_logits
+        .iter()
+        .zip(pkg_logits.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, |acc, d| if d.is_nan() { f32::INFINITY } else { acc.max(d) });
+    println!(
+        "Persistent + Graph vs CPU: max diff = {:.3e}   {}",
+        pkg_diff,
+        if pkg_diff < 1e-3 && pkg_logits.iter().all(|v| v.is_finite()) { "PASS" } else { "FAIL" }
+    );
+
+    for _ in 0..5 {
+        let _ = gpu_model.forward_persistent(&tokens)?;
+    }
+    let start = Instant::now();
+    let mut count = 0;
+    while start.elapsed().as_secs_f64() < 2.5 {
+        let _ = gpu_model.forward_persistent(&tokens)?;
+        count += 1;
+    }
+    let pk_ms = start.elapsed().as_secs_f64() * 1000.0 / count as f64;
+    let pk_tps = tokens.len() as f64 / (pk_ms / 1000.0);
+    println!("{:>24}  {:>14.3}  {:>14.0}", "PTX persistent", pk_ms, pk_tps);
+
+    for _ in 0..5 {
+        let _ = gpu_model.forward_graph_persistent(&tokens, &graph_pk)?;
+    }
+    let start = Instant::now();
+    let mut count = 0;
+    while start.elapsed().as_secs_f64() < 2.5 {
+        let _ = gpu_model.forward_graph_persistent(&tokens, &graph_pk)?;
+        count += 1;
+    }
+    let pkg_ms = start.elapsed().as_secs_f64() * 1000.0 / count as f64;
+    let pkg_tps = tokens.len() as f64 / (pkg_ms / 1000.0);
+    println!("{:>24}  {:>14.3}  {:>14.0}", "PTX persistent + graph", pkg_ms, pkg_tps);
+
+    println!();
+    println!(
+        "PTX persistent vs CPU: {:.2}x   (target > 1.00x to win)",
+        cpu_ms / pk_ms
+    );
+    println!(
+        "PTX persistent+graph vs CPU: {:.2}x   (target > 1.00x to win)",
+        cpu_ms / pkg_ms
+    );
+
     // --- v2.1 diagnostic: breakdown of forward_graph phases ---
     println!();
     println!("Phase breakdown (average of 200 calls):");

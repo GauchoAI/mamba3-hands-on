@@ -20,6 +20,7 @@ pub struct Kernels {
     pub compute_z_silu: CudaFunction,
     pub ssm_scan_sequential: CudaFunction,
     pub residual_add: CudaFunction,
+    pub mamba3_forward_persistent: CudaFunction,
 }
 
 pub struct PtxContext {
@@ -79,6 +80,7 @@ impl PtxContext {
             compute_z_silu: module.load_function("compute_z_silu")?,
             ssm_scan_sequential: module.load_function("ssm_scan_sequential")?,
             residual_add: module.load_function("residual_add")?,
+            mamba3_forward_persistent: module.load_function("mamba3_forward_persistent")?,
         };
 
         Ok(Self {

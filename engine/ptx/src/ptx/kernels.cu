@@ -398,6 +398,330 @@ extern "C" __global__ void ssm_scan_sequential(
     }
 }
 
+// ---------- mamba3_forward_persistent --------------------------------------
+//
+// THE persistent forward: entire Mamba-3 inference in a single kernel launch.
+// One 256-thread block, loops over layers internally, uses shared memory as
+// activation scratch. Replaces 49 kernel launches with 1 launch.
+//
+// Memory budget (per the d=64 L=3 run_length_next model):
+//   x, x_normed: L*d = 448 f32 = 1.8 KB each
+//   proj: L*dip = 7*320 = 2240 f32 = 8.9 KB
+//   dt, decay, trap: L*H = 56 f32 = 224 B each
+//   dt_mean: L = 28 B
+//   phase: L*n_angles = 56 f32 = 224 B
+//   bp, cp: L*ds = 112 f32 = 448 B each
+//   y_inner: L*di = 896 f32 = 3.6 KB
+//   y_out: L*d = 1.8 KB
+//   reduce: 256 f32 = 1 KB
+//   Total: ~21 KB — fits comfortably in 228 KB H100 SMEM.
+//
+// Block: 256 threads (minimum for SSM scan: hd*ds = 16*16 = 256).
+// Heads processed sequentially inside the scan phase (H iterations).
+//
+// Per-layer weight buffers are concatenated on the host side: e.g.
+// layers_in_proj_w is [n_layers × (dip * d)] contiguous, indexed by
+// (l * dip + j) * d + k.
+//
+// All arithmetic via __fmaf_rn / explicit sigmoid_f / softplus_f to stay
+// bit-identical with the per-op path and CPU reference.
+extern "C" __global__ void mamba3_forward_persistent(
+    const unsigned int* __restrict__ tokens,    // (L,)
+    const float* __restrict__ embed_w,          // (V, d)
+    const float* __restrict__ embed_norm_w,     // (d,)
+    const float* __restrict__ embed_norm_b,     // (d,)
+    const float* __restrict__ layers_in_proj_w, // (n_layers, dip, d)
+    const float* __restrict__ layers_out_proj_w,// (n_layers, d, di)
+    const float* __restrict__ layers_dt_bias,   // (n_layers, H)
+    const float* __restrict__ layers_d_param,   // (n_layers, H)
+    const float* __restrict__ layers_b_norm_w,  // (n_layers, ds)
+    const float* __restrict__ layers_b_norm_b,  // (n_layers, ds)
+    const float* __restrict__ layers_c_norm_w,  // (n_layers, ds)
+    const float* __restrict__ layers_c_norm_b,  // (n_layers, ds)
+    const float* __restrict__ layers_ln_w,      // (n_layers, d)
+    const float* __restrict__ layers_ln_b,      // (n_layers, d)
+    const float* __restrict__ layers_scale,     // (n_layers,)
+    const float* __restrict__ final_norm_w,     // (d,)
+    const float* __restrict__ final_norm_b,     // (d,)
+    float* __restrict__ logits,                 // (L, V) — HBM output
+    int L, int n_layers, int d, int di, int ds, int H, int hd,
+    int n_angles, int V, int dip
+) {
+    extern __shared__ float smem[];
+    int tid = threadIdx.x;
+    int num_threads = blockDim.x;
+    int wid = tid >> 5;
+    int lid = tid & 31;
+    const float eps = 1e-5f;
+
+    // SMEM layout (all offsets in floats).
+    float* x         = smem;
+    float* x_normed  = x         + L * d;
+    float* proj      = x_normed  + L * d;
+    float* dt        = proj      + L * dip;
+    float* decay     = dt        + L * H;
+    float* trap      = decay     + L * H;
+    float* dt_mean   = trap      + L * H;
+    float* phase     = dt_mean   + L;
+    float* bp        = phase     + L * n_angles;
+    float* cp        = bp        + L * ds;
+    float* y_inner   = cp        + L * ds;
+    float* y_out     = y_inner   + L * di;  // di = H * hd
+    float* reduce_buf= y_out     + L * d;   // hd * ds slots (256)
+
+    // ---- 1. Embed gather ----
+    for (int t = 0; t < L; t++) {
+        unsigned int tok = tokens[t];
+        bool valid = tok < (unsigned int)V;
+        for (int i = tid; i < d; i += num_threads) {
+            x[t * d + i] = valid ? embed_w[tok * d + i] : 0.0f;
+        }
+    }
+    __syncthreads();
+
+    // ---- 2. Embed norm (warp per row, first L warps active) ----
+    if (wid < L) {
+        int t = wid;
+        float v = (lid < d) ? x[t * d + lid] : 0.0f;
+        for (int i = lid + 32; i < d; i += 32) v += x[t * d + i];
+        float s = warp_reduce_sum(v);
+        float mean = s / (float)d;
+        float diff_sum = 0.0f;
+        for (int i = lid; i < d; i += 32) {
+            float diff = x[t * d + i] - mean;
+            diff_sum = __fmaf_rn(diff, diff, diff_sum);
+        }
+        float vs = warp_reduce_sum(diff_sum);
+        float inv_std = rsqrtf(vs / (float)d + eps);
+        for (int i = lid; i < d; i += 32) {
+            x[t * d + i] = __fmaf_rn((x[t * d + i] - mean) * inv_std,
+                                     embed_norm_w[i], embed_norm_b[i]);
+        }
+    }
+    __syncthreads();
+
+    // ---- 3. Layers ----
+    for (int l = 0; l < n_layers; l++) {
+        // 3a. Copy x -> x_normed
+        for (int i = tid; i < L * d; i += num_threads) x_normed[i] = x[i];
+        __syncthreads();
+
+        // 3b. Pre-norm on x_normed
+        if (wid < L) {
+            int t = wid;
+            float v = 0.0f;
+            for (int i = lid; i < d; i += 32) v += x_normed[t * d + i];
+            float s = warp_reduce_sum(v);
+            float mean = s / (float)d;
+            float diff_sum = 0.0f;
+            for (int i = lid; i < d; i += 32) {
+                float diff = x_normed[t * d + i] - mean;
+                diff_sum = __fmaf_rn(diff, diff, diff_sum);
+            }
+            float vs = warp_reduce_sum(diff_sum);
+            float inv_std = rsqrtf(vs / (float)d + eps);
+            const float* lw = layers_ln_w + l * d;
+            const float* lb = layers_ln_b + l * d;
+            for (int i = lid; i < d; i += 32) {
+                x_normed[t * d + i] = __fmaf_rn(
+                    (x_normed[t * d + i] - mean) * inv_std, lw[i], lb[i]);
+            }
+        }
+        __syncthreads();
+
+        // 3c. In-proj matmul: proj[i,j] = sum_k x_normed[i,k] * in_proj_w[j,k]
+        const float* ipw = layers_in_proj_w + (size_t)l * dip * d;
+        for (int idx = tid; idx < L * dip; idx += num_threads) {
+            int ti = idx / dip;
+            int ji = idx % dip;
+            float acc = 0.0f;
+            const float* xrow = x_normed + ti * d;
+            const float* brow = ipw + ji * d;
+            for (int k = 0; k < d; k++) acc = __fmaf_rn(xrow[k], brow[k], acc);
+            proj[idx] = acc;
+        }
+        __syncthreads();
+
+        // 3d. SSM params: dt, decay, trap per (t, h)
+        int dt_off = 2 * di + 2 * ds;
+        int a_off  = dt_off + H;
+        int tr_off = a_off + H;
+        int ang_off= tr_off + H;
+        const float* dbias = layers_dt_bias + l * H;
+        for (int idx = tid; idx < L * H; idx += num_threads) {
+            int ti = idx / H;
+            int hi = idx % H;
+            float dt_raw = proj[ti * dip + dt_off + hi] + dbias[hi];
+            float dt_v = softplus_f(dt_raw);
+            dt[idx] = dt_v;
+            float a_raw = proj[ti * dip + a_off + hi];
+            float a = -softplus_f(a_raw);
+            if (a > -1e-4f) a = -1e-4f;
+            decay[idx] = __expf(a * dt_v);
+            float tr_raw = proj[ti * dip + tr_off + hi];
+            trap[idx] = sigmoid_f(tr_raw);
+        }
+        __syncthreads();
+
+        // 3e. dt_mean[t] = mean over heads
+        for (int t = tid; t < L; t += num_threads) {
+            float s = 0.0f;
+            for (int h = 0; h < H; h++) s += dt[t * H + h];
+            dt_mean[t] = s / (float)H;
+        }
+        __syncthreads();
+
+        // 3f. phase[t, k] = cumsum over t of angle[t,k] * dt_mean[t]
+        if (tid < n_angles) {
+            int k = tid;
+            float cum = 0.0f;
+            for (int t = 0; t < L; t++) {
+                cum = __fmaf_rn(proj[t * dip + ang_off + k], dt_mean[t], cum);
+                phase[t * n_angles + k] = cum;
+            }
+        }
+        __syncthreads();
+
+        // 3g. Extract bp/cp, LayerNorm, apply RoPE (all per timestep, warp per t)
+        int bp_off = 2 * di;
+        int cp_off = bp_off + ds;
+        const float* bnw = layers_b_norm_w + l * ds;
+        const float* bnb = layers_b_norm_b + l * ds;
+        const float* cnw = layers_c_norm_w + l * ds;
+        const float* cnb = layers_c_norm_b + l * ds;
+        if (wid < L) {
+            int t = wid;
+            // bp
+            float bv = (lid < ds) ? proj[t * dip + bp_off + lid] : 0.0f;
+            float sb = warp_reduce_sum(bv);
+            float meanb = sb / (float)ds;
+            float diffb = bv - meanb;
+            float varb = warp_reduce_sum((lid < ds) ? diffb * diffb : 0.0f);
+            float inv_std_b = rsqrtf(varb / (float)ds + eps);
+            float bn = (lid < ds) ? __fmaf_rn(diffb * inv_std_b, bnw[lid], bnb[lid]) : 0.0f;
+            float bp_partner = __shfl_xor_sync(0xffffffff, bn, 1);
+            int kr = lid >> 1;
+            int is_odd = lid & 1;
+            float ang = (lid < ds) ? phase[t * n_angles + kr] : 0.0f;
+            float co = __cosf(ang);
+            float si = __sinf(ang);
+            float b_res = (is_odd == 0)
+                ? __fmaf_rn(bn, co, -bp_partner * si)
+                : __fmaf_rn(bp_partner, si, bn * co);
+            if (lid < ds) bp[t * ds + lid] = b_res;
+
+            // cp
+            float cv = (lid < ds) ? proj[t * dip + cp_off + lid] : 0.0f;
+            float sc = warp_reduce_sum(cv);
+            float meanc = sc / (float)ds;
+            float diffc = cv - meanc;
+            float varc = warp_reduce_sum((lid < ds) ? diffc * diffc : 0.0f);
+            float inv_std_c = rsqrtf(varc / (float)ds + eps);
+            float cn = (lid < ds) ? __fmaf_rn(diffc * inv_std_c, cnw[lid], cnb[lid]) : 0.0f;
+            float cp_partner = __shfl_xor_sync(0xffffffff, cn, 1);
+            float c_res = (is_odd == 0)
+                ? __fmaf_rn(cn, co, -cp_partner * si)
+                : __fmaf_rn(cp_partner, si, cn * co);
+            if (lid < ds) cp[t * ds + lid] = c_res;
+        }
+        __syncthreads();
+
+        // 3h. SSM scan — one head at a time; each thread owns one (p, n)
+        const float* dparam = layers_d_param + l * H;
+        for (int h = 0; h < H; h++) {
+            float state = 0.0f;
+            float bx_prev = 0.0f;
+            bool active = tid < hd * ds;
+            int p = tid / ds;
+            int n = tid % ds;
+            for (int t = 0; t < L; t++) {
+                float bp_tn = bp[t * ds + n];
+                float cp_tn = cp[t * ds + n];
+                float dt_v = dt[t * H + h];
+                float dec  = decay[t * H + h];
+                float tr   = trap[t * H + h];
+                float x_val = active ? proj[t * dip + di + h * hd + p] : 0.0f;
+
+                if (active) {
+                    float bx_cur = x_val * bp_tn;
+                    float blended = __fmaf_rn(tr, bx_cur, (1.0f - tr) * bx_prev);
+                    float inp_val = blended * dt_v;
+                    bx_prev = bx_cur;
+                    state = __fmaf_rn(dec, state, inp_val);
+                    reduce_buf[tid] = state * cp_tn;
+                }
+                __syncthreads();
+                // Tree-halving reduction across n for each p-group of ds threads.
+                for (int stride = ds >> 1; stride > 0; stride >>= 1) {
+                    if (active && n < stride) reduce_buf[tid] += reduce_buf[tid + stride];
+                    __syncthreads();
+                }
+                if (active && n == 0) {
+                    float sum = reduce_buf[p * ds];
+                    sum = __fmaf_rn(dparam[h], x_val, sum);
+                    float z = proj[t * dip + h * hd + p]; // z_raw
+                    float z_silu = z * sigmoid_f(z);
+                    y_inner[(t * H + h) * hd + p] = sum * z_silu;
+                }
+                __syncthreads();
+            }
+        }
+
+        // 3i. Out-proj matmul: y_out[i,j] = sum_k y_inner[i,k] * out_proj_w[j,k]
+        const float* opw = layers_out_proj_w + (size_t)l * d * di;
+        for (int idx = tid; idx < L * d; idx += num_threads) {
+            int ti = idx / d;
+            int ji = idx % d;
+            float acc = 0.0f;
+            const float* yrow = y_inner + ti * di;
+            const float* brow = opw + ji * di;
+            for (int k = 0; k < di; k++) acc = __fmaf_rn(yrow[k], brow[k], acc);
+            y_out[idx] = acc;
+        }
+        __syncthreads();
+
+        // 3j. Residual: x += scale * y_out
+        float scl = layers_scale[l];
+        for (int i = tid; i < L * d; i += num_threads) {
+            x[i] = __fmaf_rn(scl, y_out[i], x[i]);
+        }
+        __syncthreads();
+    }
+
+    // ---- 4. Final norm ----
+    if (wid < L) {
+        int t = wid;
+        float v = 0.0f;
+        for (int i = lid; i < d; i += 32) v += x[t * d + i];
+        float s = warp_reduce_sum(v);
+        float mean = s / (float)d;
+        float diff_sum = 0.0f;
+        for (int i = lid; i < d; i += 32) {
+            float diff = x[t * d + i] - mean;
+            diff_sum = __fmaf_rn(diff, diff, diff_sum);
+        }
+        float vs = warp_reduce_sum(diff_sum);
+        float inv_std = rsqrtf(vs / (float)d + eps);
+        for (int i = lid; i < d; i += 32) {
+            x[t * d + i] = __fmaf_rn(
+                (x[t * d + i] - mean) * inv_std,
+                final_norm_w[i], final_norm_b[i]);
+        }
+    }
+    __syncthreads();
+
+    // ---- 5. LM head (writes to HBM) ----
+    for (int idx = tid; idx < L * V; idx += num_threads) {
+        int ti = idx / V;
+        int vi = idx % V;
+        float acc = 0.0f;
+        const float* xrow = x + ti * d;
+        const float* brow = embed_w + vi * d;
+        for (int k = 0; k < d; k++) acc = __fmaf_rn(xrow[k], brow[k], acc);
+        logits[idx] = acc;
+    }
+}
+
 // ---------- residual_add ----------------------------------------------------
 // x[i] = x[i] + scale * y[i]
 // Grid: (ceil(n/256),), Block: (256,)
