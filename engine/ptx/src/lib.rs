@@ -1,0 +1,8 @@
+//! PTX Mamba-3 engine — inference + (future) training on NVIDIA GPUs via
+//! hand-written CUDA C kernels compiled to PTX with strict FP32 precision.
+
+pub mod model;
+pub mod runtime;
+
+pub use model::PtxModel;
+pub use runtime::PtxContext;

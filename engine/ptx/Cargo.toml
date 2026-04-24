@@ -1,0 +1,18 @@
+[package]
+name = "ptx-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Hand-written PTX Mamba-3 engine for NVIDIA H100. Bit-exact vs CPU reference."
+
+[lib]
+name = "ptx_engine"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ptx-engine"
+path = "src/bin/main.rs"
+
+[dependencies]
+mamba3-engine = { path = "../wgpu" }
+cudarc = { version = "0.16", default-features = false, features = ["std", "driver", "nvrtc", "cuda-version-from-build-system", "dynamic-linking"] }
+bytemuck = { version = "1", features = ["derive"] }
