@@ -34,6 +34,8 @@ pub struct Kernels {
     pub layer_norm_bwd: CudaFunction,
     pub gate_bwd: CudaFunction,
     pub ssm_scan_bwd: CudaFunction,
+    pub ssm_scan_bwd_full: CudaFunction,
+    pub ssm_param_grads: CudaFunction,
     pub bx_bwd: CudaFunction,
     pub embed_scatter_bwd: CudaFunction,
 }
@@ -113,6 +115,8 @@ impl PtxContext {
             layer_norm_bwd: module.load_function("layer_norm_bwd")?,
             gate_bwd: module.load_function("gate_bwd")?,
             ssm_scan_bwd: module.load_function("ssm_scan_bwd")?,
+            ssm_scan_bwd_full: module.load_function("ssm_scan_bwd_full")?,
+            ssm_param_grads: module.load_function("ssm_param_grads")?,
             bx_bwd: module.load_function("bx_bwd")?,
             embed_scatter_bwd: module.load_function("embed_scatter_bwd")?,
         };

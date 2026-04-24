@@ -1553,6 +1553,152 @@ extern "C" __global__ void ssm_scan_bwd(
     }
 }
 
+// ---------- ssm_scan_bwd_full ----------------------------------------------
+// Extension of ssm_scan_bwd: also accumulates
+//   d_decay[t, h]      (via block-wide reduction of dh · state[t])
+//   d_d_param[h]       (via atomicAdd of dy_pre · x_raw across t, p)
+//   d_dt_from_inp[t, h] (via block-wide reduction of dh · blended)
+//
+// blended is recomputed as inp_val / dt since inp_val = states[t+1] - decay·states[t]
+// is implicit in the scan (states are saved).
+//
+// Grid: (H,), Block: (hd*ds,)
+extern "C" __launch_bounds__(256, 2) __global__ void ssm_scan_bwd_full(
+    const float* __restrict__ d_y_pregate,
+    const float* __restrict__ proj,
+    const float* __restrict__ cp,
+    const float* __restrict__ decay,
+    const float* __restrict__ dt_in,
+    const float* __restrict__ states,
+    const float* __restrict__ d_param,
+    float* __restrict__ d_proj,
+    float* __restrict__ d_scan_inp,
+    float* __restrict__ d_decay,        // (L, H)
+    float* __restrict__ d_d_param,      // (H,)
+    float* __restrict__ d_dt_from_inp,  // (L, H) — inp-path contribution only
+    int L, int H, int hd, int ds, int di, int dip
+) {
+    int h = blockIdx.x;
+    int tid = threadIdx.x;
+    if (h >= H || tid >= hd * ds) return;
+    int p = tid / ds;
+    int n = tid - p * ds;
+
+    __shared__ float smem[256];  // reduction buffer (hd*ds slots)
+
+    float dh = 0.0f;
+
+    for (int t = L - 1; t >= 0; t--) {
+        float dy_pre = d_y_pregate[t * di + h * hd + p];
+        float cp_tn = cp[t * ds + n];
+        float dec = decay[t * H + h];
+
+        // Update adjoint state: dh += dy_pre * cp
+        dh = __fmaf_rn(dy_pre, cp_tn, dh);
+
+        // d_proj[x_skip] and d_d_param  (only n=0 thread writes per (h, p))
+        if (n == 0) {
+            float x_val = proj[t * dip + di + h * hd + p];
+            atomicAdd(&d_proj[t * dip + di + h * hd + p],
+                      dy_pre * d_param[h]);
+            atomicAdd(&d_d_param[h], dy_pre * x_val);
+        }
+
+        // d_cp[t, n]: atomic across heads
+        float state_tp1 = states[(((t + 1) * H + h) * hd + p) * ds + n];
+        atomicAdd(&d_proj[t * dip + 2 * di + ds + n],
+                  dy_pre * state_tp1);
+
+        // d_scan_inp[t, h, p, n] = current dh
+        d_scan_inp[((t * H + h) * hd + p) * ds + n] = dh;
+
+        // Block-wide reduction: d_decay[t, h] = Σ dh · state[t, h, p, n]
+        float state_t = states[((t * H + h) * hd + p) * ds + n];
+        smem[tid] = dh * state_t;
+        __syncthreads();
+        for (int stride = 128; stride > 0; stride >>= 1) {
+            if (tid < stride) smem[tid] += smem[tid + stride];
+            __syncthreads();
+        }
+        if (tid == 0) d_decay[t * H + h] = smem[0];
+        __syncthreads();
+
+        // Block-wide reduction: d_dt_from_inp[t, h] = Σ dh · blended
+        // blended = inp_val / dt_v,  inp_val = states[t+1] - decay·states[t]
+        float dt_v = dt_in[t * H + h];
+        float inp_val = state_tp1 - dec * state_t;
+        float blended = (dt_v > 1e-12f) ? (inp_val / dt_v) : 0.0f;
+        smem[tid] = dh * blended;
+        __syncthreads();
+        for (int stride = 128; stride > 0; stride >>= 1) {
+            if (tid < stride) smem[tid] += smem[tid + stride];
+            __syncthreads();
+        }
+        if (tid == 0) d_dt_from_inp[t * H + h] = smem[0];
+        __syncthreads();
+
+        // Propagate dh through state update
+        dh *= dec;
+    }
+}
+
+// ---------- ssm_param_grads -------------------------------------------------
+// From d_decay[t, h] and d_dt_from_inp[t, h], compute:
+//   d_dt[t, h]      = d_decay · a · decay + d_dt_from_inp     (scalar)
+//   d_a[t, h]       = d_decay · dt · decay                     (scalar)
+//   d_dd_dt[t, h]   = d_dt · sigmoid(dd_dt + dt_bias)          → d_proj[dt_off+h]
+//   d_dd_a[t, h]    = -d_a · sigmoid(dd_a) if a > -1e-4 else 0 → d_proj[a_off+h]
+//   d_dt_bias[h]   += Σ_t d_dt · sigmoid(dd_dt + dt_bias)     (atomic)
+//
+// Grid: (L,), Block: (max(H,32),)
+extern "C" __global__ void ssm_param_grads(
+    const float* __restrict__ proj,
+    const float* __restrict__ dt_bias,
+    const float* __restrict__ dt_in,
+    const float* __restrict__ decay,
+    const float* __restrict__ d_decay,
+    const float* __restrict__ d_dt_from_inp,
+    float* __restrict__ d_proj,
+    float* __restrict__ d_dt_bias,
+    int L, int H, int dip, int di, int ds
+) {
+    int t = blockIdx.x;
+    int h = threadIdx.x;
+    if (t >= L || h >= H) return;
+    int dt_off = 2 * di + 2 * ds;
+    int a_off = dt_off + H;
+    // int tr_off = a_off + H; // not used here
+
+    float dt_v = dt_in[t * H + h];
+    float dec = decay[t * H + h];
+    // Recompute a from proj (clamp-aware)
+    float dd_a = proj[t * dip + a_off + h];
+    float a_unclamped = -softplus_f(dd_a);
+    float a = a_unclamped;
+    bool clamped = false;
+    if (a > -1e-4f) { a = -1e-4f; clamped = true; }
+
+    float d_decay_th = d_decay[t * H + h];
+    float d_dt_inp = d_dt_from_inp[t * H + h];
+
+    // d_dt = d_decay · a · decay + d_dt_from_inp
+    float d_dt = d_decay_th * a * dec + d_dt_inp;
+    // d_a  = d_decay · dt · decay
+    float d_a = d_decay_th * dt_v * dec;
+
+    // dt = softplus(dd_dt + dt_bias[h]) → dt_prime = sigmoid(dd_dt + dt_bias)
+    float dd_dt = proj[t * dip + dt_off + h];
+    float sig_dt = sigmoid_f(dd_dt + dt_bias[h]);
+    float d_dd_dt = d_dt * sig_dt;
+    d_proj[t * dip + dt_off + h] = d_dd_dt;
+    atomicAdd(&d_dt_bias[h], d_dd_dt);
+
+    // a_raw = -softplus(dd_a). dsoftplus/d(dd_a) = sigmoid(dd_a).
+    // d_dd_a = d_a_unclamped · (-sigmoid(dd_a)) when not clamped, else 0
+    float d_dd_a = clamped ? 0.0f : (-d_a * sigmoid_f(dd_a));
+    d_proj[t * dip + a_off + h] = d_dd_a;
+}
+
 // ---------- bx_bwd ----------------------------------------------------------
 // From d_scan_inp, produce d_proj[bp_off] (atomic) and d_proj[x_off] (atomic).
 // Per timestep/head/p: d_bx[n] = d_scan_inp[n] / (dt*trap + 1e-8);

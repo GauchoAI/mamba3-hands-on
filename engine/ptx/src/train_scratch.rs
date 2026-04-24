@@ -60,6 +60,11 @@ pub struct TrainScratch {
     pub d_fnorm_b: CudaSlice<f32>,  // (d,)
     pub d_in_proj_w: Vec<CudaSlice<f32>>,   // per layer, (dip, d)
     pub d_out_proj_w: Vec<CudaSlice<f32>>,  // per layer, (d, di)
+    pub d_d_param: Vec<CudaSlice<f32>>,     // per layer, (H,)
+    pub d_dt_bias: Vec<CudaSlice<f32>>,     // per layer, (H,)
+    // Intermediate buffers (shared across layers, overwritten each layer)
+    pub d_decay: CudaSlice<f32>,            // (L, H)
+    pub d_dt_from_inp: CudaSlice<f32>,      // (L, H)
 }
 
 impl TrainScratch {
@@ -85,9 +90,13 @@ impl TrainScratch {
 
         let mut d_in_proj_w = Vec::with_capacity(n_layers);
         let mut d_out_proj_w = Vec::with_capacity(n_layers);
+        let mut d_d_param = Vec::with_capacity(n_layers);
+        let mut d_dt_bias = Vec::with_capacity(n_layers);
         for _ in 0..n_layers {
             d_in_proj_w.push(stream.alloc_zeros::<f32>(max_dip * d_model)?);
             d_out_proj_w.push(stream.alloc_zeros::<f32>(d_model * d_inner)?);
+            d_d_param.push(stream.alloc_zeros::<f32>(n_heads)?);
+            d_dt_bias.push(stream.alloc_zeros::<f32>(n_heads)?);
         }
 
         Ok(Self {
@@ -120,6 +129,10 @@ impl TrainScratch {
             d_fnorm_b: stream.alloc_zeros::<f32>(d_model)?,
             d_in_proj_w,
             d_out_proj_w,
+            d_d_param,
+            d_dt_bias,
+            d_decay: stream.alloc_zeros::<f32>(max_seq * n_heads)?,
+            d_dt_from_inp: stream.alloc_zeros::<f32>(max_seq * n_heads)?,
         })
     }
 }

@@ -26,6 +26,10 @@ pub struct PtxTrainer {
     pub v_fnorm_w: CudaSlice<f32>,
     pub m_fnorm_b: CudaSlice<f32>,
     pub v_fnorm_b: CudaSlice<f32>,
+    pub m_d_param: Vec<CudaSlice<f32>>,
+    pub v_d_param: Vec<CudaSlice<f32>>,
+    pub m_dt_bias: Vec<CudaSlice<f32>>,
+    pub v_dt_bias: Vec<CudaSlice<f32>>,
 
     pub step: u32,
     pub lr: f32,
@@ -59,11 +63,19 @@ impl PtxTrainer {
         let mut v_in_proj = Vec::with_capacity(nl);
         let mut m_out_proj = Vec::with_capacity(nl);
         let mut v_out_proj = Vec::with_capacity(nl);
+        let mut m_d_param = Vec::with_capacity(nl);
+        let mut v_d_param = Vec::with_capacity(nl);
+        let mut m_dt_bias = Vec::with_capacity(nl);
+        let mut v_dt_bias = Vec::with_capacity(nl);
         for _ in 0..nl {
             m_in_proj.push(stream.alloc_zeros::<f32>(dip * d)?);
             v_in_proj.push(stream.alloc_zeros::<f32>(dip * d)?);
             m_out_proj.push(stream.alloc_zeros::<f32>(d * di)?);
             v_out_proj.push(stream.alloc_zeros::<f32>(d * di)?);
+            m_d_param.push(stream.alloc_zeros::<f32>(nh)?);
+            v_d_param.push(stream.alloc_zeros::<f32>(nh)?);
+            m_dt_bias.push(stream.alloc_zeros::<f32>(nh)?);
+            v_dt_bias.push(stream.alloc_zeros::<f32>(nh)?);
         }
         let m_fnorm_w = stream.alloc_zeros::<f32>(d)?;
         let v_fnorm_w = stream.alloc_zeros::<f32>(d)?;
@@ -78,6 +90,8 @@ impl PtxTrainer {
             m_out_proj, v_out_proj,
             m_fnorm_w, v_fnorm_w,
             m_fnorm_b, v_fnorm_b,
+            m_d_param, v_d_param,
+            m_dt_bias, v_dt_bias,
             step: 0,
             lr,
             weight_decay,
@@ -228,6 +242,7 @@ impl PtxTrainer {
             v * d,
         )?;
         // Per-layer
+        let nh = self.model.n_heads;
         for li in 0..self.model.n_layers {
             let layer = &mut self.model.layers[li];
             launch_adamw(&stream, &ptx,
@@ -241,6 +256,18 @@ impl PtxTrainer {
                 &mut self.m_out_proj[li], &mut self.v_out_proj[li],
                 self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
                 d * di,
+            )?;
+            launch_adamw(&stream, &ptx,
+                &mut layer.d_param, &self.train_scratch.d_d_param[li],
+                &mut self.m_d_param[li], &mut self.v_d_param[li],
+                self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+                nh,
+            )?;
+            launch_adamw(&stream, &ptx,
+                &mut layer.dt_bias, &self.train_scratch.d_dt_bias[li],
+                &mut self.m_dt_bias[li], &mut self.v_dt_bias[li],
+                self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+                nh,
             )?;
         }
         // Final norm
@@ -288,12 +315,15 @@ impl PtxTrainer {
         let dip = self.model.d_in_proj;
         let di = self.model.d_inner;
 
+        let nh = self.model.n_heads;
         zero(&mut self.train_scratch.d_embed, v * d)?;
         zero(&mut self.train_scratch.d_fnorm_w, d)?;
         zero(&mut self.train_scratch.d_fnorm_b, d)?;
         for li in 0..self.model.n_layers {
             zero(&mut self.train_scratch.d_in_proj_w[li], dip * d)?;
             zero(&mut self.train_scratch.d_out_proj_w[li], d * di)?;
+            zero(&mut self.train_scratch.d_d_param[li], nh)?;
+            zero(&mut self.train_scratch.d_dt_bias[li], nh)?;
         }
         // d_x, d_y_out, d_y_inner, d_y_pregate, d_scan_inp, d_proj are fully
         // overwritten each layer; only d_proj needs zeroing as backward
@@ -398,7 +428,9 @@ impl PtxTrainer {
             unsafe { lb.launch(cfg)? };
         }
 
-        // Step E: ssm_scan_bwd — writes d_proj[x_skip] atomic, d_proj[cp] atomic, d_scan_inp
+        // Step E: ssm_scan_bwd_full — writes d_proj[x_skip] atomic, d_proj[cp] atomic,
+        // d_scan_inp, d_decay (per (t, h)), d_dt_from_inp (per (t, h)), and
+        // atomic d_d_param (per h).
         {
             let proj_off = li * self.train_scratch.layer_proj_stride;
             let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
@@ -408,6 +440,56 @@ impl PtxTrainer {
             let dc_view = self.train_scratch.layer_decays.slice(dc_off..dc_off + l * nh);
             let st_off = li * self.train_scratch.layer_states_stride;
             let st_view = self.train_scratch.layer_states.slice(st_off..st_off + (l + 1) * nh * hd * ds);
+            // dt values are in scratch.dt (from forward_cached — still latest)
+            let dt_ref: &CudaSlice<f32> = &self.model.scratch.borrow().dt;
+            // Actually we need per-layer dt; but scratch.dt was overwritten across layers.
+            // We did NOT save per-layer dt in TrainScratch. For now, recompute or save.
+            // Workaround: recompute dt by softplus(proj[dt_off+h] + dt_bias[h]). Since we
+            // have proj and dt_bias, we can do this in-kernel; but current
+            // ssm_scan_bwd_full expects dt_in pointer. Recompute into a scratch?
+            // Simpler: since dt is small (L*H), recompute into scratch.dt ad-hoc here.
+            // But we ALSO need dt for in-step backward. For now: reuse scratch.dt,
+            // keeping in mind it was last written with the FINAL layer's dt. We must
+            // recompute per-layer.
+
+            // Recompute dt for this layer into scratch.dt
+            let mut scratch_ref_tmp = self.model.scratch.borrow_mut();
+            let scratch_tmp: &mut crate::scratch::PtxScratch = &mut *scratch_ref_tmp;
+            {
+                let l_i = l as i32;
+                let h_i = nh as i32;
+                let dip_i = dip as i32;
+                let di_i = di as i32;
+                let ds_i = ds as i32;
+                let mut lb = stream.launch_builder(&ptx.k.compute_ssm_params_and_dt_mean);
+                lb.arg(&proj_view);
+                lb.arg(&self.model.layers[li].dt_bias);
+                lb.arg(&mut scratch_tmp.dt);
+                lb.arg(&mut scratch_tmp.decay);
+                lb.arg(&mut scratch_tmp.trap);
+                lb.arg(&mut scratch_tmp.dt_mean);
+                lb.arg(&l_i); lb.arg(&h_i); lb.arg(&dip_i); lb.arg(&di_i); lb.arg(&ds_i);
+                let cfg = LaunchConfig {
+                    grid_dim: (l as u32, 1, 1),
+                    block_dim: (32, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
+            drop(scratch_ref_tmp);
+            let dt_view = {
+                let sr = self.model.scratch.borrow();
+                // We need to pass &CudaSlice<f32>; we can't return a reference to borrowed
+                // storage. Instead, we just re-borrow scratch inside the launch below.
+                let _ = &sr.dt; // sanity
+                ()
+            };
+            let _ = dt_view;
+            let _ = dt_ref;
+
+            // Launch ssm_scan_bwd_full with scratch.dt (just recomputed)
+            let scratch_r = self.model.scratch.borrow();
+            let dt_ref: &CudaSlice<f32> = &scratch_r.dt;
 
             let l_i = l as i32;
             let h_i = nh as i32;
@@ -416,15 +498,19 @@ impl PtxTrainer {
             let di_i = di as i32;
             let dip_i = dip as i32;
             let d_param_ref: &CudaSlice<f32> = &self.model.layers[li].d_param;
-            let mut lb = stream.launch_builder(&ptx.k.ssm_scan_bwd);
+            let mut lb = stream.launch_builder(&ptx.k.ssm_scan_bwd_full);
             lb.arg(&self.train_scratch.d_y_pregate);
             lb.arg(&proj_view);
             lb.arg(&cp_view);
             lb.arg(&dc_view);
+            lb.arg(dt_ref);
             lb.arg(&st_view);
             lb.arg(d_param_ref);
             lb.arg(&mut self.train_scratch.d_proj);
             lb.arg(&mut self.train_scratch.d_scan_inp);
+            lb.arg(&mut self.train_scratch.d_decay);
+            lb.arg(&mut self.train_scratch.d_d_param[li]);
+            lb.arg(&mut self.train_scratch.d_dt_from_inp);
             lb.arg(&l_i); lb.arg(&h_i); lb.arg(&hd_i); lb.arg(&ds_i); lb.arg(&di_i); lb.arg(&dip_i);
             let cfg = LaunchConfig {
                 grid_dim: (nh as u32, 1, 1),
@@ -432,6 +518,42 @@ impl PtxTrainer {
                 shared_mem_bytes: 0,
             };
             unsafe { lb.launch(cfg)? };
+            drop(scratch_r);
+        }
+
+        // Step E.5: compute d_dt_bias, d_proj[dt_off/a_off] via ssm_param_grads
+        {
+            let proj_off = li * self.train_scratch.layer_proj_stride;
+            let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
+            let dc_off = li * self.train_scratch.layer_decay_stride;
+            let dc_view = self.train_scratch.layer_decays.slice(dc_off..dc_off + l * nh);
+            let scratch_r = self.model.scratch.borrow();
+            let dt_ref: &CudaSlice<f32> = &scratch_r.dt;
+            let dt_bias_ref: &CudaSlice<f32> = &self.model.layers[li].dt_bias;
+
+            let l_i = l as i32;
+            let h_i = nh as i32;
+            let dip_i = dip as i32;
+            let di_i = di as i32;
+            let ds_i = ds as i32;
+
+            let mut lb = stream.launch_builder(&ptx.k.ssm_param_grads);
+            lb.arg(&proj_view);
+            lb.arg(dt_bias_ref);
+            lb.arg(dt_ref);
+            lb.arg(&dc_view);
+            lb.arg(&self.train_scratch.d_decay);
+            lb.arg(&self.train_scratch.d_dt_from_inp);
+            lb.arg(&mut self.train_scratch.d_proj);
+            lb.arg(&mut self.train_scratch.d_dt_bias[li]);
+            lb.arg(&l_i); lb.arg(&h_i); lb.arg(&dip_i); lb.arg(&di_i); lb.arg(&ds_i);
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (nh.max(32) as u32, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+            drop(scratch_r);
         }
 
         // Step F: bx_bwd — atomic adds into d_proj[bp] and d_proj[x]
