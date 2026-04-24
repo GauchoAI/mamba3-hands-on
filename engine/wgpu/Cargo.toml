@@ -1,0 +1,16 @@
+[package]
+name = "mamba3-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Low-level SSM scan engine for Mamba-3 — portable GPU compute via wgpu"
+
+[lib]
+name = "mamba3_engine"
+crate-type = ["cdylib"]
+
+[dependencies]
+wgpu = "24"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+pyo3 = { version = "0.23", features = ["extension-module"] }
+numpy = "0.23"
