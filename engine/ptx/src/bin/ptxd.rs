@@ -150,7 +150,13 @@ fn run_job(ptx: &Arc<PtxContext>, job: &Job) -> Result<JobResult, Box<dyn Error>
 
     let gpu_model = PtxModel::from_cpu(&cpu_model, ptx.clone(), max_seq.max(16))?;
     let mut trainer = PtxTrainer::new(gpu_model, job.lr, job.weight_decay, max_seq.max(16))?;
-    trainer.warmup_steps = 0;  // PyTorch baseline doesn't warmup; matches parity-replay.
+    // Keep the default warmup (200 linear LR-ramp steps). PyTorch's training
+    // doesn't warmup, but our LCG-init path is more sensitive to initial step
+    // magnitudes — without warmup, scale gets driven to zero on step 1 and
+    // the model can't recover (Entry 33 / 38). PyTorch's smaller-grad-init
+    // escapes that trap; ours doesn't, and warmup is what makes our init
+    // converge from the same starting state. parity-replay with warmup=0 only
+    // works because it loads PyTorch's actual weights via from_bin.
 
     match job.task.as_str() {
         "parity" => run_parity(&mut trainer, job),
