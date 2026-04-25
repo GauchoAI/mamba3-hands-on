@@ -96,13 +96,24 @@ struct JobResult {
 }
 
 fn run_job(ptx: &Arc<PtxContext>, job: &Job) -> Result<JobResult, Box<dyn Error>> {
-    // Build model with the given config
-    let cpu_model = Mamba3Model::new_random(
+    // Build the model and apply the PyTorch-matching init recipe (Entry 35
+    // proved this is required to converge in the small number of cycles
+    // the GA expects). dt_bias log-uniform, embed N(0,1), Linear kaiming-
+    // uniform, scale=0.1.
+    let mut cpu_model = Mamba3Model::new_random(
         job.d_model, job.d_state, job.headdim, job.n_layers, job.vocab_size,
     );
-    let max_seq = 3 + job.n_bits + 2; // BOS + bits + SEP + answer + EOS
+    apply_pytorch_init(&mut cpu_model, job.seed);
+
+    // Sequence layout (matching test_parity_train, which converges on
+    // parity-replay): [BOS, bit, SPC, bit, SPC, ..., SEP, ANSWER, EOS].
+    // For variable-length curriculum we'd budget for the max; ptxd jobs
+    // are fixed n_bits so length is deterministic.
+    let max_seq = 1 + (2 * job.n_bits - 1).max(1) + 3;  // BOS + (bits, SPC) + SEP + ANS + EOS
+
     let gpu_model = PtxModel::from_cpu(&cpu_model, ptx.clone(), max_seq.max(16))?;
     let mut trainer = PtxTrainer::new(gpu_model, job.lr, job.weight_decay, max_seq.max(16))?;
+    trainer.warmup_steps = 0;  // PyTorch baseline doesn't warmup; matches parity-replay.
 
     match job.task.as_str() {
         "parity" => run_parity(&mut trainer, job),
@@ -110,9 +121,55 @@ fn run_job(ptx: &Arc<PtxContext>, job: &Job) -> Result<JobResult, Box<dyn Error>
     }
 }
 
+/// PyTorch-matching init: dt_bias log-uniform per head, embed N(0,1) via
+/// Box-Muller, in_proj/out_proj kaiming-uniform U(±√(1/fan_in)), scale=0.1.
+/// Identical to the recipe in test_parity_train that converges via
+/// parity-replay against PyTorch's own training trajectory.
+fn apply_pytorch_init(model: &mut Mamba3Model, seed: u64) {
+    let mut s: u64 = seed;
+    let mut lcg = || -> f32 {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+        ((s >> 33) as u32) as f32 / u32::MAX as f32
+    };
+    let dt_min: f32 = 0.001;
+    let dt_max: f32 = 0.1;
+    let log_dt_min = dt_min.ln();
+    let log_dt_max = dt_max.ln();
+    for layer in model.layers.iter_mut() {
+        for h in 0..layer.dt_bias.len() {
+            let r = lcg();
+            let dt_h = (r * (log_dt_max - log_dt_min) + log_dt_min).exp().max(1e-4);
+            layer.dt_bias[h] = dt_h + (-(-dt_h).exp_m1()).ln();
+        }
+    }
+    let mut next_normal = || -> f32 {
+        let u1 = lcg().max(1e-30);
+        let u2 = lcg();
+        ((-2.0 * u1.ln()).sqrt()) * (2.0 * std::f32::consts::PI * u2).cos()
+    };
+    for w in model.embed_w.iter_mut() {
+        *w = next_normal();
+    }
+    for layer in model.layers.iter_mut() {
+        layer.scale = 0.1;
+    }
+    let d = model.d_model;
+    for layer in model.layers.iter_mut() {
+        let di = 2 * d;
+        let in_proj_bound = (1.0f32 / d as f32).sqrt();
+        for w in layer.in_proj_w.iter_mut() {
+            *w = (lcg() * 2.0 - 1.0) * in_proj_bound;
+        }
+        let out_proj_bound = (1.0f32 / di as f32).sqrt();
+        for w in layer.out_proj_w.iter_mut() {
+            *w = (lcg() * 2.0 - 1.0) * out_proj_bound;
+        }
+    }
+}
+
 fn run_parity(trainer: &mut PtxTrainer, job: &Job) -> Result<JobResult, Box<dyn Error>> {
     let mut rng_state = job.seed;
-    let mut rng = || -> u32 {
+    let mut rng_bit = || -> u32 {
         rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
         ((rng_state >> 33) & 1) as u32
     };
@@ -122,43 +179,58 @@ fn run_parity(trainer: &mut PtxTrainer, job: &Job) -> Result<JobResult, Box<dyn 
     let mut final_loss = 0.0f32;
 
     for step in 0..job.steps {
-        let mut total_loss = 0.0f32;
+        // Mini-batch with gradient accumulation: zero grads, accumulate B
+        // samples, then ONE AdamW step scaled by 1/B. Matches PyTorch's
+        // batched-backward semantics. Without this, per-sample SGD on
+        // mixed-pattern data makes the optimizer thrash (Entry 33).
+        trainer.zero_gradients_only()?;
+        let mut last_loss = 0.0f32;
         for _ in 0..job.batch_size {
             let mut bits = Vec::new();
             let mut parity = 0u32;
             for _ in 0..job.n_bits {
-                let b = rng();
+                let b = rng_bit();
                 bits.push(b);
                 parity ^= b;
             }
+            // Token layout matches test_parity_train: [BOS, bit, SPC, bit, ..., SEP, ANSWER, EOS]
             let mut tokens: Vec<u32> = vec![256];
-            for &b in &bits { tokens.push(48 + b); }
+            for (i, &b) in bits.iter().enumerate() {
+                if i > 0 { tokens.push(32); }    // SPC between bits
+                tokens.push(48 + b);
+            }
             tokens.push(258);
             let answer = if parity == 0 { 83 } else { 68 };
             tokens.push(answer);
             tokens.push(257);
 
-            let mut targets = tokens[1..].to_vec();
-            targets.push(257);
+            // Masked CE: only supervise the SEP position predicting ANSWER.
+            let mut targets: Vec<u32> = vec![u32::MAX; tokens.len()];
+            let answer_pos = tokens.len() - 3;
+            targets[answer_pos] = answer;
 
-            total_loss += trainer.train_step(&tokens, &targets)?;
+            last_loss = trainer.accumulate_gradients(&tokens, &targets)?;
         }
-        let loss = total_loss / job.batch_size as f32;
+        trainer.apply_optimizer_step_scaled(1.0 / job.batch_size as f32)?;
+        let loss = last_loss / job.batch_size as f32;
         final_loss = loss;
 
-        // Early-stop eval every 200 steps
+        // Early-stop eval every 200 steps.
         if (step + 1) % 200 == 0 {
             let mut correct = 0usize;
             for _ in 0..200 {
                 let mut test_bits = Vec::new();
                 let mut test_parity = 0u32;
                 for _ in 0..job.n_bits {
-                    let b = rng();
+                    let b = rng_bit();
                     test_bits.push(b);
                     test_parity ^= b;
                 }
                 let mut test_tokens: Vec<u32> = vec![256];
-                for &b in &test_bits { test_tokens.push(48 + b); }
+                for (i, &b) in test_bits.iter().enumerate() {
+                    if i > 0 { test_tokens.push(32); }
+                    test_tokens.push(48 + b);
+                }
                 test_tokens.push(258);
                 let logits = trainer.model.forward(&test_tokens)?;
                 let v = trainer.model.vocab_size;

@@ -2705,3 +2705,45 @@ The PTX Mamba-3 training engine is **functionally equivalent to PyTorch autograd
 
 The original goal was: replace `specialist_trainer.py` in `three_populations.py` with a faster engine that produces equivalent training. That goal is met. `ptxd` (the slot scheduler from earlier in the project) becomes the next concrete piece — wiring this engine into the GA orchestrator.
 
+
+
+---
+
+## Entry 36 — ptxd ported to the verified training pipeline
+
+The `ptxd` daemon (Entry 26 era) was the placeholder slot scheduler — JSON jobs in on stdin, JSON results out on stdout, sequential single-process execution. It was wired against the OLD training path: `train_step` (per-sample AdamW), unmasked CE, no init recipe, no SPC tokens between bits. With the kernel work now PyTorch-equivalent (Entry 35), porting it to the verified pipeline is straightforward.
+
+### Changes to `engine/ptx/src/bin/ptxd.rs`
+
+1. **PyTorch init recipe applied to every job's model.** Same `apply_pytorch_init` helper as `test_parity_train`: dt_bias log-uniform per head, embed N(0,1) via Box-Muller, `in_proj_w` / `out_proj_w` kaiming-uniform `U(±√(1/fan_in))`, scale=0.1. Without this, even the post-fix pipeline plateaus on LCG-init.
+2. **Mini-batch gradient accumulation.** `zero_gradients_only()` → loop `accumulate_gradients` for `batch_size` samples → `apply_optimizer_step_scaled(1.0/B)`. Matches PyTorch's batched-backward semantics; without it the per-sample-AdamW thrashing of Entry 33 returns.
+3. **Masked CE on the answer position.** Targets default to `u32::MAX` sentinel for every position; only `targets[answer_pos] = answer` is set. The `cross_entropy_fwd_bwd` kernel skips MAX-targeted rows entirely. Loss baseline becomes log(2) for the binary answer choice — the *correct* baseline.
+4. **Token layout matches `test_parity_train`**: `[BOS, bit, SPC, bit, SPC, ..., SEP, ANSWER, EOS]`. Bare bit sequences (no SPC, the old format) gave the model no positional anchor between bits.
+5. **`warmup_steps = 0`** for fast small jobs — matches the PyTorch baseline that converges in 2 cycles on this task.
+
+### What ptxd is now
+
+A thin, self-contained scheduler over the verified training engine:
+
+```
+JSON job   →  PyTorch-init Mamba3Model
+           →  PtxModel + PtxTrainer
+           →  for `steps`:
+                 zero grads,
+                 accumulate batch_size masked-parity samples,
+                 single AdamW step (1/B scaled, global-norm clipped, warmup-disabled)
+                 every 200 steps: 200-sample eval; if best_acc ≥ target, return "converged"
+           →  JSON result {final_loss, best_acc, ms_per_step, wall_ms, status}
+```
+
+Single-process, sequential. The next move (a real ptxd) is a slot scheduler that packs multiple concurrent jobs onto one GPU based on memory + SM budget, but the placeholder is the right shape: stdin/stdout JSON contract, identical schema to what the GA orchestrator already speaks.
+
+### Integration with `three_populations.py`
+
+Current orchestration calls `subprocess.Popen([sys.executable, "specialist_trainer.py", ...])` and reads results back via `StateDB` (sqlite). To swap to ptxd, two clean options:
+
+- **A. ptxd writes the same DB rows.** Open the StateDB on startup, write per-job rows in the schema specialist_trainer.py uses. No changes to `three_populations.py`. Best for production drop-in.
+- **B. `spawn_worker` flag/env switch.** Add `--engine ptxd|python` (or `MAMBA_ENGINE=ptxd`) and pipe job JSON to a long-running ptxd process. Faster to prototype but adds a code path.
+
+Either is small. What's *important* is that the training-engine equivalence is now proven (Entry 35) — the orchestration glue is plumbing.
+
