@@ -2181,3 +2181,96 @@ These are real pieces of work. The session's conclusion:
 
 This is a plateau to rest at, not a wall. Track 1 restart needs the four
 items above to land simultaneously, not incrementally.
+
+
+---
+
+## Entry 28 — Gradient correctness via finite-difference harness (the methodology that cracked it)
+
+Date: 2026-04-24 late. Context: the previous entries ended with "~58–72% ceiling, gradients are the bottleneck". Iterative gradient-path additions kept destabilising training or barely moving the ceiling. A pattern was emerging: mathematically plausible kernels were being "verified" by downstream training behaviour (accuracy up? good; NaN? bad), which is an expensive and noisy signal. Switched to a different discipline — prove each kernel correct *before* letting it influence training.
+
+### The correctness gate
+
+Wrote `engine/ptx/src/bin/fd_check.rs`. For any scalar loss `L(θ)` and any parameter `θ_i`, two numbers should agree:
+
+```
+analytical: the gradient produced by the backward kernel (∂L/∂θ_i)
+finite-diff: (L(θ_i + ε) − L(θ_i − ε)) / (2ε)
+```
+
+If they match within tolerance (we use 10% relative error at ε=1e-2), the kernel is correct. If not, it's wrong — no ambiguity. And the output tells you *which specific parameter* and *by how much*.
+
+Key design choices in the harness:
+
+1. **Pick indices with the largest analytical gradient magnitude** per tensor, not random ones. At fresh init most gradients sit under the FD noise floor (~5e-5 at ε=1e-2) and tag as "noise" (inconclusive). Top-magnitude selection ensures the check has signal.
+
+2. **Noise-floor-aware verdict.** Rather than PASS/FAIL binary, classify as PASS / noise / FAIL:
+   - both analytical and FD below floor → noise (inconclusive, don't count)
+   - above floor and match within tol → PASS
+   - above floor and disagree → FAIL
+   This prevents the harness from flagging tiny values where FD precision dominates as "bugs".
+
+3. **Warmup N training steps before checking.** At fresh init, symmetric weights produce tiny gradients. Running a handful of steps breaks symmetry and lifts magnitudes above the noise floor, turning "noise" verdicts into conclusive PASS/FAIL.
+
+### The debugging loop this enables
+
+Each fd-check run becomes a sorted to-do list:
+
+```
+tensor[idx]                analytical    finite-diff    rel-err  verdict
+layer0.in_proj_w[17276]     0.000362     0.000215       0.408    FAIL
+layer0.dt_bias[0]           0.000000    -0.000191       1.000    FAIL
+layer0.layer_norm_w[0]      0.000000    -0.000477       1.000    FAIL
+```
+
+Each FAIL is diagnostic:
+- `analytical=0` means no kernel is writing to that tensor's gradient buffer
+- `analytical ≠ 0` but wrong magnitude/sign means the kernel is wired but has a math bug
+
+This is fundamentally different from "accuracy didn't go up, try something else". Each iteration of fd-check → fix one FAIL → rerun converges, because the cost function (number of FAILs) is monotonic and directly actionable.
+
+### The bugs this loop surfaced
+
+Starting point: 18 PASS / 18 FAIL at d=64 L=2.
+
+1. **`dt_bias` analytical=0** → `ssm_param_grads` kernel was loaded but not called. One missing kernel launch.
+
+2. **`dt_bias` wrong sign** → the inp-path contribution to `d_dt_from_inp` had been zeroed out for numerical stability ("blended = inp_val / dt blows up when dt ≈ 0.05 at init"). Reconstructed `blended` from cached post-LN+RoPE bp instead of doing the division. Numerically stable AND correct.
+
+3. **`in_proj_w[cp_rows]` 2.5× too big** → the forward applies `c_norm` + RoPE to cp before feeding it to the scan; the backward was writing the post-LN+RoPE gradient directly into `d_proj[cp_slice]`, skipping the Jacobians of those transforms. Wrote `rope_bwd`, added `gather_slice_from_proj` + `scatter_add_to_proj`, chained `d_cp_post → rope_bwd → layer_norm_bwd → d_proj`.
+
+4. **`in_proj_w[bp_rows]` wrong** → `bx_bwd` was reading `proj[bp_off+n]` (raw bp) when the forward used post-LN+RoPE bp. Fixed to take the cached `bp` view.
+
+5. **`d_in_proj_w` used wrong operand** → the matmul was `d_proj^T @ x_raw` when it should be `d_proj^T @ x_normed` (forward: `proj = LN(x) @ in_proj_w`). Cached `layer_x_normed` and fixed the matmul.
+
+6. **`layer_norm_w/b` analytical=0** → pre-layer LN backward wasn't wired. Plugged `layer_norm_bwd` into the chain.
+
+7. **`b_norm_w` 25% too small** → the forward's `blended[t]` depends on both `bp[t]` AND `bp[t-1]` via `(1-trap)·bp[t-1]·x[t-1]`. `bx_bwd` was capturing only the `bp[t]` term. Added cross-time atomicAdd into `d_bp_post[t-1]`.
+
+8. **`embed_norm_w/b` analytical=0** → no backward wired at all. Cached `x_before_embed_norm`, inserted `layer_norm_bwd` between the last layer's d_x and embed_scatter_bwd.
+
+After all eight fixes: **72 PASS / 3 noise / 0 FAIL** (the remaining 3 are noise-level b_norm_b values that flip between runs — FD precision, not kernel bugs).
+
+### What fd-check doesn't catch
+
+fd-check only validates the gradient of the loss you defined. If the loss is the wrong objective, every kernel can pass and training will still fail. Case in point: after getting 72 PASS, parity training plateaued at loss=0.44 — 50% accuracy. The math was bit-clean but the model wasn't learning.
+
+The bug: our cross-entropy averaged over every position in the sequence, but `specialist_trainer.py` masks the loss to supervise only positions *after* the separator token. Positions before SEP ask the model to predict random bit tokens — impossible, and the noise dominates the loss signal. Fixed by adding a sentinel (`target = 0xFFFFFFFF`) that tells the CE kernel to zero d_logits and skip the loss contribution. After the fix, loss correctly lands at log(2)=0.693 (the true baseline for a binary answer with no signal yet).
+
+Method takeaway: **correctness of ∂L/∂θ is necessary but not sufficient**. You also need L to be the right objective. Cross-check the loss formulation against the reference implementation — one `grep mask_flat` on the PyTorch trainer gave the answer in 10 seconds.
+
+### Remaining gap (not a gradient problem)
+
+After masked loss is correct and fd-check is green, training still plateaus at log(2) on variable-length parity (fixed-length converges to 100% in 1 cycle). The model CAN learn parity when task is trivial; it can't when lengths vary. This is architecture/init territory, not gradient coverage.
+
+### Generalisation
+
+The fd-check harness is reusable for any kernel-based training system. Template:
+1. Fix an input and targets
+2. Compute analytical gradient once via the normal backward pass
+3. For each tensor: pick top-magnitude indices (skip noise floor)
+4. Perturb each selected parameter by ±ε, recompute loss, compare
+5. Tag as PASS / noise / FAIL with a visible rel-err
+
+It costs O(n_checks) forward passes — typically a few seconds for a few dozen checks. Run it after every kernel change. Never ship a backward kernel without it.
+
