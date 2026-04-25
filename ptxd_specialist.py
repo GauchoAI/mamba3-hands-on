@@ -105,9 +105,14 @@ def main():
     # MetricsWriter init — we want the same DB rows specialist_trainer.py emits.
     sys.path.insert(0, str(REPO_ROOT))
     from metrics_db import MetricsWriter
+    from state_db import StateDB
 
     db_path = args.db_path or "three_pop/training.db"
     mw = MetricsWriter(db_path)
+    # StateDB on the SAME db file (the schemas don't conflict — different
+    # tables). three_populations.py reads task_status / lineage / cycle_history
+    # from this DB.
+    sdb = StateDB(db_path)
     exp_id = job["id"]
     config = {
         "task": args.task,
@@ -169,6 +174,15 @@ def main():
                 elapsed_s=float(row.get("elapsed_s", 0.0)),
             )
             mw.log_tasks(exp_id, int(row["cycle"]), {args.task: float(row["fresh_acc"])})
+            # Also write StateDB cycle_history — this is what get_confidence_score
+            # queries; without it confidence is 0 and the task can never be
+            # promoted to "mastered".
+            try:
+                sdb.log_cycle(args.task, int(row["cycle"]),
+                              accuracy=float(row["fresh_acc"]),
+                              loss=float(row["loss"]))
+            except Exception as e:
+                sys.stderr.write(f"[ptxd_specialist] StateDB log_cycle warn: {e}\n")
             sys.stderr.write(
                 f"[ptxd_specialist] cycle {row['cycle']}  "
                 f"loss={row['loss']:.4f}  acc={row['fresh_acc']*100:.0f}%  "
@@ -199,6 +213,69 @@ def main():
         "best_acc": best_acc, "final_loss": final_loss,
         "ms_per_step": result.get("ms_per_step"), "wall_ms": result.get("wall_ms"),
     }))
+
+    # ---- StateDB final integration (lineage + task_status promotion) ----
+    # cycle_history rows were already written above as each cycle arrived;
+    # here we close out with a lineage row and the right task_status.
+    try:
+        # log_lineage: one row per training round.  cycles_completed proxies for
+        # round_num; for ptxd that's the total cycles run.
+        cycles_completed = max(1, int(result.get("steps_executed", 0)) // max(1, args.steps_per_cycle))
+        ckpt_str = ""  # ptxd does not yet emit a checkpoint file; downstream
+                       # three_populations only uses the path for backup/restore,
+                       # so an empty string just disables that feature for ptxd
+                       # specialists. They'll respawn fresh if the GA replays them.
+        logged_config = dict(config)
+        sdb.log_lineage(
+            task=args.task,
+            round_num=cycles_completed,
+            accuracy=best_acc,
+            best_accuracy=best_acc,
+            config=logged_config,
+            role=args.mode,
+            checkpoint_path=ckpt_str,
+        )
+
+        existing = sdb.get_task_status(args.task)
+        existing_best = existing["best_accuracy"] if existing else 0.0
+        # Confidence score uses recent cycles; ptxd_specialist's cycles count is
+        # available via MetricsWriter, so the StateDB accessor will see them.
+        try:
+            conf_score, conf_mean, conf_std, _ = sdb.get_confidence_score(
+                args.task, last_n=max(cycles_completed, 5), k=1.0)
+        except Exception:
+            conf_score, conf_mean, conf_std = best_acc, best_acc, 0.0
+
+        if best_acc >= args.target_acc and conf_score >= 0.90:
+            sdb.update_task_status(args.task, "mastered", logged_config, best_acc,
+                                   total_cycles=cycles_completed,
+                                   confidence_score=conf_score,
+                                   confidence_mean=conf_mean,
+                                   confidence_std=conf_std)
+            try:
+                sdb.register_teacher(args.task, best_acc, cycles_completed,
+                                     logged_config, checkpoint_path=ckpt_str)
+            except Exception:
+                pass
+            sys.stderr.write(f"[ptxd_specialist] {args.task} mastered (best={best_acc:.0%})\n")
+        elif best_acc > existing_best:
+            sdb.update_task_status(args.task, "training", logged_config, best_acc,
+                                   total_cycles=cycles_completed,
+                                   confidence_score=conf_score,
+                                   confidence_mean=conf_mean,
+                                   confidence_std=conf_std)
+        else:
+            sdb.update_task_status(args.task,
+                                   confidence_score=conf_score,
+                                   confidence_mean=conf_mean,
+                                   confidence_std=conf_std)
+        try:
+            sdb.clear_active_run(args.task)
+        except Exception:
+            pass
+        sdb.close()
+    except Exception as e:
+        sys.stderr.write(f"[ptxd_specialist] StateDB integration warning: {e}\n")
 
     # Same human-readable summary to stdout that three_populations might tail.
     print(f"[ptxd_specialist] {args.task}  best_acc={best_acc*100:.1f}%  "
