@@ -2274,3 +2274,79 @@ The fd-check harness is reusable for any kernel-based training system. Template:
 
 It costs O(n_checks) forward passes — typically a few seconds for a few dozen checks. Run it after every kernel change. Never ship a backward kernel without it.
 
+
+
+---
+
+## Entry 29 — Beyond gradient correctness: matching PyTorch *training dynamics*
+
+After Entry 28 closed the gradient-correctness gate (74/75 fd-check PASS), training still plateaued at log(2) on variable-length parity. The framing question:
+
+> "If our PTX implements the same gradient PyTorch autograd computes, then slow convergence is a config issue, not a kernel issue — right?"
+
+The honest answer: **yes, with one caveat — we're computing the right gradient of *our model*, which is a hand-port of Mamba-3.** It needs to match PyTorch's `mamba3_minimal.Mamba3Block` to make the framing true. Verified the architecture matches (same `proj` layout, same RoPE scheme, same trap mechanism, same weight-tied LM head). The deltas are all in *initialization* and *training-loop semantics*, not architecture.
+
+### Reconstructing PyTorch's training recipe, piece by piece
+
+Source: `mamba3_minimal.py`, `progressive_model.py`, `specialist_trainer.py`. Each piece dropped a real bug or a real unmatched detail:
+
+1. **dt_bias log-uniform per head**, not constant -3.0. PyTorch:
+   ```python
+   _dt = torch.exp(rand * (log(dt_max) - log(dt_min)) + log(dt_min)).clamp(min=dt_init_floor)
+   dt_bias = _dt + log(-expm1(-_dt))    # inv_softplus
+   ```
+   Our CPU `new_random` had `dt_bias = vec![-3.0; H]` for every head. Constant init defeats the per-head-frequency prior that's the entire point of multi-head SSM.
+
+2. **embed_w ~ N(0, 1)**, not Xavier-uniform. PyTorch's `nn.Embedding` defaults to standard normal; ours defaulted to Xavier scaled (~7× smaller for V=260, d=64).
+
+3. **Masked cross-entropy.** Our CE divided by `L` (total positions). PyTorch's `specialist_trainer.py` masks with `pred_mask = (pos >= sep_t) & (pos < L-1)` and divides by `mask.sum()`, supervising only positions after the separator. Without this, ~8/9 positions in our parity sequence ask the model to predict the next *random bit* — impossible. The noise dominated and gave a misleading loss plateau at 0.44 (the wrong baseline).
+
+   Implementation: target sentinel `0xFFFFFFFF` zeroes that row's d_logits and skips its loss contribution. Caller pre-computes `n_active_inv = 1 / (count of non-masked targets)`.
+
+4. **Learnable per-layer scale.** PyTorch's `_make_layer` does `scale = nn.Parameter(torch.tensor(0.01))`; autograd updates it. Our CPU ref kept it as a frozen `f32`. With frozen scale=0.01, the SSM contribution stays at 1% forever, which is why no amount of training moved the needle: the model literally couldn't grow into using the SSM.
+
+   Implementation: new `reduce_dot_f32` kernel; cache `layer_y_post` per layer in forward; `d_scale[l] = <d_x_in_layer, y_post>` via reduce_dot; host-side AdamW for the scalar (one D→H copy per layer per step, 8 bytes, cheap). Verified: scale moves during training.
+
+5. **Global-norm gradient clipping** (`clip_grad_norm_(1.0)`), not per-element `[-1, 1]`. PyTorch's clip preserves direction while bounding magnitude; per-element clipping treats each dimension independently and lets a few large grads survive while clipping useful directional signal. The big practical effect: when a tiny scalar like `scale` has a per-step gradient of 0.5, per-element clip leaves it alone and Adam normalizes by `sqrt(v) ≈ 0.016` → step size 0.03, overshooting through zero on step 1. Global-norm clip implicitly damps it because the total norm includes thousands of in_proj entries.
+
+   Implementation: `g_mul` parameter on `adamw_step`; host computes `||grads||_2` once via `reduce_dot_f32(buf, buf)` accumulated across every gradient tensor; clip = min(1, MAX_NORM / norm).
+
+6. **LR warmup.** Linear ramp `0 → lr` over `warmup_steps` (default 200). Without warmup, Adam's `v` moment is still tiny in the first few steps and the effective step size `m_hat / sqrt(v_hat)` is huge.
+
+7. **Mini-batch gradient accumulation, single AdamW step per batch.** This was the biggest single change to training dynamics. Our inner loop was calling `train_step` once per sequence — i.e., one full AdamW update per *sample*, not per batch. For B=16 mixed-length sequences, the optimizer takes 16 separate steps per "batch", each fighting the previous. Different lengths drive different directions; scales swing wildly.
+
+   PyTorch trains in true batches: one forward over (B, L), one backward, one AdamW step. To match without writing a batched forward (a major refactor), accumulate gradients across B sequential calls and apply a single AdamW step at the end with `extra_g_mul = 1/B` to average.
+
+   Implementation:
+   ```rust
+   trainer.zero_gradients_only()?;        // also zeroes loss accumulator
+   for sample in batch:
+       trainer.accumulate_gradients(tokens, targets)?;  // do_zero=false
+   trainer.apply_optimizer_step_scaled(1.0 / B)?;       // single AdamW step
+   ```
+   Step counter moved into `apply_optimizer_step` so accumulation counts as one step. Behavior: scales now stable around 0.13–0.18 across 4 layers (no longer collapsing to zero), loss trends down monotonically.
+
+### What's still open: convergence on variable-length parity
+
+After all seven recipes are wired, **fixed-length parity converges to 100% in 2 cycles** (d=32 L=2 d_state=16, n_bits=3). Variable-length parity (n_bits ∈ [2,4]) plateaus at ~56% with stable training (no thrashing, scales stable, loss steadily ~0.71 just above log(2)).
+
+The remaining gap is a combination of:
+- Per-sample-AdamW thrashing was masking it; now that thrashing is gone, the model genuinely struggles to find a length-invariant parity circuit
+- Variable-length training on this SSM at this size needs more samples / different curriculum
+- PyTorch may have additional ingredients (LR scheduler with warm restarts, weight tying behavior, label smoothing in some configs, etc.) we haven't isolated
+
+The right next experiment is *not* more PTX hacking — it's running `specialist_trainer.py --task parity --device cuda --backend jit` with logging at every cycle and comparing per-cycle loss/acc to ours. If PyTorch also takes 20+ cycles on this exact config, our PTX is matching. If PyTorch converges in 2, there's still a delta to find.
+
+### Methodology takeaway, refined
+
+The Entry 28 takeaway was "FD verifies your gradient kernel, not your loss." Entry 29 adds: **FD verifies your gradient kernel, not your *training loop*.** A correct gradient applied with the wrong batching strategy produces correct-but-useless dynamics. Per-sample AdamW thrashing on mixed-length data is invisible to fd-check (the gradient at any given moment is correct) but visible in trained-model behavior (loss bouncing, scales swinging, no convergence).
+
+Five layers of correctness, in order of decreasing how-much-fd-check-helps:
+1. Forward kernel — partially testable via fd-check (reads forward; if wrong, FD differs)
+2. Backward kernel — fully testable via fd-check
+3. Loss formulation — invisible to fd-check (it tests gradients of the loss you defined)
+4. Optimizer — invisible to fd-check
+5. Training loop / batching — invisible to fd-check
+
+Each layer needs its own verification pattern. For (3): grep the reference. For (4): match hyperparameters and clipping strategy. For (5): match accumulation semantics.
+
