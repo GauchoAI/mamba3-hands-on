@@ -2896,3 +2896,100 @@ The 7-seed sweep ran for ~80 seconds on the H100. SSH dropped multiple times dur
 
 The kernel/correctness work — the hard part of building this — is done. The remaining items (more tasks beyond parity in ptxd, the slot scheduler for concurrent jobs, persistent inference fast path) are well-scoped follow-ups, each roughly half-day to day-of-work apiece.
 
+
+
+---
+
+## Entry 40 — Phase 2 design: the Tetris slot scheduler
+
+### Why a slot scheduler
+
+`three_populations.py` currently spawns N `specialist_trainer.py` subprocesses. Each holds its own CUDA context, JIT-compiles its own kernels (PyTorch lazy compilation per instance), and allocates its own memory pools. Then they contend on the same GPU — each subprocess sees the others' allocations as "memory used by some other process," falls back to fragmented allocation, and SMs get oversubscribed because nobody's coordinating.
+
+The result: more processes ≠ more throughput. Past ~3 specialists on one H100 the scheduler thrashes.
+
+What we want: **one process owns the GPU**, multiple jobs run concurrently on separate CUDA streams, the scheduler admits new jobs based on actual memory + SM budget. PTX kernels co-execute when they don't oversubscribe SMs.
+
+### Why this is finally tractable
+
+Now that the PTX training engine is correct, fast, and self-contained (one PtxContext with all kernels JIT'd once), we can run multiple training jobs *in the same process* without recompiling, without cross-process memory accounting, without IPC overhead. The only remaining piece is per-job stream isolation.
+
+### Sketch of the design
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ptxd v2 (slot scheduler) — one process, owns the GPU       │
+│                                                              │
+│  Shared:                                                     │
+│    PtxContext (kernels JIT'd once at startup)                │
+│                                                              │
+│  Per job:                                                    │
+│    JobRunner {                                               │
+│      stream:  Arc<CudaStream>      // dedicated stream       │
+│      model:   PtxModel             // weights, scratch       │
+│      trainer: PtxTrainer           // grad buffers, AdamW    │
+│      state:   Running | Done       //                        │
+│    }                                                         │
+│                                                              │
+│  Scheduler loop:                                             │
+│    1. admit jobs from queue while (alloc + estimate) ≤ budget│
+│    2. step() each Running job by one training-step worth     │
+│    3. poll streams for completion / convergence              │
+│    4. emit results, free slots, repeat                       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Code touchpoints
+
+1. **`PtxContext`** — already supports multiple streams via cudarc; currently we only use `ctx.stream`. Add `ctx.new_stream()` per job.
+
+2. **`PtxModel`** — currently grabs `self.ptx.stream.clone()` for every launch. Refactor to take an explicit `&Arc<CudaStream>` parameter (or store one per-instance). Same for `PtxTrainer`.
+
+3. **`scratch.rs` / `train_scratch.rs`** — buffers are already per-instance; they don't need to change. Just need to ensure the kernels launching on them are bound to the *right* stream.
+
+4. **New: `scheduler.rs`** — `JobRunner` struct + `Scheduler` with `submit/step/poll` API.
+
+5. **New: `bin/ptxd.rs` (v2)** — replace the sequential loop with a scheduler-driven event loop. Keep the same JSON contract; just allow concurrent jobs.
+
+### Memory + SM budget estimation
+
+Per-job memory (in bytes), deterministic from config:
+```
+weights  = (V × d) + (n_layers × (dip × d + d × di + …)) + …
+adam_mv  = 2 × weights
+scratch  = max_seq × (d + dip + di + …) + cache_budget
+grads    = weights      // d_in_proj_w, d_out_proj_w, d_embed, etc.
+total    ≈ 4 × weights + per_seq_overhead
+```
+
+For a small specialist (d=32, L=2): ~1MB per job. H100 has 80GB → 80,000 concurrent slots at this scale. SMs are the binding constraint, not memory.
+
+H100 SM budget: 132 SMs. Each PTX kernel launches a grid; tally `grid_dim.{x,y,z} × block_dim.{x,y,z}` to estimate. For our specialists:
+- Backward biggest kernel: matmul tiles `(16 × 16)` blocks ≈ 1-256 blocks per matmul.
+- SSM scan: `(n_heads, 1, 1)` = 8 blocks for nh=8 — tiny.
+
+A specialist consumes maybe 1/4 of one SM averaged over a step. Say ~64 concurrent specialists is the practical ceiling on an H100, well above the GA's actual demand (~16-32 active workers).
+
+### Phase ordering
+
+1. **Verify ptxd_specialist.py end-to-end** with `three_populations.py`'s actual spawn pattern. (Phase 1 close-out.)
+2. **Refactor PtxModel/PtxTrainer to accept an explicit stream**, then sanity-test by running two jobs serially on different streams (functional test only).
+3. **Build the JobRunner abstraction** + a non-concurrent scheduler that just runs one job at a time but through the new API. This is the plumbing layer.
+4. **Add concurrent execution**: the scheduler issues kernels on multiple streams within one step pass. Verify no contention via `nvidia-smi` and a stopwatch (concurrent should ≈ serial when SM budget is well below capacity, and NOT 3× slower as we'd see with three subprocesses).
+5. **Add admission control**: track allocated memory + SM-block count, gate new admissions when budget is exceeded.
+6. **Wire ptxd v2 into ptxd_specialist.py** with no shim changes — same JSON, same DB rows, just N concurrent jobs in one process.
+
+Each step is independently testable. Step 3 unblocks "ptxd works the same as before but with new internals." Step 4 unblocks "multiple jobs in flight." Step 5 makes it production-safe.
+
+### What this buys you
+
+- **Eliminates GPU contention** in `three_populations.py`. Today's failure mode (multiple PyTorch processes thrashing the GPU) goes away by construction — one process, coordinated stream scheduling.
+- **Higher throughput** than Python multiprocess: no per-job kernel JIT, no CUDA context switching, shared kernel cache.
+- **Predictable resource usage** for the GA: it can ask "how many jobs can I submit right now?" and the scheduler answers truthfully.
+
+### What this does NOT solve (out of scope for Phase 2)
+
+- Multi-GPU. The scheduler owns one H100. Multi-GPU is Phase 3 if needed.
+- Tasks beyond parity. Adding tasks is orthogonal to the scheduler.
+- Mixed-precision / FP16. Current engine is FP32 throughout.
+
