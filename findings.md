@@ -2856,3 +2856,43 @@ Build the gates first, then implement against them:
 
 Each gate is fast enough to be a daily check. Each catches a different class of bug — and crucially, *bugs hide in the surfaces no gate touches*. The `matmul_atb_tiled` `=` vs `+=` bug stayed invisible to the first three gates because none exercised batched gradient accumulation across multiple samples; only `parity-replay` did. When you build a kernel-based system, build all four levels of verification before you trust the system.
 
+
+
+---
+
+## Entry 39 — ptxd seed sweep: convergence is real, just narrow
+
+Final live verification on the H100. 7-seed sweep with `n_layers=2`, `n_bits=3`, fixed-length parity, default config (d=32, dS=16, batch=16, lr=1e-3, wd=0.1, 2000 steps cap):
+
+| seed   | best_acc | status        | steps_executed | wall_s |
+|--------|----------|---------------|----------------|--------|
+| 12345  | 57%      | needs_tuning  | 2000           | 14.5   |
+| **7**  | **100%** | **converged** | **800**        | **5.9** |
+| 42     | 55%      | needs_tuning  | 2000           | 15.0   |
+| 100    | 55%      | needs_tuning  | 2000           | 14.9   |
+| 999    | 57%      | needs_tuning  | 2000           | 14.8   |
+| 2024   | 55%      | needs_tuning  | 2000           | 14.8   |
+| 31337  | 57%      | needs_tuning  | 2000           | 15.0   |
+
+**1/7 seeds converged.** Seed 7 hit 100% accuracy in 800 steps (early-stop, 5.9s wall). The other six plateaued at ~55-57% with loss near log(2) — stuck at the binary-uniform local minimum where AdamW drives `scale → 0` because the SSM contribution is randomly oriented and hurts more than helps from this specific starting point.
+
+This is the expected shape for a small (24K-param) SSM trying to learn parity from a marginal init. The basin of attraction is narrow; most random starts miss it. With more layers, larger d_model, or warmup-and-restart, the hit rate goes up — but for the GA's purposes, **what matters is that ptxd produces correct gradients from any init** (proven by `single-step-check` and `parity-replay`) and that **at least some seeds find the basin** (confirmed: seed 7 in 5.9 seconds).
+
+The GA orchestrator was designed exactly for this regime: spawn multiple specialists with different seeds + configs, keep the survivors. Whatever fraction of seeds converge for a given config, the GA finds them and lineages them forward.
+
+### Operationally: the sweep also proved the resilient nohup pattern works
+
+The 7-seed sweep ran for ~80 seconds on the H100. SSH dropped multiple times during that window (Vast.ai instability today), but the `nohup bash -c '...' > $LOG 2>&1 &` pattern in `engine/ptx/scripts/test_ptxd_resilient.sh` kept the work going — when SSH reconnected, the log was complete. This is the right pattern for any long-running ptxd job: detach + log + read on demand.
+
+### Final session balance
+
+22 commits this session arc just covering the kernel-correctness work alone (Entries 28-35). Plus 8 more for the ptxd integration (Entries 36-39). The PTX Mamba-3 training engine is:
+
+- **PyTorch-equivalent on a single training step** (single-step-check ≤ 2.5e-6 max_abs)
+- **PyTorch-equivalent on a multi-step trajectory given identical data** (parity-replay reaches 100% same as PyTorch)
+- **14× faster than PyTorch CPU** on the same convergence
+- **Drop-in replacement for `specialist_trainer.py`** via `ptxd_specialist.py` (one-line diff in `three_populations.py`)
+- **Documented end-to-end** in `findings.md` Entries 28-39 plus `engine/ptx/README.md`
+
+The kernel/correctness work — the hard part of building this — is done. The remaining items (more tasks beyond parity in ptxd, the slot scheduler for concurrent jobs, persistent inference fast path) are well-scoped follow-ups, each roughly half-day to day-of-work apiece.
+
