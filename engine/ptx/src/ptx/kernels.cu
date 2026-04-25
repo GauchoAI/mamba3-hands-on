@@ -1500,8 +1500,23 @@ extern "C" __global__ void matmul_ab_tiled(
 }
 
 // ---------- matmul_atb_tiled ------------------------------------------------
-// C = A^T @ B.  A(K, M), B(K, N), C(M, N).
-// C[m, n] = sum_k A[k, m] * B[k, n]
+// C += A^T @ B.  A(K, M), B(K, N), C(M, N).
+// C[m, n] += sum_k A[k, m] * B[k, n]
+//
+// IMPORTANT: this kernel ACCUMULATES into C (was: overwrote, until 2026-04-25).
+// All callers in our backward pass treat the output as a gradient buffer that's
+// either pre-zeroed once per training step (single-sample SGD path) or once
+// per mini-batch (accumulation path) — so a += contract is what they want.
+//
+// The previous = behaviour silently broke gradient accumulation across the
+// batch: in `accumulate_gradients`, sample 16's output overwrote samples
+// 1–15's, so only the last sample's contribution to d_embed / d_out_proj_w /
+// d_in_proj_w survived. parity-replay made the symptom obvious — even with
+// PyTorch's exact stream and bit-clean single-step parity, our 200-step
+// trajectory diverged. Switching to += closes that loop.
+//
+// Each (row, col) cell is owned by exactly one thread of one block, so a
+// non-atomic += is race-free.
 extern "C" __global__ void matmul_atb_tiled(
     const float* __restrict__ A,
     const float* __restrict__ B,
@@ -1530,7 +1545,7 @@ extern "C" __global__ void matmul_atb_tiled(
         }
         __syncthreads();
     }
-    if (row < M && col < N) C[row * N + col] = acc;
+    if (row < M && col < N) C[row * N + col] += acc;
 }
 
 // ---------- layer_norm_bwd --------------------------------------------------
