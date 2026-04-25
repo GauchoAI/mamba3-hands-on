@@ -82,9 +82,20 @@ def _acquire_lock():
 
 
 def spawn_worker(task, config, mode="champion", cycles=10, target_acc=0.95):
-    """Spawn a specialist_trainer subprocess. Returns Popen."""
+    """Spawn a specialist_trainer subprocess. Returns Popen.
+
+    Set MAMBA_ENGINE=ptxd to spawn the PTX-engine shim instead of the
+    PyTorch trainer. The shim accepts the same CLI surface and writes the
+    same StateDB / MetricsWriter rows, so this is a transparent swap. See
+    findings.md Entry 41 for the four-gate verification of the engine.
+    """
     cfg = config if isinstance(config, dict) else {}
-    cmd = [sys.executable, "-u", "specialist_trainer.py",
+    worker_script = (
+        "ptxd_specialist.py"
+        if os.environ.get("MAMBA_ENGINE", "").lower() == "ptxd"
+        else "specialist_trainer.py"
+    )
+    cmd = [sys.executable, "-u", worker_script,
          "--task", task,
          "--mode", mode,
          "--d-model", str(cfg.get("d_model", 64)),
