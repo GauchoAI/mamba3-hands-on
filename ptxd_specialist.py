@@ -142,37 +142,59 @@ def main():
     proc.stdin.flush()
     proc.stdin.close()
 
-    # Read result line.
-    line = proc.stdout.readline().strip()
-    proc.wait(timeout=10)
+    # Stream rows. ptxd emits one JSON object per line:
+    #   {"type":"cycle", "cycle":N, "step":S, "loss":..., "fresh_acc":..., ...}
+    #     — every 200 steps; orchestrator can monitor in real time.
+    #   {"type":"final", "best_acc":..., "status":..., "wall_ms":..., ...}
+    #     — once at the end.
+    final_result = None
+    for line in proc.stdout:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            sys.stderr.write(f"[ptxd_specialist] non-JSON line: {line!r}\n")
+            continue
+        rtype = row.get("type")
+        if rtype == "cycle":
+            mw.log_cycle(
+                exp_id,
+                int(row["cycle"]),
+                float(row["loss"]),
+                float(row["fresh_acc"]),
+                float(row["best_fresh"]),
+                train_acc=None,
+                elapsed_s=float(row.get("elapsed_s", 0.0)),
+            )
+            mw.log_tasks(exp_id, int(row["cycle"]), {args.task: float(row["fresh_acc"])})
+            sys.stderr.write(
+                f"[ptxd_specialist] cycle {row['cycle']}  "
+                f"loss={row['loss']:.4f}  acc={row['fresh_acc']*100:.0f}%  "
+                f"best={row['best_fresh']*100:.0f}%  stage={row['stage']}\n"
+            )
+        elif rtype == "final":
+            final_result = row
+        else:
+            sys.stderr.write(f"[ptxd_specialist] unknown row type: {rtype}\n")
 
-    if not line:
-        sys.stderr.write(f"[ptxd_specialist] ptxd produced no output; stderr:\n{proc.stderr.read()}\n")
+    proc.wait(timeout=10)
+    if final_result is None:
+        sys.stderr.write(
+            f"[ptxd_specialist] ptxd produced no final row; stderr:\n"
+            f"{proc.stderr.read()}\n"
+        )
         mw.update_status(exp_id, "error")
         sys.exit(3)
 
-    try:
-        result = json.loads(line)
-    except json.JSONDecodeError:
-        sys.stderr.write(f"[ptxd_specialist] non-JSON output: {line!r}\n")
-        mw.update_status(exp_id, "error")
-        sys.exit(4)
-
     elapsed = time.time() - t0
-
-    # Emit per-cycle log rows to match specialist_trainer.py's pattern.
-    # ptxd doesn't surface per-cycle data (just final summary), so we synthesize
-    # one row that captures the converged or final state.
-    final_loss = float(result.get("final_loss", 0.0))
-    best_acc = float(result.get("best_acc", 0.0))
-    steps_done = int(result.get("steps_executed", total_steps))
-    cycles_done = max(1, steps_done // max(1, args.steps_per_cycle))
-    mw.log_cycle(exp_id, cycles_done, final_loss, best_acc, best_acc,
-                 train_acc=None, elapsed_s=elapsed)
-    mw.log_tasks(exp_id, cycles_done, {args.task: best_acc})
-
-    final_status = "mastered" if best_acc >= args.target_acc else result.get("status", "needs_tuning")
+    final_loss = float(final_result.get("final_loss", 0.0))
+    best_acc = float(final_result.get("best_acc", 0.0))
+    final_status = ("mastered" if best_acc >= args.target_acc
+                    else final_result.get("status", "needs_tuning"))
     mw.update_status(exp_id, final_status)
+    result = final_result
     mw.log_event("ptxd_done", exp_id, json.dumps({
         "best_acc": best_acc, "final_loss": final_loss,
         "ms_per_step": result.get("ms_per_step"), "wall_ms": result.get("wall_ms"),

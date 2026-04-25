@@ -99,6 +99,8 @@ fn default_seed() -> u64 { 12345 }
 
 #[derive(Serialize, Debug)]
 struct JobResult {
+    #[serde(rename = "type")]
+    kind: &'static str,
     id: String,
     status: String,
     #[serde(rename = "final_loss")]
@@ -107,6 +109,23 @@ struct JobResult {
     ms_per_step: f64,
     steps_executed: usize,
     wall_ms: f64,
+}
+
+/// Per-eval streaming row, emitted every 200 steps so an orchestrator can
+/// monitor convergence in real time (matches MetricsWriter.log_cycle's
+/// shape: cycle, loss, fresh_acc, best_fresh).
+#[derive(Serialize, Debug)]
+struct CycleRow {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    id: String,
+    cycle: usize,
+    step: usize,
+    loss: f32,
+    fresh_acc: f32,
+    best_fresh: f32,
+    stage: usize,
+    elapsed_s: f64,
 }
 
 fn run_job(ptx: &Arc<PtxContext>, job: &Job) -> Result<JobResult, Box<dyn Error>> {
@@ -279,6 +298,24 @@ fn run_parity(trainer: &mut PtxTrainer, job: &Job) -> Result<JobResult, Box<dyn 
             let acc = correct as f32 / 200.0;
             best_acc = best_acc.max(acc);
 
+            // Stream a per-eval row to stdout (one JSON object per line)
+            // BEFORE deciding to advance/stop. Lets the orchestrator monitor
+            // convergence in real time.
+            let cycle_row = CycleRow {
+                kind: "cycle",
+                id: job.id.clone(),
+                cycle: (step + 1) / 200,
+                step: step + 1,
+                loss: final_loss,
+                fresh_acc: acc,
+                best_fresh: best_acc,
+                stage: stage_idx,
+                elapsed_s: start.elapsed().as_secs_f64(),
+            };
+            let line = serde_json::to_string(&cycle_row).unwrap();
+            println!("{}", line);
+            std::io::stdout().flush().ok();
+
             // Curriculum advance: if accuracy on this stage crosses its
             // advance_at threshold, move to the next stage. Final stage's
             // advance_at acts as the global target_acc check.
@@ -291,6 +328,7 @@ fn run_parity(trainer: &mut PtxTrainer, job: &Job) -> Result<JobResult, Box<dyn 
             if best_acc >= job.target_acc && stage_idx + 1 == stages.len() {
                 let wall = start.elapsed().as_secs_f64() * 1000.0;
                 return Ok(JobResult {
+                    kind: "final",
                     id: job.id.clone(),
                     status: "converged".into(),
                     final_loss,
@@ -304,6 +342,7 @@ fn run_parity(trainer: &mut PtxTrainer, job: &Job) -> Result<JobResult, Box<dyn 
     }
     let wall = start.elapsed().as_secs_f64() * 1000.0;
     Ok(JobResult {
+        kind: "final",
         id: job.id.clone(),
         status: if best_acc >= 0.7 { "learning" } else { "needs_tuning" }.into(),
         final_loss,
