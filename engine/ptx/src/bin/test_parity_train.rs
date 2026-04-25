@@ -227,10 +227,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         let acc = correct as f32 / n_eval as f32;
         best_acc = best_acc.max(acc);
         let elapsed = start.elapsed().as_secs_f64();
+        // Probe learnable scale per layer — confirms d_scale is flowing.
+        let scales: Vec<String> = trainer.model.layers.iter()
+            .map(|l| format!("{:.3}", l.scale)).collect();
         println!(
-            "  [parity] cycle {:>2}  stage={}(len {}-{})  loss={:.4}  acc={:.0}%  best={:.0}%  ({:.1}s)",
+            "  [parity] cycle {:>2}  stage={}(len {}-{})  loss={:.4}  acc={:.0}%  best={:.0}%  scales=[{}]  ({:.1}s)",
             cycle + 1, stage_idx + 1, stage.min_len, stage.max_len,
-            avg_loss, acc * 100.0, best_acc * 100.0, elapsed,
+            avg_loss, acc * 100.0, best_acc * 100.0, scales.join(","), elapsed,
         );
 
         // Advance curriculum on threshold

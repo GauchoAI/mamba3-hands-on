@@ -594,6 +594,24 @@ impl PtxModel {
                 unsafe { lb.launch(cfg)? };
             }
 
+            // 3i.5 — cache y_post_out_proj per layer for d_scale = <d_x_in, y>.
+            {
+                let yp_off = li * train_scratch.layer_input_stride;
+                let n_copy = l * d;
+                let src = scratch.y_out.slice(0..n_copy);
+                let mut dst = train_scratch.layer_y_post.slice_mut(yp_off..yp_off + n_copy);
+                let n_i = n_copy as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+                lb.arg(&src);
+                lb.arg(&mut dst);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((n_copy as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
             // 3j. residual: scratch.x += scale * y_out
             {
                 let n_i = (l * d) as i32;

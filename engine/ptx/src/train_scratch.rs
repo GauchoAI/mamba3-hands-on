@@ -34,6 +34,9 @@ pub struct TrainScratch {
     pub layer_projs: CudaSlice<f32>,
     // SSM output before out-proj. Shape: (L, d_inner)
     pub layer_y_inners: CudaSlice<f32>,
+    // Per-layer y AFTER out_proj (what's multiplied by `scale` and added to
+    // the residual). Needed to compute d_scale = <d_x_in_layer, y_post>.
+    pub layer_y_post: CudaSlice<f32>,  // (n_layers, L, d_model)
     // Layer-normed + RoPE'd bp per layer (needed to reconstruct blended in
     // the adjoint scan without dividing by dt). (L, ds)
     pub layer_bps: CudaSlice<f32>,
@@ -100,6 +103,9 @@ pub struct TrainScratch {
     pub d_b_norm_b: Vec<CudaSlice<f32>>,
     pub d_c_norm_w: Vec<CudaSlice<f32>>,
     pub d_c_norm_b: Vec<CudaSlice<f32>>,
+    // Per-layer d_scale scalar (computed as <d_x_in_layer, y_post>).
+    // Applied via host-side AdamW in apply_optimizer_step.
+    pub d_scale: Vec<CudaSlice<f32>>,       // each len 1
 }
 
 impl TrainScratch {
@@ -134,6 +140,7 @@ impl TrainScratch {
         let mut d_b_norm_b = Vec::with_capacity(n_layers);
         let mut d_c_norm_w = Vec::with_capacity(n_layers);
         let mut d_c_norm_b = Vec::with_capacity(n_layers);
+        let mut d_scale = Vec::with_capacity(n_layers);
         for _ in 0..n_layers {
             d_in_proj_w.push(stream.alloc_zeros::<f32>(max_dip * d_model)?);
             d_out_proj_w.push(stream.alloc_zeros::<f32>(d_model * d_inner)?);
@@ -145,6 +152,7 @@ impl TrainScratch {
             d_b_norm_b.push(stream.alloc_zeros::<f32>(d_state)?);
             d_c_norm_w.push(stream.alloc_zeros::<f32>(d_state)?);
             d_c_norm_b.push(stream.alloc_zeros::<f32>(d_state)?);
+            d_scale.push(stream.alloc_zeros::<f32>(1)?);
         }
         let lphase = max_seq * max_n_angles.max(1);
 
@@ -161,6 +169,7 @@ impl TrainScratch {
             layer_x_normed: stream.alloc_zeros::<f32>(n_layers * li)?,
             layer_projs: stream.alloc_zeros::<f32>(n_layers * lp)?,
             layer_y_inners: stream.alloc_zeros::<f32>(n_layers * ly)?,
+            layer_y_post: stream.alloc_zeros::<f32>(n_layers * li)?,
             layer_bps: stream.alloc_zeros::<f32>(n_layers * lc)?,
             layer_cps: stream.alloc_zeros::<f32>(n_layers * lc)?,
             layer_decays: stream.alloc_zeros::<f32>(n_layers * ld)?,
@@ -200,6 +209,7 @@ impl TrainScratch {
             d_b_norm_b,
             d_c_norm_w,
             d_c_norm_b,
+            d_scale,
         })
     }
 }

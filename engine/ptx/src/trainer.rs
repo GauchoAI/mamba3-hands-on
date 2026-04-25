@@ -46,6 +46,9 @@ pub struct PtxTrainer {
     pub v_embed_norm_w: CudaSlice<f32>,
     pub m_embed_norm_b: CudaSlice<f32>,
     pub v_embed_norm_b: CudaSlice<f32>,
+    // Host-side AdamW state for per-layer scale (tiny scalar — no point on GPU).
+    pub m_scale: Vec<f32>,
+    pub v_scale: Vec<f32>,
 
     pub step: u32,
     pub lr: f32,
@@ -144,6 +147,8 @@ impl PtxTrainer {
             m_c_norm_b, v_c_norm_b,
             m_embed_norm_w, v_embed_norm_w,
             m_embed_norm_b, v_embed_norm_b,
+            m_scale: vec![0.0; nl],
+            v_scale: vec![0.0; nl],
             step: 0,
             lr,
             weight_decay,
@@ -453,6 +458,25 @@ impl PtxTrainer {
             self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
             d,
         )?;
+
+        // Host-side AdamW for per-layer scale. Read d_scale (single f32) from
+        // device, apply the update in Rust, write back to layer.scale. One
+        // D→H copy per layer per step — cheap (8 bytes × n_layers).
+        for li in 0..self.model.n_layers {
+            let g = stream.memcpy_dtov(&self.train_scratch.d_scale[li])?[0];
+            let g = if g.is_finite() { g.clamp(-1.0, 1.0) } else { 0.0 };
+            let p = self.model.layers[li].scale;
+            // no_decay for scalar: wd=0 semantically, but match uniform wd for now
+            let p = p * (1.0 - self.lr * no_decay_wd);
+            let mi = self.beta1 * self.m_scale[li] + (1.0 - self.beta1) * g;
+            let vi = self.beta2 * self.v_scale[li] + (1.0 - self.beta2) * g * g;
+            self.m_scale[li] = mi;
+            self.v_scale[li] = vi;
+            let m_hat = mi * bc1_inv;
+            let v_hat = vi * bc2_inv;
+            let p_new = p - self.lr * m_hat / (v_hat.sqrt() + self.eps);
+            self.model.layers[li].scale = p_new;
+        }
         Ok(())
     }
 
@@ -672,6 +696,30 @@ impl PtxTrainer {
         //   d_in_proj_w[li], d_out_proj_w[li]
 
         let scale = self.model.layers[li].scale;
+
+        // Step A0: compute d_scale = <d_x_in_layer, y_post_out_proj>.
+        // The forward is x_new = x_in + scale * y_post, so ∂L/∂scale =
+        // Σ_ti d_x_new[t,i] * y_post[t,i]. d_x here is d_x_new (gradient
+        // flowing in from above; it becomes d_x_in after we propagate through
+        // this layer). Zero the accumulator, then reduce_dot.
+        launch_fill_zero(stream, ptx, &mut self.train_scratch.d_scale[li], 1)?;
+        {
+            let yp_off = li * self.train_scratch.layer_input_stride;
+            let y_post_view = self.train_scratch.layer_y_post.slice(yp_off..yp_off + l * d);
+            let n_i = (l * d) as i32;
+            let mut lb = stream.launch_builder(&ptx.k.reduce_dot_f32);
+            lb.arg(&self.train_scratch.d_x);
+            lb.arg(&y_post_view);
+            lb.arg(&mut self.train_scratch.d_scale[li]);
+            lb.arg(&n_i);
+            let grid_x = (((l * d) as u32) + 255) / 256;
+            let cfg = LaunchConfig {
+                grid_dim: (grid_x, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
 
         // Step A: d_y_out = d_x * scale;  save d_residual = d_x (we'll overwrite d_x later)
         // We use d_y_out as the "d_y_out" buffer, d_x as d_residual in place (we'll use it later).

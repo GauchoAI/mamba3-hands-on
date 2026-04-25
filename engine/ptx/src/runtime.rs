@@ -41,6 +41,7 @@ pub struct Kernels {
     pub rope_bwd: CudaFunction,
     pub scatter_add_to_proj: CudaFunction,
     pub gather_slice_from_proj: CudaFunction,
+    pub reduce_dot_f32: CudaFunction,
 }
 
 pub struct PtxContext {
@@ -125,6 +126,7 @@ impl PtxContext {
             rope_bwd: module.load_function("rope_bwd")?,
             scatter_add_to_proj: module.load_function("scatter_add_to_proj")?,
             gather_slice_from_proj: module.load_function("gather_slice_from_proj")?,
+            reduce_dot_f32: module.load_function("reduce_dot_f32")?,
         };
 
         Ok(Self {

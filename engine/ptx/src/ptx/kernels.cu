@@ -323,6 +323,33 @@ extern "C" __global__ void gather_slice_from_proj(
     }
 }
 
+// ---------- reduce_dot_f32 --------------------------------------------------
+// Computes out[0] += sum_i(a[i] * b[i]) with tree reduction across blocks.
+// Two-phase: each block reduces its tile, then atomicAdds the partial sum
+// into out[0]. Caller must zero out[0] first.
+// Grid: (ceil(n/256),), Block: (256,)
+extern "C" __global__ void reduce_dot_f32(
+    const float* __restrict__ a,
+    const float* __restrict__ b,
+    float* __restrict__ out,   // (1,)
+    int n
+) {
+    __shared__ float smem[256];
+    int tid = threadIdx.x;
+    int i0 = blockIdx.x * blockDim.x + tid;
+
+    float v = (i0 < n) ? a[i0] * b[i0] : 0.0f;
+    smem[tid] = v;
+    __syncthreads();
+
+    // Tree reduce across block
+    for (int stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (tid < stride) smem[tid] += smem[tid + stride];
+        __syncthreads();
+    }
+    if (tid == 0) atomicAdd(out, smem[0]);
+}
+
 // ---------- scatter_add_to_proj ---------------------------------------------
 // Adds src[t, n] into d_proj[t * dip + slice_off + n] for all (t, n).
 // Used to fold d_bp_raw / d_cp_raw (post layer-norm bwd, shape L*ds) back
