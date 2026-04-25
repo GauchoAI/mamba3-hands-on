@@ -893,9 +893,11 @@ impl PtxTrainer {
         //   d_proj       (atomic-add'd by gate/scan/bx + scatter from LN bwd)
         //   d_bp_post    (atomic-add'd by bx_bwd)
         //   d_cp_post    (atomic-add'd by ssm_scan_bwd_full)
+        //   d_trap_pre   (atomic-add'd by bx_bwd)
         launch_fill_zero(stream, ptx, &mut self.train_scratch.d_proj, l * dip)?;
         launch_fill_zero(stream, ptx, &mut self.train_scratch.d_bp_post, l * ds)?;
         launch_fill_zero(stream, ptx, &mut self.train_scratch.d_cp_post, l * ds)?;
+        launch_fill_zero(stream, ptx, &mut self.train_scratch.d_trap_pre, l * nh)?;
 
         // Step D: gate_bwd writes d_proj[z slice] + d_y_pregate
         {
@@ -1028,12 +1030,38 @@ impl PtxTrainer {
             lb.arg(dt_bias_ref);
             lb.arg(&mut self.train_scratch.d_proj);
             lb.arg(&mut self.train_scratch.d_bp_post);
+            lb.arg(&mut self.train_scratch.d_trap_pre);
             lb.arg(&l_i); lb.arg(&h_i); lb.arg(&hd_i); lb.arg(&ds_i); lb.arg(&di_i); lb.arg(&dip_i);
             let smem_bytes = (hd * ds) as u32 * 4;
             let cfg = LaunchConfig {
                 grid_dim: (nh as u32, 1, 1),
                 block_dim: ((hd * ds) as u32, 1, 1),
                 shared_mem_bytes: smem_bytes,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+
+        // Step F1.5: Convert d_trap_pre (accumulated by bx_bwd) into
+        // d_proj[tr_off + h] by applying the sigmoid' factor trap·(1-trap).
+        // Without this, in_proj_w[trap_rows] never receives a gradient and
+        // the model can't learn how much to mix in bx_prev across timesteps.
+        {
+            let dc_off = li * self.train_scratch.layer_decay_stride;
+            let trap_view = self.train_scratch.layer_traps.slice(dc_off..dc_off + l * nh);
+            let l_i = l as i32;
+            let h_i = nh as i32;
+            let di_i = di as i32;
+            let ds_i = ds as i32;
+            let dip_i = dip as i32;
+            let mut lb = stream.launch_builder(&ptx.k.trap_to_proj_bwd);
+            lb.arg(&self.train_scratch.d_trap_pre);
+            lb.arg(&trap_view);
+            lb.arg(&mut self.train_scratch.d_proj);
+            lb.arg(&l_i); lb.arg(&h_i); lb.arg(&di_i); lb.arg(&ds_i); lb.arg(&dip_i);
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (nh.max(32) as u32, 1, 1),
+                shared_mem_bytes: 0,
             };
             unsafe { lb.launch(cfg)? };
         }

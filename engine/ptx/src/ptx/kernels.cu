@@ -1829,6 +1829,9 @@ extern "C" __global__ void bx_bwd(
     const float* __restrict__ dt_bias,
     float* __restrict__ d_proj,
     float* __restrict__ d_bp_post,      // (L, ds) — d w.r.t. post-LN+RoPE bp
+    float* __restrict__ d_trap_pre,     // (L, H)  — d w.r.t. trap (pre-sigmoid'd);
+                                        //          to convert to d_tr_raw, multiply
+                                        //          by trap*(1-trap) outside.
     int L, int H, int hd, int ds, int di, int dip
 ) {
     int h = blockIdx.x;
@@ -1858,20 +1861,28 @@ extern "C" __global__ void bx_bwd(
         float bp_cur = bp[t * ds + n];
 
         // Current-time contributions (bp[t] · x[t])
+        float bx_cur_full = bp_cur * x_cur;   // = bx_cur for d_trap below
         float d_bp_cur_n = d_blended * tr * x_cur;
         atomicAdd(&d_bp_post[t * ds + n], d_bp_cur_n);
         float d_x_cur_partial = d_blended * tr * bp_cur;
 
         // Cross-time contributions for t >= 1: bp[t-1] · x[t-1] with (1-trap[t]).
         float d_x_prev_partial = 0.0f;
+        float bx_prev_full = 0.0f;
         if (t > 0) {
             float x_prev  = proj[(t - 1) * dip + di + h * hd + p];
             float bp_prev = bp[(t - 1) * ds + n];
             float one_mtr = 1.0f - tr;
+            bx_prev_full = bp_prev * x_prev;
             float d_bp_prev_n = d_blended * one_mtr * x_prev;
             atomicAdd(&d_bp_post[(t - 1) * ds + n], d_bp_prev_n);
             d_x_prev_partial = d_blended * one_mtr * bp_prev;
         }
+        // d_trap_pre[t, h] += Σ_{p,n} d_blended · (bx_cur − bx_prev)
+        // We don't reduce locally here — atomicAdd into d_trap_pre[t, h] from
+        // every (p, n) thread for this (t, h) block.
+        float d_trap_local = d_blended * (bx_cur_full - bx_prev_full);
+        atomicAdd(&d_trap_pre[t * H + h], d_trap_local);
 
         // Reduce over n to get d_x[t,h,p] += sum_n d_x_cur_partial
         smem[tid] = d_x_cur_partial;
@@ -1899,6 +1910,25 @@ extern "C" __global__ void bx_bwd(
             __syncthreads();
         }
     }
+}
+
+// ---------- trap_to_proj_bwd ------------------------------------------------
+// Given d_trap[t, h] (gradient w.r.t. trap = sigmoid(tr_raw)) and the cached
+// trap value, write d_proj[t*dip + tr_off + h] = d_trap · trap · (1 − trap).
+// Grid: (L,), Block: (H,)
+extern "C" __global__ void trap_to_proj_bwd(
+    const float* __restrict__ d_trap,     // (L, H)
+    const float* __restrict__ trap_in,    // (L, H) — sigmoid(tr_raw) from forward cache
+    float* __restrict__ d_proj,           // (L, dip)
+    int L, int H, int di, int ds, int dip
+) {
+    int t = blockIdx.x;
+    int h = threadIdx.x;
+    if (t >= L || h >= H) return;
+    int tr_off = 2 * di + 2 * ds + 2 * H;
+    float tr = trap_in[t * H + h];
+    float dt_pre = d_trap[t * H + h];
+    d_proj[t * dip + tr_off + h] = dt_pre * tr * (1.0f - tr);
 }
 
 // ---------- embed_scatter_bwd -----------------------------------------------

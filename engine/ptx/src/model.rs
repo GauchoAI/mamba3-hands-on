@@ -537,6 +537,24 @@ impl PtxModel {
                 };
                 unsafe { lb.launch(cfg)? };
             }
+            // Cache trap (= sigmoid(tr_raw)) per layer for trap_to_proj_bwd.
+            {
+                let d_off = li * train_scratch.layer_decay_stride;
+                let d_len = l * nh;
+                let mut dst = train_scratch.layer_traps.slice_mut(d_off..d_off + d_len);
+                let src = scratch.trap.slice(0..d_len);
+                let n_i = d_len as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+                lb.arg(&src);
+                lb.arg(&mut dst);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((d_len as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+            }
 
             // 3h. ssm_scan_cached — writes y_inner AND states to per-layer buffers
             let y_off = li * train_scratch.layer_yinner_stride;
