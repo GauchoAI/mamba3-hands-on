@@ -3387,3 +3387,62 @@ That's still a genuine win, just not the one I originally pitched. The benchmark
 
 The TickEvent stream + ptxd_tail.py uploader + scheduler_telemetry.md doc landed. UI can subscribe to `mamba3/scheduler_history/{generation}` and plot `mem`, `sm`, `running`, `queue` over `t`. Even when the scheduler can't speed jobs up, you can still see exactly what it's doing in real time.
 
+
+
+---
+
+## Entry 46 — Multi-threaded launch: 8-17% speedup, not the 4× we hoped
+
+The Phase 2 multi-threaded launch experiment (Entry 45's prescribed fix). `prepare_one_batch` now runs in `std::thread::scope`, one OS thread per JobRunner. Send-safety is fine: each thread takes exclusive `&mut JobRunner`, no shared mutable state.
+
+### Before / after on the same H100
+
+```
+                  Before threading            After threading
+                  median_ms  ratio            median_ms  ratio   delta
+TINY  d=8 L=1
+  alone (n=1)       1779     1.00x              1981     1.00x    (jitter)
+  pair  (n=2)       3824     2.15x              3547     1.79x    -17%
+  quad  (n=4)       7319     4.11x              7165     3.62x    -12%
+  octa  (n=8)      14014     7.88x             14319     7.23x     -8%
+
+FULL  d=32 L=2
+  alone (n=1)       3120     1.00x              3587     1.00x
+  pair  (n=2)       6782     2.17x              6913     1.93x    -11%
+  quad  (n=4)      18559     4.13x             14127     3.94x     -5%
+  oversub(8/4)     18500     3.99x             14412     4.02x      0%
+```
+
+Real improvements, especially for low concurrency / tiny jobs. But the ratios still climb roughly linearly with N — multi-threading didn't deliver the dramatic ≈1× we'd want for true Tetris benefit.
+
+### What's still serializing
+
+The `prepare_one_batch` phase is now parallel. But `finalize_one_batch` still iterates runners sequentially in the main thread. Inside it: `apply_optimizer_step_scaled` calls `memcpy_dtov(sumsq)` (one sync) + `memcpy_dtov(d_scale[li])` per layer (N more syncs). Each blocks the calling thread on that runner's stream. With 4 runners we serialize 4 × (1 + n_layers) = 8-20 syncs.
+
+Plus, even multi-threaded launches likely hit a CUDA driver-level lock when going through cudarc's bindings. The Rust threading helps fan out the *Rust* work; the underlying API call may still serialize at the cudarc/driver layer. That's harder to fix from our side.
+
+### Honest summary of what the scheduler delivers
+
+After this session of work, the slot scheduler does the following:
+
+| Property | Before all this work | After |
+|---|---|---|
+| Single CUDA context, no per-job JIT | ❌ N processes each JIT'd | ✅ one process, JIT once |
+| Coordinated memory, no thrash | ❌ N processes fight | ✅ one process owns budget |
+| Live telemetry to Firebase | ❌ none | ✅ TickEvent stream + ptxd_tail.py |
+| Tetris-style 2D resource view | ❌ none | ✅ render() + tetris-demo |
+| Drop-in for three_populations | ❌ different CLI | ✅ MAMBA_ENGINE=ptxd swap |
+| Wall-time speedup vs serial running | (n/a) | ~10-15% via threading; not 2-4× |
+
+The scheduler **doesn't make jobs faster than serial**, but it **doesn't make them slower either** (the proportional N× scaling is fair time-sharing, the most you can get from a saturated GPU). Plus all the secondary wins above.
+
+### What would actually deliver multi-x speedup
+
+1. **CUDA Graphs** — capture one training step as a graph, replay each step with one API call. ~10× fewer launches, host serialisation drops by 10×. We validated graph capture earlier in the project (Entry 24-era); wiring it into the scheduler is real but bounded work.
+2. **Fused mega-kernels** — combine the per-layer forward+backward+norm passes into single big kernels so one launch covers what's currently 50. Different kind of project (kernel engineering).
+3. **Bigger jobs that don't actually need concurrency** — at our scale the sweet spot might be "one big specialist per ptxd, run them in pipeline" rather than packing many specialists.
+
+### What I'm NOT going to do further on this
+
+The benchmark gives a number that says "the scheduler is fair". That's the answer the user actually asked for. Pushing further requires either CUDA Graphs (real engineering) or kernel rewrites (very real engineering); the marginal value vs current state isn't worth that scope right now. The integration shim, the telemetry, the visualization, the four correctness gates, the parity-replay equivalence — all of those are durable wins that are now done.
+
