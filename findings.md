@@ -3158,3 +3158,84 @@ The directory should be fresh (or use the existing one — the DB schema is unch
 
 Phase 2 ships. The GA orchestrator can now use the PTX engine in production with one environment variable.
 
+
+
+---
+
+## Entry 43 — The Tetris view, the benchmark, and the concurrency surgery
+
+The user pushed back on a line: "having a queue without a 2D resource view is just a queue." Right. Phase 2 had a queue. It needed the actual *Tetris*: visualize the GPU as a 2D budget (memory × SMs), pack jobs into it, prove jobs in the pack take the same time as jobs running alone.
+
+### What landed
+
+1. **Resource estimates per Job** — `estimate_job_memory_bytes(job)` and `estimate_job_sm_blocks(job)`. Deterministic from the job's config; for a default specialist d=32 L=2 it's ~3 MB and ~16 SM-blocks per job.
+
+2. **Scheduler budget tracking** — `Scheduler` now has `mem_budget`, `sm_budget`, `used_mem`, `used_sm`. Default budgets are H100 conservative (64 GB / 132 SMs). `admit()` only pulls a queued job if its estimate fits in the remaining budget; `pump_one_step` releases the budget back when a job finishes. `with_budget()` lets tests override.
+
+3. **`render()` method** — produces an ASCII frame:
+    ```
+    GPU H100   mem [█████████░░░░░░░░░░░░░░░░░░░░░]  3.0%  (3MB / 64.0GB)
+               sm  [█████████████████░░░░░░░░░░░░░] 56.8%  (75 / 132 blocks)
+
+      slot 1:    alpha step  600/1500 [████████░░░░░░░░░░░░] 40.0%  acc= 51.5%  loss=0.7098  mem=348KB sm=16
+      slot 2:    bravo step  600/2000 [██████░░░░░░░░░░░░░░] 30.0%  acc= 56.5%  loss=0.6703  mem=564KB sm=16
+      slot 3:  charlie step  600/1500 [████████░░░░░░░░░░░░] 40.0%  acc= 52.0%  loss=0.6758  mem=564KB sm=16
+      slot 4:    delta step  600/1500 [████████░░░░░░░░░░░░] 40.0%  acc= 51.5%  loss=0.8666  mem=2MB    sm=27
+
+      queue: 4 waiting [echo foxtrot golf hotel]
+    ```
+
+4. **`tetris-demo` binary** — submits 8 heterogeneous parity jobs, runs the scheduler, ANSI-clears + prints a frame after every event. You can watch slots fill, jobs finish, new ones admitted from the queue. The whole rectangle shifting in real time, exactly as asked for.
+
+5. **`scheduler-benchmark` binary** — the diagnostic the user explicitly asked for: "what happens if you have a single job for the entire cluster? How much time does it spend? And that should be the same amount that it spends whenever we push to the limit."  Runs identical jobs ALONE (n=1), PAIRED (n=2), QUAD (n=4), OVERSUBSCRIBED (8 in 4 slots) and measures the active wall-time ratio.
+
+   First measurement was the brutal honest part:
+
+    ```
+    regime          median_ms   ratio_vs_alone
+    alone (n=1)        4639.6   1.00x
+    pair  (n=2)        9284.8   2.00x   ← 2 jobs take 2× as long
+    quad  (n=4)       18559.4   4.00x   ← 4 jobs take 4× as long
+    oversub (8/4)     18500.0   3.99x
+    ```
+
+   Pure serialization. The Tetris view showed the slots filling, but the GPU was running them one at a time. Why: every batch of every runner called `stream.synchronize() + memcpy_dtov(loss)` to read the loss back for reporting. Different streams ARE running in parallel from CUDA's perspective, but the host code was bottlenecking — runner 0's sync blocked before runner 1's launch even started.
+
+### The two-step fix
+
+**Step 1 — remove per-batch sync.** `compute_gradients_with_zero` no longer syncs or reads loss; returns `Ok(0.0)`. Loss is now read explicitly via the new `read_last_loss_blocking()`, which JobRunner only calls at eval boundaries (every 200 steps). This unblocks per-batch concurrency.
+
+**Step 2 — prepare/finalize split in pump_one_step.** Before:
+```
+for runner in running:
+    runner.advance_one_batch()   // launch+sync interleaved per runner
+```
+Each runner blocked on its own AdamW sync before the next runner started.
+
+After:
+```
+for runner in running:
+    runner.prepare_one_batch()    // queue B forward+backward kernels, no sync
+for runner in running:
+    runner.finalize_one_batch()   // AdamW (has its own stream syncs) + eval
+```
+By the time Phase 1 exits, all N runners' streams have B kernels each queued. The GPU co-executes them. When Phase 2 syncs runner 0's stream, the GPU has been running 1..N-1's kernels in parallel for a while — so the actual blocking time per runner is much less than the alone case.
+
+### The remaining sync points
+
+For the truly-zero-interference goal, two more sync points exist in `apply_optimizer_step_scaled`:
+
+- One `memcpy_dtov(sumsq)` for global-norm gradient clipping
+- N `memcpy_dtov(d_scale[li])` per layer for host-side scale AdamW
+
+Each of these blocks ONLY on the runner's own stream, so in the new prepare/finalize structure they should overlap with other runners' GPU work. If the benchmark still shows ratios above ~1.5×, the next surgery is to either batch the d_scale reads into one memcpy (combine into one buffer) or move the scale AdamW onto a GPU kernel.
+
+### Awaiting SSH to verify
+
+The benchmark will tell us:
+- ratio == 1.0×: perfect interference-free packing
+- ratio < 1.5×: the prepare/finalize split worked, jobs co-execute
+- ratio still > 2×: deeper sync bottleneck; next surgery needed
+
+This is the right way to make progress: a benchmark that converts "is the scheduler good?" into a number.
+
