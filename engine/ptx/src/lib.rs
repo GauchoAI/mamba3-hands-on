@@ -3,12 +3,14 @@
 
 pub mod model;
 pub mod runtime;
+pub mod scheduler;
 pub mod scratch;
 pub mod train_scratch;
 pub mod trainer;
 
 pub use model::PtxModel;
 pub use runtime::PtxContext;
+pub use scheduler::{Job, JobRunner, Scheduler, SchedulerEvent, Stage};
 pub use scratch::PtxScratch;
 pub use train_scratch::TrainScratch;
 pub use trainer::PtxTrainer;
