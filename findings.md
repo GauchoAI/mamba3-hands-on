@@ -2487,3 +2487,79 @@ The remaining work to close the convergence gap is finite and named:
 3. Re-run single-step-check; expect every tensor's max_rel to fall to ~1e-5.
 4. Re-run end-to-end parity training; expect 100% in 2 cycles, matching PyTorch.
 
+
+
+---
+
+## Entry 33 — Trap backward wired; angles+DT_mean chain is the last item
+
+After Entry 32 named the missing slices, wired the simpler one.
+
+**Trap backward**, now in:
+- `bx_bwd` accumulates `d_trap_pre[t, h] += Σ_{p,n} d_blended · (bx_cur − bx_prev)` (one extra atomicAdd per inner thread; values already in registers from the cross-time computation, so it's a free piggyback)
+- new `trap_to_proj_bwd` kernel converts `d_trap_pre` → `d_proj[tr_off + h]` via the σ' factor `trap·(1-trap)`
+- forward caches `scratch.trap` per layer in `layer_traps`
+
+Single-step-check after trap is wired:
+```
+L0.in_proj_w mean_abs:  6.43e-5 → 4.23e-5  (~34% closer to PyTorch)
+L0.in_proj_w max_rel:   1.620 → 1.620      (unchanged — angles still missing)
+```
+
+So d_tr_raw was real and contributing — the mean came down because the `trap_off` rows of in_proj_w are now correct. The max_rel didn't move because some other slice still has zero-where-it-should-be-nonzero, and that single worst element dominates.
+
+**The remaining slice: angles.** Forward chain:
+```
+DT          = softplus(dd_dt + dt_bias)   (B, L, H)
+DT_mean     = DT.mean(dim=-1)             (B, L)
+phase_step  = angles · DT_mean            (B, L, dS/2)   ← angles is per-(t,k) from proj
+phase       = cumsum(phase_step, dim=L)   (B, L, dS/2)
+B/C_rot     = apply_rope_pairs(B/C, phase)
+```
+Backward chain (NOT wired):
+```
+d_phase     = ∂L/∂phase   ← needs a NEW output from rope_bwd (currently rope_bwd
+                            just rotates d_v in-place; doesn't produce d_phase).
+                            d_phase[t,k] = Σ_{paired-dims} (v_e' · dv_o' − v_o' · dv_e')
+                            for both Bp and Cp paths (sum the two contributions).
+d_phase_step[t,k] = Σ_{t' ≥ t} d_phase[t',k]    (reverse cumsum)
+d_angles[t,k]     = d_phase_step[t,k] · DT_mean[t]
+                    (writes to d_proj[t·dip + angles_off + k])
+d_DT_mean[t]      = Σ_k d_phase_step[t,k] · angles[t,k]
+                    (this then contributes ANOTHER term to d_DT[t,h] = d_DT_mean[t] / H,
+                    flowing into the existing dt chain on top of d_decay's contribution
+                    to d_dt[t,h] in ssm_param_grads)
+```
+
+That's about 4 kernels of work:
+1. Modify `rope_bwd` to take a `d_phase` output buffer (or a sibling kernel `rope_phase_grad` that runs alongside).
+2. `reverse_cumsum_f32(d_phase, out, L, dS/2)` — straightforward.
+3. `phase_step_bwd(d_phase_step, angles_proj_view, DT_mean, d_proj_angles, d_DT_mean)` — splits to the two outputs.
+4. Add the d_DT_mean contribution to the existing `ssm_param_grads` `d_dt` accumulation (one extra term in the `d_dt = ...` line).
+
+Plus caching of phase, angles, and DT_mean per layer — phase already cached as `layer_phases`; DT_mean is per-layer scratch (`scratch.dt_mean`) and would need a `layer_dt_means` buffer; angles is just the slice of `layer_projs`, no extra cache.
+
+Once that lands, single-step-check should show every tensor's max_rel down to ~1e-5, fd-check should re-PASS at 74-75/75, and parity training should match PyTorch's 100%-in-2-cycles behavior.
+
+### Where the methodology stands at end of session
+
+We now have **three correctness gates** that compose:
+
+| Gate | What it tests | Catches | Misses |
+|---|---|---|---|
+| `fd-check` | analytical grad ≈ FD-computed grad of *our* loss | arithmetic kernel bugs | missing-gradient-path bugs (selection bias on which indices) |
+| `forward-parity` | bit-equality of forward output vs PyTorch reference | architecture-port bugs in the forward | nothing forward-related (it's exact) |
+| `single-step-check` | post-AdamW weight bit-equality vs PyTorch one step | missing gradient paths, optimizer mismatches | requires PyTorch (slower iteration) |
+
+**The combined failure mode catalogue for kernel-based ML systems:**
+1. Forward differs from reference → caught by forward-parity
+2. Backward arithmetic wrong → caught by fd-check
+3. Backward path missing → caught by single-step-check (max_rel >> 1 with small mean)
+4. Loss formulation wrong → caught by reading the reference (Entry 29 fix)
+5. Optimizer config wrong → caught by single-step-check (uniform delta on ALL tensors)
+6. Training-loop bookkeeping wrong (wrong batching, double-zeroing, etc.) → caught by per-step weight comparison
+
+Each failure mode has a specific signature in the gates. Together they're a near-complete check that "your training loop is doing what PyTorch's autograd would do".
+
+This pattern is the takeaway: **build the gates first, then implement against them.** Once a gate is in place, every kernel change becomes a closed-loop debugging session — the gate tells you exactly what's wrong, and you stop hand-waving about whether it's "kernel bugs vs hyperparameters vs init".
+
