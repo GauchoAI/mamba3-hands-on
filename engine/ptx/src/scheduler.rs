@@ -40,6 +40,58 @@ pub struct Stage {
     pub advance_at: f32,
 }
 
+/// Loss function. Tagged enum so the GA can mutate `loss: {type: ce_kd, ...}`
+/// in JSON and ptxd dispatches to the right path. New variants land as new
+/// arms — no existing call sites change.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Loss {
+    /// Plain cross-entropy on the supervised positions. Default.
+    Ce,
+    /// CE on the hard target blended with KL on a teacher distribution.
+    /// Reads teacher logits per supervised position from the batch file
+    /// (format v2). Match specialist_trainer's hardcoded 30% weight by
+    /// passing `kd_weight: 0.3` and `temperature: 1.0`.
+    CeKd { kd_weight: f32, temperature: f32 },
+    /// Focal loss (γ-modulated CE). Categorical mutation in mutations.yaml.
+    /// Phase 6+: stub for now, falls back to plain CE until kernel lands.
+    Focal { gamma: f32 },
+    /// Label-smoothed CE. Categorical mutation in mutations.yaml. Stub.
+    LabelSmooth { smoothing: f32 },
+}
+impl Default for Loss { fn default() -> Self { Loss::Ce } }
+
+/// Optimizer dispatch. AdamW is the only implemented variant today;
+/// Lion is a categorical mutation in mutations.yaml so it has a stub.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Optimizer {
+    AdamW { beta1: f32, beta2: f32, eps: f32 },
+    /// Stub — Lion isn't in the trainer yet. Falls back to AdamW with
+    /// AdamW defaults so the GA's lion mutation doesn't crash.
+    Lion { beta1: f32, beta2: f32 },
+}
+impl Default for Optimizer {
+    fn default() -> Self {
+        Optimizer::AdamW { beta1: 0.9, beta2: 0.999, eps: 1e-8 }
+    }
+}
+
+/// Learning-rate schedule. Today we only do linear warmup → flat;
+/// cosine and warm-restarts are categorical mutations that should
+/// land as new variants.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Schedule {
+    WarmupFlat { warmup_steps: u32 },
+    /// Stub for the warm_restarts mutation. Falls back to WarmupFlat
+    /// until the cosine kernel lands.
+    WarmRestarts { warmup_steps: u32, restart_period: u32 },
+}
+impl Default for Schedule {
+    fn default() -> Self { Schedule::WarmupFlat { warmup_steps: 200 } }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct Job {
     pub id: String,
@@ -85,6 +137,22 @@ pub struct Job {
     /// construction; evaluation iterates over the file repeatedly so a
     /// few hundred examples suffice for many cycles.
     #[serde(default)] pub eval_batches_path: Option<String>,
+
+    /// Loss function. Default: plain cross-entropy. The GA mutates this
+    /// via `mutations.yaml::loss_fn`. Variants beyond `Ce` that aren't
+    /// implemented yet (focal, label_smooth) currently fall back to CE
+    /// in the trainer with a stderr warning — they don't crash, they
+    /// just train as plain CE until their kernels land.
+    #[serde(default)] pub loss: Loss,
+
+    /// Optimizer. Default: AdamW. Mutates via `mutations.yaml::optimizer`.
+    /// Lion is currently a stub that falls back to AdamW.
+    #[serde(default)] pub optimizer: Optimizer,
+
+    /// LR schedule. Default: warmup→flat with 200 warmup steps. Mutates
+    /// via `mutations.yaml::warm_restarts`. WarmRestarts currently falls
+    /// back to WarmupFlat.
+    #[serde(default)] pub schedule: Schedule,
 }
 
 fn d_default_d_model() -> usize { 32 }
@@ -231,17 +299,58 @@ impl JobRunner {
 
         let gpu_model = PtxModel::from_cpu_on_stream(&cpu_model, ctx.clone(), stream.clone(), max_seq)?;
         let mut trainer = PtxTrainer::new(gpu_model, job.lr, job.weight_decay, max_seq)?;
-        // Resume regression mitigation: when loading from a checkpoint, AdamW's
-        // first-moment / second-moment buffers are zero, but the weights are
-        // already at (or near) a minimum. The naive default (warmup=200) lets
-        // the first ~50 steps do real damage to a 100%-accurate checkpoint
-        // because (a) per-step gradients are tiny but nonzero (PTX/PyTorch
-        // training paths aren't bit-exact, Entry 30), and (b) Adam's bias-
-        // corrected moment ratio amplifies them. Bumping warmup gives the
-        // moment estimates time to settle before the optimizer applies real
-        // weight updates. Proper fix is round-tripping m/v in save_bin (TODO).
+
+        // Apply Optimizer config. AdamW is the only fully implemented variant;
+        // Lion is a stub that falls back to AdamW with a stderr warning so the
+        // GA's lion mutation doesn't crash a job.
+        match &job.optimizer {
+            Optimizer::AdamW { beta1, beta2, eps } => {
+                trainer.beta1 = *beta1;
+                trainer.beta2 = *beta2;
+                trainer.eps   = *eps;
+            }
+            Optimizer::Lion { beta1, beta2 } => {
+                eprintln!("[ptxd] {} optimizer=lion not yet implemented; falling back to AdamW (beta1={}, beta2={}, eps=1e-8)", job.id, beta1, beta2);
+                trainer.beta1 = *beta1;
+                trainer.beta2 = *beta2;
+                trainer.eps   = 1e-8;
+            }
+        }
+
+        // Apply Schedule config. WarmRestarts is a stub that maps to plain
+        // warmup-flat for now.
+        match &job.schedule {
+            Schedule::WarmupFlat { warmup_steps } => {
+                trainer.warmup_steps = *warmup_steps;
+            }
+            Schedule::WarmRestarts { warmup_steps, restart_period } => {
+                eprintln!("[ptxd] {} schedule=warm_restarts not yet implemented; falling back to warmup_flat (warmup={}, ignoring restart_period={})", job.id, warmup_steps, restart_period);
+                trainer.warmup_steps = *warmup_steps;
+            }
+        }
+
+        // Loss-variant warning. The CE kernel is the only one that exists;
+        // Phase 4 lands CeKd. Falling back without crashing keeps the GA's
+        // mutation surface alive.
+        match &job.loss {
+            Loss::Ce => {}
+            Loss::CeKd { kd_weight, temperature } => {
+                eprintln!("[ptxd] {} loss=ce_kd kd_weight={} temperature={} — kernel not yet implemented; training as plain CE", job.id, kd_weight, temperature);
+            }
+            Loss::Focal { gamma } => {
+                eprintln!("[ptxd] {} loss=focal gamma={} — kernel not yet implemented; training as plain CE", job.id, gamma);
+            }
+            Loss::LabelSmooth { smoothing } => {
+                eprintln!("[ptxd] {} loss=label_smooth smoothing={} — kernel not yet implemented; training as plain CE", job.id, smoothing);
+            }
+        }
+
+        // Resume regression mitigation (Entry 49). Overrides the schedule's
+        // warmup_steps: we need a longer warmup specifically when loading
+        // from a checkpoint to keep AdamW's first updates tiny while m/v
+        // moments settle. Phase 5 (optimizer state round-trip) removes this.
         if job.init_from_bin.is_some() {
-            trainer.warmup_steps = 500;
+            trainer.warmup_steps = trainer.warmup_steps.max(500);
         }
 
         Ok(Self {

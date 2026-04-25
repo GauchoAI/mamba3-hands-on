@@ -130,6 +130,31 @@ def main():
         sys.stderr.write(f"[ptxd_specialist] batch generation FAILED: {e}\n")
         sys.exit(4)
 
+    # Map specialist_trainer's flag names → ptxd's tagged-enum job spec.
+    # Variants ptxd doesn't fully implement yet (lion, focal, label_smooth,
+    # warm_restarts) flow through and trigger a stderr warning + fallback
+    # in scheduler.rs::JobRunner::new — they don't crash the job, just
+    # fall back to the implemented behaviour. This keeps the GA's mutation
+    # surface alive end-to-end so we can audit which knobs actually do
+    # something today.
+    if args.optimizer == "adamw":
+        optimizer_cfg = {"type": "adamw", "beta1": 0.9, "beta2": 0.999, "eps": 1e-8}
+    elif args.optimizer == "lion":
+        optimizer_cfg = {"type": "lion", "beta1": 0.9, "beta2": 0.99}
+    else:
+        sys.stderr.write(f"[ptxd_specialist] unknown optimizer={args.optimizer!r}, defaulting to adamw\n")
+        optimizer_cfg = {"type": "adamw", "beta1": 0.9, "beta2": 0.999, "eps": 1e-8}
+
+    if args.loss_fn in ("ce", "stable_ce"):
+        loss_cfg = {"type": "ce"}
+    elif args.loss_fn == "focal":
+        loss_cfg = {"type": "focal", "gamma": 2.0}
+    elif args.loss_fn == "label_smooth":
+        loss_cfg = {"type": "label_smooth", "smoothing": 0.1}
+    else:
+        sys.stderr.write(f"[ptxd_specialist] unknown loss_fn={args.loss_fn!r}, defaulting to ce\n")
+        loss_cfg = {"type": "ce"}
+
     job = {
         "id": str(uuid.uuid4())[:8],
         "task": args.task,
@@ -148,6 +173,8 @@ def main():
         "save_bin": save_bin_path,
         "batches_path": train_path,
         "eval_batches_path": eval_path,
+        "optimizer": optimizer_cfg,
+        "loss": loss_cfg,
     }
     if init_from_bin:
         job["init_from_bin"] = init_from_bin
