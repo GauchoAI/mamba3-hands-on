@@ -184,7 +184,7 @@ impl PtxTrainer {
     }
 
     pub fn zero_gradients_only(&mut self) -> Result<(), Box<dyn Error>> {
-        let stream = self.model.ptx.stream.clone();
+        let stream = self.model.stream.clone();
         let ptx = self.model.ptx.clone();
         let l = self.train_scratch.max_seq;
         self.zero_gradient_buffers(&stream, l)?;

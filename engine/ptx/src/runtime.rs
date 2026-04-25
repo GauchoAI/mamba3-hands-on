@@ -142,4 +142,14 @@ impl PtxContext {
             k,
         })
     }
+
+    /// Mint a new dedicated stream on this context.  Used by the slot
+    /// scheduler to give each job its own stream so multiple jobs can
+    /// run concurrently.  Note: cudarc's event tracking is disabled for
+    /// the whole context (see `new()`), so cross-stream sync is the
+    /// caller's responsibility — for our slot-scheduler use case, jobs
+    /// don't share buffers across streams, so there's nothing to sync.
+    pub fn new_stream(&self) -> Result<Arc<cudarc::driver::CudaStream>, Box<dyn Error>> {
+        Ok(self.ctx.new_stream()?)
+    }
 }

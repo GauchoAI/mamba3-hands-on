@@ -32,6 +32,12 @@ pub struct PtxLayer {
 
 pub struct PtxModel {
     pub ptx: Arc<PtxContext>,
+    /// CUDA stream this model's kernels launch on. Defaults to
+    /// `ptx.stream` (one shared stream for the whole context). For the
+    /// Phase-2 slot scheduler, each job gets its own stream so multiple
+    /// jobs can run concurrently in the same process. Use
+    /// `PtxModel::from_cpu_on_stream` to construct on a custom stream.
+    pub stream: Arc<cudarc::driver::CudaStream>,
 
     pub d_model: usize,
     pub d_state: usize,
@@ -68,12 +74,26 @@ pub struct PtxModel {
 }
 
 impl PtxModel {
+    /// Default constructor — uses the PtxContext's main stream.  Kept for
+    /// backwards compatibility with all existing callers.
     pub fn from_cpu(
         model: &Mamba3Model,
         ptx: Arc<PtxContext>,
         max_seq: usize,
     ) -> Result<Self, Box<dyn Error>> {
         let stream = ptx.stream.clone();
+        Self::from_cpu_on_stream(model, ptx, stream, max_seq)
+    }
+
+    /// Construct a PtxModel that runs on `stream`.  Use `PtxContext::new_stream()`
+    /// to mint a stream per job for the slot scheduler — each PtxModel then
+    /// runs concurrently with others on the same context.
+    pub fn from_cpu_on_stream(
+        model: &Mamba3Model,
+        ptx: Arc<PtxContext>,
+        stream: Arc<cudarc::driver::CudaStream>,
+        max_seq: usize,
+    ) -> Result<Self, Box<dyn Error>> {
         let embed_w = stream.memcpy_stod(&model.embed_w)?;
         let embed_norm_w = stream.memcpy_stod(&model.embed_norm_w)?;
         let embed_norm_b = stream.memcpy_stod(&model.embed_norm_b)?;
@@ -162,6 +182,7 @@ impl PtxModel {
 
         Ok(Self {
             ptx,
+            stream,
             d_model: model.d_model,
             d_state: model.d_state,
             d_inner: model.d_inner,
@@ -236,7 +257,7 @@ impl PtxModel {
         tokens: &[u32],
         train_scratch: &mut TrainScratch,
     ) -> Result<Vec<f32>, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         let l = tokens.len();
         let d = self.d_model;
         let di = self.d_inner;
@@ -729,7 +750,7 @@ impl PtxModel {
     /// design that wins under GPU contention: one scheduling event instead of
     /// 45.
     pub fn forward_coop(&self, tokens: &[u32]) -> Result<Vec<f32>, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         self.upload_tokens(&stream, tokens)?;
         self.launch_coop(&stream, tokens.len())?;
         stream.synchronize()?;
@@ -820,7 +841,7 @@ impl PtxModel {
 
     /// Capture cooperative kernel launch as CUDA Graph.
     pub fn capture_graph_coop(&self, l: usize) -> Result<CudaGraph, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         let dummy: Vec<u32> = vec![0; l];
         self.upload_tokens(&stream, &dummy)?;
         self.launch_coop(&stream, l)?;
@@ -840,7 +861,7 @@ impl PtxModel {
         tokens: &[u32],
         graph: &CudaGraph,
     ) -> Result<Vec<f32>, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         self.upload_tokens(&stream, tokens)?;
         graph.launch()?;
         stream.synchronize()?;
@@ -856,7 +877,7 @@ impl PtxModel {
     /// ONE CUDA kernel, one dispatch. Logits land in scratch.logits, copied
     /// back to host.
     pub fn forward_persistent(&self, tokens: &[u32]) -> Result<Vec<f32>, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         self.upload_tokens(&stream, tokens)?;
         self.launch_persistent(&stream, tokens.len())?;
         stream.synchronize()?;
@@ -931,7 +952,7 @@ impl PtxModel {
 
     /// Capture the persistent kernel launch as a CUDA graph for replay.
     pub fn capture_graph_persistent(&self, l: usize) -> Result<CudaGraph, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         // Warm-up: resolves JIT, SMEM carveout.
         let dummy: Vec<u32> = vec![0; l];
         self.upload_tokens(&stream, &dummy)?;
@@ -952,7 +973,7 @@ impl PtxModel {
         tokens: &[u32],
         graph: &CudaGraph,
     ) -> Result<Vec<f32>, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         self.upload_tokens(&stream, tokens)?;
         graph.launch()?;
         stream.synchronize()?;
@@ -966,7 +987,7 @@ impl PtxModel {
 
     /// Forward pass using persistent scratch buffers (no per-call allocation).
     pub fn forward(&self, tokens: &[u32]) -> Result<Vec<f32>, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         self.upload_tokens(&stream, tokens)?;
         self.record_compute(&stream, tokens.len())?;
         stream.synchronize()?;
@@ -987,7 +1008,7 @@ impl PtxModel {
         tokens: &[u32],
         graph: &CudaGraph,
     ) -> Result<Vec<u32>, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         self.upload_tokens(&stream, tokens)?;
         graph.launch()?;
         // No explicit stream.synchronize() — memcpy_dtov is synchronous and
@@ -1002,7 +1023,7 @@ impl PtxModel {
     /// Capture the per-op forward + argmax as a CUDA graph. Argmax is the
     /// last node; host reads only L × u32 from scratch.preds after replay.
     pub fn capture_graph_argmax(&self, l: usize) -> Result<CudaGraph, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         // Warmup
         let dummy: Vec<u32> = vec![0; l];
         self.upload_tokens(&stream, &dummy)?;
@@ -1051,7 +1072,7 @@ impl PtxModel {
         tokens: &[u32],
         graph: &CudaGraph,
     ) -> Result<Vec<f32>, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         self.upload_tokens(&stream, tokens)?;
         graph.launch()?;
         stream.synchronize()?;
@@ -1077,7 +1098,7 @@ impl PtxModel {
         ),
         Box<dyn Error>,
     > {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         let t0 = std::time::Instant::now();
         self.upload_tokens(&stream, tokens)?;
         let t1 = std::time::Instant::now();
@@ -1100,7 +1121,7 @@ impl PtxModel {
     /// scratch.tokens via `forward_graph` on each replay — the graph only
     /// contains kernel launches, not the memcpy.
     pub fn capture_graph(&self, l: usize) -> Result<CudaGraph, Box<dyn Error>> {
-        let stream = self.ptx.stream.clone();
+        let stream = self.stream.clone();
         // Warm JIT once (kernels compiled / resolved on first launch).
         let dummy: Vec<u32> = vec![0; l];
         self.upload_tokens(&stream, &dummy)?;
