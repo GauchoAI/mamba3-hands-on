@@ -2203,20 +2203,30 @@ extern "C" __global__ void cross_entropy_fwd_bwd(
 }
 
 // ---------- kd_apply -------------------------------------------------------
-// Blends KD (knowledge-distillation) gradient into d_logits at supervised
-// positions, AFTER cross_entropy_fwd_bwd has run. Use is conditional on
-// Loss::CeKd; the CE kernel runs unchanged.
+// Adds Hinton KD gradient on TOP of the existing CE gradient at supervised
+// positions, AFTER cross_entropy_fwd_bwd has run. Conditional on Loss::CeKd;
+// the CE kernel runs unchanged.
 //
-// Math (Hinton-style KD, matching PyTorch's KLDivLoss with T):
-//   ps = softmax(student_logits[pos, :])           (NB: at T=1 for the blend)
-//   pt = softmax(teacher_logits / T)
-//   kd_grad = (1/T) * (ps - pt) * n_active_inv
-//   d_logits[pos, v] = (1 - kd_weight) * d_logits[pos, v]
-//                    + kd_weight * kd_grad[v]
+// Math (Hinton-style KD, matching specialist_trainer.py 225-239):
+//   L_total = L_CE + kd_weight * T^2 * KL(p_t || p_s)
+//   p_s_T(v) = softmax(z_s / T)(v)
+//   p_t_T(v) = softmax(z_t / T)(v)
 //
-// We compute student softmax fresh (cheap; one block per supervised pos).
-// teacher softmax uses T-scaled logits to keep the temperature semantics.
-// The (1/T) factor in front comes from differentiating through the /T scale.
+//   d L_CE   / d z_s(v) = (p_s_1(v) - onehot(target)(v)) / n_active   ← CE kernel
+//   d L_KD   / d z_s(v) = kd_weight * T * (p_s_T(v) - p_t_T(v)) / n_active
+//
+//   d_logits[pos, v] += kd_weight * T * (p_s_T - p_t_T) / n_active     ← THIS kernel
+//
+// IMPORTANT: this is ADDITIVE on top of CE — NOT a convex blend. A convex
+// blend (1-α)·CE + α·KD downweights the CE signal that does the heavy
+// lifting and was empirically shown to make training WORSE. Match
+// specialist_trainer's "loss + α·distill_loss" semantics, where the soft
+// targets reinforce CE rather than replace it.
+//
+// Both student and teacher softmax are computed at temperature T for the
+// KD term — NOT at T=1 — because that's what differentiating L_KD w.r.t.
+// z_s gives. (My earlier draft used p_s at T=1 and an erroneous 1/T
+// factor; fixed to match the textbook KD derivation.)
 //
 // Grid: (n_supervised,), Block: (256,)
 extern "C" __global__ void kd_apply(
@@ -2241,10 +2251,10 @@ extern "C" __global__ void kd_apply(
     __shared__ float warp_buf[8];
     float inv_T = 1.0f / temperature;
 
-    // ===== student softmax (no temperature for the blend, plain ps) =====
+    // ===== student softmax AT TEMPERATURE T (z_s / T) =====
     float my_max = -3.4028235e38f;
     for (int v = tid; v < V; v += blockDim.x) {
-        my_max = fmaxf(my_max, logits[pos * V + v]);
+        my_max = fmaxf(my_max, logits[pos * V + v] * inv_T);
     }
     for (int off = 16; off > 0; off >>= 1) {
         my_max = fmaxf(my_max, __shfl_xor_sync(0xffffffff, my_max, off));
@@ -2262,7 +2272,7 @@ extern "C" __global__ void kd_apply(
     __syncthreads();
     float my_sum = 0.0f;
     for (int v = tid; v < V; v += blockDim.x) {
-        my_sum += __expf(logits[pos * V + v] - s_max_st);
+        my_sum += __expf(logits[pos * V + v] * inv_T - s_max_st);
     }
     my_sum = warp_reduce_sum(my_sum);
     if (lane == 0) warp_buf[warp] = my_sum;
@@ -2275,7 +2285,7 @@ extern "C" __global__ void kd_apply(
     }
     __syncthreads();
 
-    // ===== teacher softmax with T scaling =====
+    // ===== teacher softmax AT TEMPERATURE T (z_t / T) =====
     float my_max_t = -3.4028235e38f;
     for (int v = tid; v < V; v += blockDim.x) {
         my_max_t = fmaxf(my_max_t, teacher_logits[s * V + v] * inv_T);
@@ -2309,15 +2319,16 @@ extern "C" __global__ void kd_apply(
     }
     __syncthreads();
 
-    // ===== blend d_logits[pos, :] =====
+    // ===== add KD gradient on top of CE gradient =====
+    // d_logits[pos, v] += kd_weight * T * (p_s_T - p_t_T) / n_active
+    // Coefficient: kd_weight * T * n_active_inv (precomputed below).
+    float coef = kd_weight * temperature * n_active_inv;
     float inv_sum_st = 1.0f / s_sum_st;
     float inv_sum_te = 1.0f / s_sum_te;
     for (int v = tid; v < V; v += blockDim.x) {
-        float ps = __expf(logits[pos * V + v] - s_max_st) * inv_sum_st;
-        float pt = __expf(teacher_logits[s * V + v] * inv_T - s_max_te) * inv_sum_te;
-        float kd_grad = inv_T * (ps - pt) * n_active_inv;
-        float ce_grad = d_logits[pos * V + v];
-        d_logits[pos * V + v] = (1.0f - kd_weight) * ce_grad + kd_weight * kd_grad;
+        float ps = __expf(logits[pos * V + v]         * inv_T - s_max_st) * inv_sum_st;
+        float pt = __expf(teacher_logits[s * V + v]   * inv_T - s_max_te) * inv_sum_te;
+        d_logits[pos * V + v] += coef * (ps - pt);
     }
 }
 
