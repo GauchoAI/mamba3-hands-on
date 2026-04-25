@@ -41,6 +41,13 @@ use std::io::{BufRead, Write};
 use std::sync::Arc;
 use std::time::Instant;
 
+#[derive(Deserialize, Debug, Clone)]
+struct Stage {
+    min_len: usize,
+    max_len: usize,
+    advance_at: f32,
+}
+
 #[derive(Deserialize, Debug)]
 struct Job {
     id: String,
@@ -69,6 +76,13 @@ struct Job {
     target_acc: f32,
     #[serde(default = "default_seed")]
     seed: u64,
+    /// Optional curriculum: list of (min_len, max_len, advance_at) stages.
+    /// If present, ptxd advances through stages as training accuracy crosses
+    /// each stage's advance_at threshold; n_bits per sample is sampled
+    /// uniformly in [min_len, max_len]. Mirrors problems/parity/problem.yaml.
+    /// Without this field, ptxd uses fixed-length parity at `n_bits`.
+    #[serde(default)]
+    stages: Option<Vec<Stage>>,
 }
 fn default_d_model() -> usize { 32 }
 fn default_d_state() -> usize { 16 }
@@ -107,9 +121,13 @@ fn run_job(ptx: &Arc<PtxContext>, job: &Job) -> Result<JobResult, Box<dyn Error>
 
     // Sequence layout (matching test_parity_train, which converges on
     // parity-replay): [BOS, bit, SPC, bit, SPC, ..., SEP, ANSWER, EOS].
-    // For variable-length curriculum we'd budget for the max; ptxd jobs
-    // are fixed n_bits so length is deterministic.
-    let max_seq = 1 + (2 * job.n_bits - 1).max(1) + 3;  // BOS + (bits, SPC) + SEP + ANS + EOS
+    // Budget for the largest stage in the curriculum (or fixed n_bits when
+    // no curriculum is supplied).
+    let max_n_bits = match &job.stages {
+        Some(s) if !s.is_empty() => s.iter().map(|st| st.max_len).max().unwrap_or(job.n_bits),
+        _ => job.n_bits,
+    };
+    let max_seq = 1 + (2 * max_n_bits - 1).max(1) + 3;
 
     let gpu_model = PtxModel::from_cpu(&cpu_model, ptx.clone(), max_seq.max(16))?;
     let mut trainer = PtxTrainer::new(gpu_model, job.lr, job.weight_decay, max_seq.max(16))?;
@@ -169,16 +187,27 @@ fn apply_pytorch_init(model: &mut Mamba3Model, seed: u64) {
 
 fn run_parity(trainer: &mut PtxTrainer, job: &Job) -> Result<JobResult, Box<dyn Error>> {
     let mut rng_state = job.seed;
-    let mut rng_bit = || -> u32 {
-        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
-        ((rng_state >> 33) & 1) as u32
+    let mut next_u32 = |state: &mut u64| -> u32 {
+        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (*state >> 33) as u32
     };
+    // Resolve curriculum: explicit stages, or a single fixed-length stage.
+    let stages: Vec<Stage> = match &job.stages {
+        Some(s) if !s.is_empty() => s.clone(),
+        _ => vec![Stage {
+            min_len: job.n_bits,
+            max_len: job.n_bits,
+            advance_at: 2.0,  // never advances
+        }],
+    };
+    let mut stage_idx = 0usize;
 
     let start = Instant::now();
     let mut best_acc = 0.0f32;
     let mut final_loss = 0.0f32;
 
     for step in 0..job.steps {
+        let stage = &stages[stage_idx];
         // Mini-batch with gradient accumulation: zero grads, accumulate B
         // samples, then ONE AdamW step scaled by 1/B. Matches PyTorch's
         // batched-backward semantics. Without this, per-sample SGD on
@@ -186,17 +215,20 @@ fn run_parity(trainer: &mut PtxTrainer, job: &Job) -> Result<JobResult, Box<dyn 
         trainer.zero_gradients_only()?;
         let mut last_loss = 0.0f32;
         for _ in 0..job.batch_size {
-            let mut bits = Vec::new();
+            // Sample n_bits uniformly in [min_len, max_len]
+            let span = stage.max_len - stage.min_len + 1;
+            let n_bits = stage.min_len + (next_u32(&mut rng_state) as usize) % span;
+            let mut bits = Vec::with_capacity(n_bits);
             let mut parity = 0u32;
-            for _ in 0..job.n_bits {
-                let b = rng_bit();
+            for _ in 0..n_bits {
+                let b = next_u32(&mut rng_state) & 1;
                 bits.push(b);
                 parity ^= b;
             }
             // Token layout matches test_parity_train: [BOS, bit, SPC, bit, ..., SEP, ANSWER, EOS]
             let mut tokens: Vec<u32> = vec![256];
             for (i, &b) in bits.iter().enumerate() {
-                if i > 0 { tokens.push(32); }    // SPC between bits
+                if i > 0 { tokens.push(32); }
                 tokens.push(48 + b);
             }
             tokens.push(258);
@@ -219,10 +251,12 @@ fn run_parity(trainer: &mut PtxTrainer, job: &Job) -> Result<JobResult, Box<dyn 
         if (step + 1) % 200 == 0 {
             let mut correct = 0usize;
             for _ in 0..200 {
-                let mut test_bits = Vec::new();
+                let span = stage.max_len - stage.min_len + 1;
+                let n_bits = stage.min_len + (next_u32(&mut rng_state) as usize) % span;
+                let mut test_bits = Vec::with_capacity(n_bits);
                 let mut test_parity = 0u32;
-                for _ in 0..job.n_bits {
-                    let b = rng_bit();
+                for _ in 0..n_bits {
+                    let b = next_u32(&mut rng_state) & 1;
                     test_bits.push(b);
                     test_parity ^= b;
                 }
@@ -244,7 +278,17 @@ fn run_parity(trainer: &mut PtxTrainer, job: &Job) -> Result<JobResult, Box<dyn 
             }
             let acc = correct as f32 / 200.0;
             best_acc = best_acc.max(acc);
-            if best_acc >= job.target_acc {
+
+            // Curriculum advance: if accuracy on this stage crosses its
+            // advance_at threshold, move to the next stage. Final stage's
+            // advance_at acts as the global target_acc check.
+            if acc >= stage.advance_at && stage_idx + 1 < stages.len() {
+                stage_idx += 1;
+                eprintln!("[ptxd] {} advanced to stage {}/{} at step {} (acc={:.2})",
+                    job.id, stage_idx + 1, stages.len(), step + 1, acc);
+            }
+
+            if best_acc >= job.target_acc && stage_idx + 1 == stages.len() {
                 let wall = start.elapsed().as_secs_f64() * 1000.0;
                 return Ok(JobResult {
                     id: job.id.clone(),
