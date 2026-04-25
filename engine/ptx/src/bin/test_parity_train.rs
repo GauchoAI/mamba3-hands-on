@@ -207,7 +207,18 @@ fn main() -> Result<(), Box<dyn Error>> {
         let mut loss_count = 0usize;
 
         for _step in 0..args.steps_per_cycle {
-            let mut batch_loss = 0.0f32;
+            // Mini-batch accumulation: zero grads once, accumulate across
+            // batch_size samples, then a single AdamW step scaled by 1/B.
+            // This matches PyTorch's batched-backward semantics and avoids
+            // the per-sample-AdamW thrashing that destabilises mixed-length
+            // training. (For fixed-length parity the per-sample path also
+            // works; for variable length, accumulation is the difference
+            // between bouncing-loss and convergence.)
+            trainer.zero_gradients_only()?;
+            // accumulate_gradients returns the running CUMULATIVE loss in the
+            // GPU accumulator (it's reset by zero_gradients_only via do_zero
+            // in the first call's path). The last returned value IS the sum.
+            let mut last_loss = 0.0f32;
             for _ in 0..args.batch_size {
                 let n_bits = rand_range(&mut rng_state, stage.min_len, stage.max_len);
                 let mut bits = Vec::with_capacity(n_bits);
@@ -219,7 +230,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 let mut tokens: Vec<u32> = vec![256];
                 for (i, &b) in bits.iter().enumerate() {
-                    if i > 0 { tokens.push(32); } // space (matches generator)
+                    if i > 0 { tokens.push(32); }
                     tokens.push(48 + b);
                 }
                 tokens.push(258);
@@ -227,21 +238,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 tokens.push(answer);
                 tokens.push(257);
 
-                // Mask all positions except the one that predicts the answer:
-                // tokens[L-3]=SEP → predicts tokens[L-2]=ANSWER. So the only
-                // supervised position is index L-3 (targets[L-3] = answer).
-                // Rest use u32::MAX sentinel → skipped by cross_entropy_fwd_bwd.
-                // Matches specialist_trainer.py's mask_flat semantics — without
-                // this, the loss is dominated by un-predictable bit tokens and
-                // training plateaus around log(2).
                 let mut targets: Vec<u32> = vec![u32::MAX; tokens.len()];
                 let answer_pos = tokens.len() - 3;
                 targets[answer_pos] = answer;
 
-                batch_loss += trainer.train_step(&tokens, &targets)?;
+                last_loss = trainer.accumulate_gradients(&tokens, &targets)?;
                 total_train_steps += 1;
             }
-            total_loss += batch_loss / args.batch_size as f32;
+            // Single AdamW step for the whole mini-batch. extra_g_mul = 1/B
+            // averages the accumulated sum, matching PyTorch batched semantics.
+            trainer.apply_optimizer_step_scaled(1.0 / args.batch_size as f32)?;
+            // last_loss is the cumulative sum of n_active_per_sample-normalised
+            // losses across the batch. Divide by batch size for mean.
+            total_loss += last_loss / args.batch_size as f32;
             loss_count += 1;
         }
         let avg_loss = total_loss / loss_count as f32;

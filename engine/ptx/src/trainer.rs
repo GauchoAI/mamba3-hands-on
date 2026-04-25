@@ -167,6 +167,39 @@ impl PtxTrainer {
         Ok(loss)
     }
 
+    /// Accumulating variant: forward + backward like compute_gradients_only,
+    /// but does NOT zero the gradient buffers first. Use to sum gradients
+    /// across a mini-batch of sequences before a single AdamW step.
+    /// Caller must invoke `zero_gradients_only()` before the first sample of
+    /// a batch and `apply_optimizer_step()` after the last. The returned
+    /// loss is the per-sample loss (not averaged).
+    ///
+    /// This sidesteps the per-sample-AdamW thrashing that hurts mixed-length
+    /// training (variable-length parity bounces because each sequence's
+    /// gradient drives a separate Adam step; with accumulation, the optimizer
+    /// sees the average gradient across the batch — matching PyTorch
+    /// semantics).
+    pub fn accumulate_gradients(&mut self, tokens: &[u32], targets: &[u32]) -> Result<f32, Box<dyn Error>> {
+        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/false)
+    }
+
+    pub fn zero_gradients_only(&mut self) -> Result<(), Box<dyn Error>> {
+        let stream = self.model.ptx.stream.clone();
+        let ptx = self.model.ptx.clone();
+        let l = self.train_scratch.max_seq;
+        self.zero_gradient_buffers(&stream, l)?;
+        // Also zero the GPU-side loss accumulator. The cross_entropy kernel
+        // uses atomicAdd, so without this each accumulate_gradients call
+        // would see a growing cumulative sum from prior batches.
+        let mut lb = stream.launch_builder(&ptx.k.fill_zero);
+        let n_i = 1i32;
+        lb.arg(&mut self.train_scratch.loss);
+        lb.arg(&n_i);
+        let cfg = LaunchConfig { grid_dim: (1, 1, 1), block_dim: (32, 1, 1), shared_mem_bytes: 0 };
+        unsafe { lb.launch(cfg)? };
+        Ok(())
+    }
+
     /// Forward + cross-entropy + backward, filling all gradient buffers in
     /// `train_scratch`.  **Does not** advance the AdamW step or mutate weights.
     /// Useful for finite-difference correctness tests and gradient inspection.
@@ -177,7 +210,19 @@ impl PtxTrainer {
         tokens: &[u32],
         targets: &[u32],
     ) -> Result<f32, Box<dyn Error>> {
-        self.step += 1;
+        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/true)
+    }
+
+    fn compute_gradients_with_zero(
+        &mut self,
+        tokens: &[u32],
+        targets: &[u32],
+        do_zero: bool,
+    ) -> Result<f32, Box<dyn Error>> {
+        // self.step counts AdamW steps, NOT compute_gradients calls — moved
+        // into apply_optimizer_step so accumulation across a mini-batch counts
+        // as one step. (Old behaviour: step++ here, which double-counted when
+        // accumulating across a batch.)
         let l = tokens.len();
         assert_eq!(targets.len(), l, "targets must have same length as tokens");
 
@@ -197,12 +242,11 @@ impl PtxTrainer {
         // -- Forward with activation cache
         let _logits = self.model.forward_cached(tokens, &mut self.train_scratch)?;
 
-        // -- Zero gradient buffers that accumulate via atomicAdd
-        self.zero_gradient_buffers(&stream, l)?;
-
-        // -- Compute loss + d_logits (write into train_scratch)
-        {
-            // Zero the loss accumulator
+        // -- Zero gradient + loss buffers (compute_gradients_only path only).
+        //    The accumulate path passes do_zero=false and the caller is
+        //    expected to call zero_gradients_only() before the first sample.
+        if do_zero {
+            self.zero_gradient_buffers(&stream, l)?;
             let mut lb = stream.launch_builder(&ptx.k.fill_zero);
             let n_i = 1i32;
             lb.arg(&mut self.train_scratch.loss);
@@ -346,6 +390,17 @@ impl PtxTrainer {
     /// gradients (each call advances moments).  Uses uniform weight decay
     /// across all params (see comment inside).
     pub fn apply_optimizer_step(&mut self) -> Result<(), Box<dyn Error>> {
+        self.apply_optimizer_step_scaled(1.0)
+    }
+
+    /// AdamW step with an extra gradient multiplier folded into the global-norm
+    /// clip factor. Use with gradient accumulation: after summing grads across
+    /// B samples, pass `1.0 / B` to average — produces the same effective step
+    /// as PyTorch's per-batch backward (one AdamW step per batch, not B).
+    pub fn apply_optimizer_step_scaled(&mut self, extra_g_mul: f32) -> Result<(), Box<dyn Error>> {
+        // step is incremented here (not in compute_gradients_with_zero) so
+        // gradient accumulation across a mini-batch counts as ONE step.
+        self.step += 1;
         let ptx = self.model.ptx.clone();
         let stream = ptx.stream.clone();
         let d = self.model.d_model;
@@ -430,13 +485,14 @@ impl PtxTrainer {
         }
         let sumsq = stream.memcpy_dtov(&sumsq_dev)?[0];
         let total_norm = sumsq.max(0.0).sqrt();
-        let g_mul: f32 = if total_norm.is_finite() && total_norm > MAX_NORM {
+        let clip_mul: f32 = if total_norm.is_finite() && total_norm > MAX_NORM {
             MAX_NORM / total_norm
         } else if !total_norm.is_finite() {
             0.0
         } else {
             1.0
         };
+        let g_mul = clip_mul * extra_g_mul;
 
         launch_adamw(&stream, &ptx,
             &mut self.model.embed_w, &self.train_scratch.d_embed,
