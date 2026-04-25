@@ -41,6 +41,10 @@ name = "forward-parity"
 path = "src/bin/forward_parity.rs"
 
 [[bin]]
+name = "single-step-check"
+path = "src/bin/single_step_check.rs"
+
+[[bin]]
 name = "test-parity-accuracy"
 path = "src/bin/test_parity_accuracy.rs"
 

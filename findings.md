@@ -2427,3 +2427,63 @@ Forward parity is the cleanest test the session has produced. Anything that prev
 
 `forward-parity` is now a permanent test binary (`engine/ptx/src/bin/forward_parity.rs`). Re-run it any time a forward kernel changes.
 
+
+
+---
+
+## Entry 32 — Single-step weight diff isolates the remaining backward gap
+
+Forward parity (Entry 31) ruled out the forward as the source of the convergence gap. Loss is bit-equal too. So either backward or optimizer has a residual bug. To find it: run ONE training step in PyTorch + ONE in PTX from the *same* starting weights on the *same* input, compare resulting weights tensor-by-tensor.
+
+`/tmp/single_step_compare.py` builds a PyTorch model, exports starting weights, takes one AdamW step with `clip_grad_norm(1.0)` and `lr=1e-3, wd=0.1`, exports the post-step weights and the loss. The Rust `single-step-check` binary loads the same starting weights via `from_bin`, takes one PTX `train_step` on the same tokens, and diffs every tensor.
+
+```
+PTX loss before step: 14.646230    (PyTorch: 14.646230, diff=+0.000000e0)
+```
+Loss matches **exactly** — confirming forward + cross-entropy are bit-clean.
+
+```
+Per-tensor diff (PTX after step  vs  PyTorch after step):
+               embed_w  N=   8320  max_abs=2.337e-4  mean_abs=1.430e-7  max_rel=6.739e-4
+          embed_norm_w  N=     32  max_abs=0.000e0   mean_abs=0.000e0   max_rel=0.000e0
+          embed_norm_b  N=     32  max_abs=3.492e-10 mean_abs=1.128e-10 max_rel=3.492e-7
+          L0.in_proj_w  N=   5760  max_abs=9.999e-4  mean_abs=6.433e-5  max_rel=1.620e0  ★
+         L0.out_proj_w  N=   2048  max_abs=9.686e-8  mean_abs=7.429e-10 max_rel=9.139e-6
+            L0.dt_bias  N=      4  max_abs=0.000e0   mean_abs=0.000e0   max_rel=0.000e0
+            L0.d_param  N=      4  max_abs=0.000e0   mean_abs=0.000e0   max_rel=0.000e0
+           L0.b_norm_w  N=     16  max_abs=0.000e0   mean_abs=0.000e0   max_rel=0.000e0
+           L0.b_norm_b  N=     16  max_abs=1.397e-9  mean_abs=4.657e-10 max_rel=1.399e-6
+           L0.c_norm_w  N=     16  max_abs=0.000e0   mean_abs=0.000e0   max_rel=0.000e0
+           L0.c_norm_b  N=     16  max_abs=1.397e-8  mean_abs=1.222e-9  max_rel=1.417e-5
+       L0.layer_norm_w  N=     32  max_abs=1.192e-7  mean_abs=5.588e-9  max_rel=1.191e-7
+       L0.layer_norm_b  N=     32  max_abs=3.027e-8  mean_abs=1.339e-9  max_rel=3.027e-5
+              L0.scale  N=      1  ours=+0.100990  pytorch=+0.100990  diff=+0.000e0
+          final_norm_w  N=     32  max_abs=0.000e0   mean_abs=0.000e0   max_rel=0.000e0
+          final_norm_b  N=     32  max_abs=3.492e-10 mean_abs=1.492e-10 max_rel=3.492e-7
+```
+
+Reading this:
+- 14 of 16 tensors match within FP32 noise (≤ 1e-7 absolute).
+- **`L0.in_proj_w` is the outlier: mean_abs=6.4e-5 but max_rel=1.62.** A few entries differ by *more than the value itself*; most are clean.
+- `embed_w` shows mild drift (max_abs=2.3e-4) — that's the LM-head path; gradient flows through the same chain as `in_proj_w`, so these probably co-vary.
+
+The signature "most rows correct, a few rows wildly wrong" diagnoses the bug precisely: **specific *slices* of in_proj_w have unwired backward paths.** in_proj_w has 5 functional row-slices (z / x / bp / cp / dt / a / trap / angles), and fd-check has been validating only the rows where top-magnitude indices fell — bp, cp, and dt rows. The slices fd-check never picked from are:
+
+1. **`tr_off` rows (trap raw)**. Forward: `trap = sigmoid(tr_raw)`, then `blended = trap·bx_cur + (1-trap)·bx_prev`. Our backward never accumulates `d_tr_raw = d_trap · σ'(tr_raw)` where `d_trap = Σ_{p,n} d_blended · (bx_cur − bx_prev)`. So `d_proj[tr_off]` stays at zero, and `in_proj_w[tr_rows]` only gets the residual-stream gradient (which flows through everything but is small).
+2. **`angles_off` rows (RoPE phase weights)**. Forward: `phase = cumsum(angles · DT_mean)` along time, then RoPE-rotates bp/cp using phase. Our `rope_bwd` correctly inverts the rotation w.r.t. d_v, but we never feed the d_phase contribution back to either `d_angles` or `d_DT_mean`. So `d_proj[angles_off]` is zero too.
+3. **d_DT_mean → d_dt[t, h] via the phase chain.** The phase contribution to dt_bias is missing for the same reason — the cumsum-bwd into per-head dt isn't wired.
+
+These are precisely the gradient paths that PyTorch's autograd computes for free (it walks the computation graph) and that we'd need to write by hand. fd-check missed them because none of these rows ever ranked in the top-magnitude indices for the random tensors fd-check picked from — a real selection-bias hole in the gate that we now know how to fix.
+
+**Two complementary correctness gates, post-this-session:**
+- **fd-check**: tests `∂L/∂θ` for representative indices. Catches arithmetic errors and missing kernel calls, but miss-rates depend on which indices it picks.
+- **single-step-check**: bit-compares post-AdamW-step weights against PyTorch autograd. Catches *missing gradient paths* that fd-check's top-magnitude index selection happens to miss. Doesn't need a synthetic loss — uses the real training step.
+
+Run both. fd-check is fast (one forward per index); single-step-check requires PyTorch but is exact and finds entire missing chains, not just buggy elements.
+
+The remaining work to close the convergence gap is finite and named:
+1. Wire `d_tr_raw` (trap-side backward).
+2. Wire `d_angles` and `d_DT_mean` (phase chain backward through cumsum).
+3. Re-run single-step-check; expect every tensor's max_rel to fall to ~1e-5.
+4. Re-run end-to-end parity training; expect 100% in 2 cycles, matching PyTorch.
+
