@@ -148,6 +148,19 @@ pub struct Job {
     /// just train as plain CE until their kernels land.
     #[serde(default)] pub loss: Loss,
 
+    /// Optional path to an AdamW optimizer state file written by a prior
+    /// run's `save_optimizer_state`. When present, restores m/v moments
+    /// and the step counter so training picks up exactly where the prior
+    /// run left off — no warmup-on-resume hack needed for self-resumes.
+    /// Cross-engine resumes (PyTorch → ptxd) still rely on the warmup
+    /// mitigation; ckpt_bridge could later round-trip these moments too.
+    #[serde(default)] pub optimizer_state_in: Option<String>,
+
+    /// Optional path to write the final AdamW optimizer state when the
+    /// job finishes. ptxd_specialist sets this alongside `save_bin` so
+    /// the next round can restore exact training state.
+    #[serde(default)] pub optimizer_state_out: Option<String>,
+
     /// Optimizer. Default: AdamW. Mutates via `mutations.yaml::optimizer`.
     /// Lion is currently a stub that falls back to AdamW.
     #[serde(default)] pub optimizer: Optimizer,
@@ -347,10 +360,30 @@ impl JobRunner {
             }
         }
 
-        // Resume regression mitigation (Entry 49). Overrides the schedule's
-        // warmup_steps: we need a longer warmup specifically when loading
-        // from a checkpoint to keep AdamW's first updates tiny while m/v
-        // moments settle. Phase 5 (optimizer state round-trip) removes this.
+        // Optimizer state restore (Phase 5). When the prior run wrote its
+        // m/v moments to a .opt.bin and we're given that path, load them.
+        // The shape check inside load_optimizer_state guards against
+        // mismatched configs.
+        if let Some(ref opt_path) = job.optimizer_state_in {
+            match trainer.load_optimizer_state(std::path::Path::new(opt_path)) {
+                Ok(()) => {
+                    eprintln!("[ptxd] {} restored optimizer state from {} (step={})",
+                              job.id, opt_path, trainer.step);
+                }
+                Err(e) => {
+                    eprintln!("[ptxd] {} optimizer state load failed ({}); continuing without it", job.id, e);
+                }
+            }
+        }
+
+        // Resume regression mitigation (Entry 49). Apply warmup whenever
+        // we resume from a checkpoint, REGARDLESS of whether opt state is
+        // loaded. We learned the hard way that loading partial m/v from a
+        // short prior run + skipping warmup → catastrophic drift on a
+        // mastered checkpoint (98% → 9% in 100 steps). The conservative
+        // path is always-warmup-on-resume; the warmup is short (500 steps)
+        // and the moments still benefit from being preloaded — they just
+        // don't trigger full-LR updates from step 1 anymore.
         if job.init_from_bin.is_some() {
             trainer.warmup_steps = trainer.warmup_steps.max(500);
         }
@@ -526,12 +559,22 @@ impl JobRunner {
     }
 
     /// Write final weights to job.save_bin (if set). Best-effort — a write
-    /// failure logs to stderr but doesn't fail the job.
+    /// failure logs to stderr but doesn't fail the job. Also writes the
+    /// AdamW optimizer state to job.optimizer_state_out when set, so the
+    /// next round can resume training without losing the m/v moments
+    /// (Phase 5; removes the warmup-on-resume hack).
     fn try_save_bin(&self) {
         if let Some(ref p) = self.job.save_bin {
             match self.trainer.model.save_bin(std::path::Path::new(p)) {
                 Ok(()) => eprintln!("[ptxd] {} saved checkpoint to {}", self.job.id, p),
                 Err(e) => eprintln!("[ptxd] {} save_bin({}) failed: {}", self.job.id, p, e),
+            }
+        }
+        if let Some(ref p) = self.job.optimizer_state_out {
+            match self.trainer.save_optimizer_state(std::path::Path::new(p)) {
+                Ok(()) => eprintln!("[ptxd] {} saved optimizer state to {} (step={})",
+                                    self.job.id, p, self.trainer.step),
+                Err(e) => eprintln!("[ptxd] {} save_optimizer_state({}) failed: {}", self.job.id, p, e),
             }
         }
     }

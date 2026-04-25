@@ -22,6 +22,11 @@ pub struct KdInputs<'a> {
     pub temperature: f32,
 }
 
+/// Magic + version for the optimizer state file. Separate from the model
+/// weights file so save_bin/from_bin formats stay backwards-compatible.
+const OPT_MAGIC:   u32 = 0x4F505445; // 'OPTE'
+const OPT_VERSION: u32 = 1;
+
 pub struct PtxTrainer {
     pub model: PtxModel,
     pub train_scratch: TrainScratch,
@@ -215,6 +220,184 @@ impl PtxTrainer {
     ) -> Result<f32, Box<dyn Error>> {
         self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/false,
             Some(KdInputs { teacher_logits, sup_positions, kd_weight, temperature }))
+    }
+
+    /// Save AdamW optimizer state (m, v moments + step counter) to a binary
+    /// file. Layout (LE throughout):
+    ///
+    /// ```text
+    /// [magic 0x4F505445 'OPTE'] [version 1]
+    /// [step: u32]
+    /// [d_model] [d_state] [headdim] [n_layers] [vocab]
+    /// [reserved × 3]
+    /// then for each weight tensor in the canonical save_bin order:
+    ///   [m: f32 × N] [v: f32 × N]
+    /// ```
+    ///
+    /// Phase 5: this is what removes the warmup-on-resume hack. With the
+    /// optimizer state preserved across reloads, AdamW's bias-corrected
+    /// updates pick up exactly where they left off — no first-step
+    /// overshoot when re-mounting a mastered checkpoint.
+    pub fn save_optimizer_state(&self, path: &std::path::Path) -> Result<(), Box<dyn Error>> {
+        use std::io::Write;
+        let stream = self.model.stream.clone();
+        stream.synchronize()?;
+        let read = |buf: &CudaSlice<f32>| -> Result<Vec<f32>, Box<dyn Error>> {
+            Ok(stream.memcpy_dtov(buf)?)
+        };
+        let mut f = std::fs::File::create(path)?;
+        let header: [u32; 10] = [
+            OPT_MAGIC, OPT_VERSION,
+            self.step,
+            self.model.d_model as u32, self.model.d_state as u32,
+            self.model.headdim as u32, self.model.n_layers as u32,
+            self.model.vocab_size as u32,
+            0, 0,  // reserved
+        ];
+        f.write_all(bytemuck::cast_slice(&header))?;
+        let write_floats = |f: &mut std::fs::File, v: &[f32]| -> Result<(), Box<dyn Error>> {
+            f.write_all(bytemuck::cast_slice(v))?;
+            Ok(())
+        };
+
+        // Order matches save_bin's weight order. For every tensor we write
+        // m then v back-to-back. Per-layer scale is host-side (Vec<f32>).
+        let nl = self.model.n_layers;
+        write_floats(&mut f, &read(&self.m_embed)?)?;
+        write_floats(&mut f, &read(&self.v_embed)?)?;
+        write_floats(&mut f, &read(&self.m_embed_norm_w)?)?;
+        write_floats(&mut f, &read(&self.v_embed_norm_w)?)?;
+        write_floats(&mut f, &read(&self.m_embed_norm_b)?)?;
+        write_floats(&mut f, &read(&self.v_embed_norm_b)?)?;
+        for li in 0..nl {
+            write_floats(&mut f, &read(&self.m_in_proj[li])?)?;
+            write_floats(&mut f, &read(&self.v_in_proj[li])?)?;
+            write_floats(&mut f, &read(&self.m_out_proj[li])?)?;
+            write_floats(&mut f, &read(&self.v_out_proj[li])?)?;
+            write_floats(&mut f, &read(&self.m_dt_bias[li])?)?;
+            write_floats(&mut f, &read(&self.v_dt_bias[li])?)?;
+            write_floats(&mut f, &read(&self.m_d_param[li])?)?;
+            write_floats(&mut f, &read(&self.v_d_param[li])?)?;
+            write_floats(&mut f, &read(&self.m_b_norm_w[li])?)?;
+            write_floats(&mut f, &read(&self.v_b_norm_w[li])?)?;
+            write_floats(&mut f, &read(&self.m_b_norm_b[li])?)?;
+            write_floats(&mut f, &read(&self.v_b_norm_b[li])?)?;
+            write_floats(&mut f, &read(&self.m_c_norm_w[li])?)?;
+            write_floats(&mut f, &read(&self.v_c_norm_w[li])?)?;
+            write_floats(&mut f, &read(&self.m_c_norm_b[li])?)?;
+            write_floats(&mut f, &read(&self.v_c_norm_b[li])?)?;
+            write_floats(&mut f, &read(&self.m_layer_norm_w[li])?)?;
+            write_floats(&mut f, &read(&self.v_layer_norm_w[li])?)?;
+            write_floats(&mut f, &read(&self.m_layer_norm_b[li])?)?;
+            write_floats(&mut f, &read(&self.v_layer_norm_b[li])?)?;
+            write_floats(&mut f, &[self.m_scale[li]])?;
+            write_floats(&mut f, &[self.v_scale[li]])?;
+        }
+        write_floats(&mut f, &read(&self.m_fnorm_w)?)?;
+        write_floats(&mut f, &read(&self.v_fnorm_w)?)?;
+        write_floats(&mut f, &read(&self.m_fnorm_b)?)?;
+        write_floats(&mut f, &read(&self.v_fnorm_b)?)?;
+        Ok(())
+    }
+
+    /// Load AdamW optimizer state from a file written by save_optimizer_state.
+    /// Validates that the model dimensions in the header match `self`'s — if
+    /// they don't, refuses to load (loading mismatched moments would silently
+    /// corrupt training). Updates `self.step` so bias-correction is correct.
+    pub fn load_optimizer_state(&mut self, path: &std::path::Path) -> Result<(), Box<dyn Error>> {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path)?;
+        let mut header_bytes = [0u8; 40];
+        f.read_exact(&mut header_bytes)?;
+        let header: &[u32] = bytemuck::cast_slice(&header_bytes);
+        if header[0] != OPT_MAGIC {
+            return Err(format!("optimizer state: bad magic 0x{:x} (want 0x{:x})",
+                               header[0], OPT_MAGIC).into());
+        }
+        if header[1] != OPT_VERSION {
+            return Err(format!("optimizer state: unsupported version {}", header[1]).into());
+        }
+        let saved_step = header[2];
+        let saved_d_model  = header[3] as usize;
+        let saved_d_state  = header[4] as usize;
+        let saved_headdim  = header[5] as usize;
+        let saved_n_layers = header[6] as usize;
+        let saved_vocab    = header[7] as usize;
+        if saved_d_model  != self.model.d_model  ||
+           saved_d_state  != self.model.d_state  ||
+           saved_headdim  != self.model.headdim  ||
+           saved_n_layers != self.model.n_layers ||
+           saved_vocab    != self.model.vocab_size {
+            return Err(format!(
+                "optimizer state shape mismatch: file=(d={}, ds={}, hd={}, L={}, V={}) trainer=(d={}, ds={}, hd={}, L={}, V={})",
+                saved_d_model, saved_d_state, saved_headdim, saved_n_layers, saved_vocab,
+                self.model.d_model, self.model.d_state, self.model.headdim, self.model.n_layers, self.model.vocab_size,
+            ).into());
+        }
+
+        // Load remaining bytes as f32 array. For modest models (~5MB / layer
+        // for the moments) this is fine to slurp at once.
+        let mut rest = Vec::new();
+        f.read_to_end(&mut rest)?;
+        let floats: &[f32] = bytemuck::cast_slice(&rest);
+        let mut off = 0usize;
+        let stream = self.model.stream.clone();
+
+        let load_into = |stream: &Arc<cudarc::driver::CudaStream>,
+                         dst: &mut CudaSlice<f32>,
+                         floats: &[f32], off: &mut usize, n: usize|
+                         -> Result<(), Box<dyn Error>> {
+            stream.memcpy_htod(&floats[*off..*off + n], dst)?;
+            *off += n;
+            Ok(())
+        };
+
+        let d  = self.model.d_model;
+        let ds = self.model.d_state;
+        let di = self.model.d_inner;
+        let nh = self.model.n_heads;
+        let v  = self.model.vocab_size;
+        let dip = self.model.d_in_proj;
+        let nl = self.model.n_layers;
+
+        load_into(&stream, &mut self.m_embed,         floats, &mut off, v * d)?;
+        load_into(&stream, &mut self.v_embed,         floats, &mut off, v * d)?;
+        load_into(&stream, &mut self.m_embed_norm_w,  floats, &mut off, d)?;
+        load_into(&stream, &mut self.v_embed_norm_w,  floats, &mut off, d)?;
+        load_into(&stream, &mut self.m_embed_norm_b,  floats, &mut off, d)?;
+        load_into(&stream, &mut self.v_embed_norm_b,  floats, &mut off, d)?;
+        for li in 0..nl {
+            load_into(&stream, &mut self.m_in_proj[li],     floats, &mut off, dip * d)?;
+            load_into(&stream, &mut self.v_in_proj[li],     floats, &mut off, dip * d)?;
+            load_into(&stream, &mut self.m_out_proj[li],    floats, &mut off, d * di)?;
+            load_into(&stream, &mut self.v_out_proj[li],    floats, &mut off, d * di)?;
+            load_into(&stream, &mut self.m_dt_bias[li],     floats, &mut off, nh)?;
+            load_into(&stream, &mut self.v_dt_bias[li],     floats, &mut off, nh)?;
+            load_into(&stream, &mut self.m_d_param[li],     floats, &mut off, nh)?;
+            load_into(&stream, &mut self.v_d_param[li],     floats, &mut off, nh)?;
+            load_into(&stream, &mut self.m_b_norm_w[li],    floats, &mut off, ds)?;
+            load_into(&stream, &mut self.v_b_norm_w[li],    floats, &mut off, ds)?;
+            load_into(&stream, &mut self.m_b_norm_b[li],    floats, &mut off, ds)?;
+            load_into(&stream, &mut self.v_b_norm_b[li],    floats, &mut off, ds)?;
+            load_into(&stream, &mut self.m_c_norm_w[li],    floats, &mut off, ds)?;
+            load_into(&stream, &mut self.v_c_norm_w[li],    floats, &mut off, ds)?;
+            load_into(&stream, &mut self.m_c_norm_b[li],    floats, &mut off, ds)?;
+            load_into(&stream, &mut self.v_c_norm_b[li],    floats, &mut off, ds)?;
+            load_into(&stream, &mut self.m_layer_norm_w[li], floats, &mut off, d)?;
+            load_into(&stream, &mut self.v_layer_norm_w[li], floats, &mut off, d)?;
+            load_into(&stream, &mut self.m_layer_norm_b[li], floats, &mut off, d)?;
+            load_into(&stream, &mut self.v_layer_norm_b[li], floats, &mut off, d)?;
+            self.m_scale[li] = floats[off]; off += 1;
+            self.v_scale[li] = floats[off]; off += 1;
+        }
+        load_into(&stream, &mut self.m_fnorm_w, floats, &mut off, d)?;
+        load_into(&stream, &mut self.v_fnorm_w, floats, &mut off, d)?;
+        load_into(&stream, &mut self.m_fnorm_b, floats, &mut off, d)?;
+        load_into(&stream, &mut self.v_fnorm_b, floats, &mut off, d)?;
+
+        self.step = saved_step;
+        stream.synchronize()?;
+        Ok(())
     }
 
     pub fn zero_gradients_only(&mut self) -> Result<(), Box<dyn Error>> {

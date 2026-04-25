@@ -123,6 +123,14 @@ def main():
     # convert it back to .pt and overwrite the canonical checkpoint.
     save_bin_path = f"/tmp/ptxd_save_{args.task}.bin"
 
+    # Phase 5: optimizer state round-trip. The .opt.bin file lives next to
+    # the canonical .pt and carries the AdamW m/v moments + step counter
+    # across rounds. With this loaded, the warmup-on-resume hack stays out
+    # of the way — moments are already settled. Each round writes the
+    # final state so the next round can pick up where this left off.
+    opt_state_path = ckpt_dir / f"{args.task}.opt.bin"
+    optimizer_state_in = str(opt_state_path) if opt_state_path.exists() else None
+
     # Generate training and eval batches in Python via the existing task
     # generators (Phase 1 streaming protocol — see batch_writer.py and
     # task_runner.py). ptxd reads them through batch_format::BatchReader.
@@ -275,9 +283,12 @@ def main():
         "eval_batches_path": eval_path,
         "optimizer": optimizer_cfg,
         "loss": loss_cfg,
+        "optimizer_state_out": str(opt_state_path),
     }
     if init_from_bin:
         job["init_from_bin"] = init_from_bin
+    if optimizer_state_in:
+        job["optimizer_state_in"] = optimizer_state_in
 
     # StateDB only — specialist_trainer.py also uses StateDB exclusively for
     # this DB file (it imports MetricsWriter but never calls it, because

@@ -37,6 +37,7 @@ fn job_template(id: &str, seed: u64) -> Job {
         init_from_bin: None, save_bin: None,
         batches_path: None, eval_batches_path: None,
         loss: Default::default(), optimizer: Default::default(), schedule: Default::default(),
+        optimizer_state_in: None, optimizer_state_out: None,
     }
 }
 
