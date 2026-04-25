@@ -3647,3 +3647,69 @@ parity (the most-trained task) works end-to-end. The GA can swap to PTX for
 parity specialists today; other tasks keep using `specialist_trainer.py` until
 their generators are ported. No checkpoints lost, no training time wasted.
 
+## Entry 51 — Streaming batch protocol — ptxd is now task-agnostic
+
+The user's ask was clean: "PTX code is going to be just in charge of the
+training, whatever it may be. Generator stays in Python, easy to add new
+ones. But don't make it a monolith — decompose so we can add features
+over time." Phases 1-3 ship the architectural seam this requires.
+
+**Wire protocol** (`engine/ptx/src/batch_format.rs` + `batch_writer.py`):
+
+```
+[magic 0x42544348 'BTCH'] [version 1] [n_examples] [flags=0]
+for each example:
+  [n_tokens] [tokens: u32*n] [targets: u32*n]   (u32::MAX = ignore)
+```
+
+Python writes per-cycle batch files, Rust mmap-loads them, Job gains
+`batches_path` + `eval_batches_path` fields. Wrap-around in BatchReader
+makes eval files trivially reusable. (We learned the hard way that
+training reuse-with-wraparound on small files is unstable; production
+ptxd_specialist generates 80K+ examples to comfortably exceed the read
+budget.)
+
+**Decomposition** matches what the user asked for:
+
+| Concern                       | Owner   | Why                                |
+|-------------------------------|---------|------------------------------------|
+| Task generators (parity, ...) | Python  | Easy to write, already exists      |
+| Curriculum stage selection    | Python  | StateDB-driven, evolves per task   |
+| Tokenisation (ByteTokenizer)  | Python  | Universal, already battle-tested   |
+| Batch I/O                     | Rust    | mmap, zero-copy, no serde overhead |
+| Forward + backward + AdamW    | Rust    | The hot path                       |
+| Loss + multi-position eval    | Rust    | Where the math lives               |
+
+Adding a new task is now **a Python-only change**: drop a generator in
+`generators/`, register the YAML in `problems/`, ship. No Rust rebuild.
+Verified live: cumulative_sum (multi-byte answer "47") trains end-to-end
+through the same path that runs parity (single-byte answer "S"/"D").
+
+**What's now possible without further Rust work:**
+- All 30+ tasks in `problems/` (each is a Python generator + YAML)
+- Per-cycle curriculum advancement (Python decides which stage to sample)
+- Custom batch distributions (e.g., focused on a specific failure mode)
+- Pre-generated batches from disk (e.g., a fixed eval set)
+
+**What still needs Rust work** (open as Phase 4-6 in TaskList):
+- Distillation. Trainer needs a `Loss::CeKd` variant that blends CE on
+  the hard target with KL on a teacher distribution. Batch format
+  extension v2 to optionally carry teacher logits per supervised
+  position. Python side: load `_cache.pt` files which already contain
+  the teacher logits specialist_trainer baked in.
+- Optimizer state round-trip. Today the warmup-on-resume hack
+  (Entry 49) prevents the AdamW reset from damaging mastered
+  checkpoints, but it's not a true fix. Full fix is ~500 lines:
+  extend save_bin to include all m/v moments + step counter, mirror
+  the format in ckpt_bridge.
+- Pluggable optimizer/loss/schedule. Tagged enums in Rust so the GA
+  can mutate `optimizer: lion`, `loss: focal`, etc., end-to-end. Today
+  these mutations would be silently ignored by ptxd.
+
+End-to-end verification on H100:
+- streaming parity equivalent to legacy hardcoded (within 5% best_acc)
+- cumulative_sum trains via streaming, multi-position exact-match eval
+  (loss 6.6 → 5.6, accuracy 0% → 3% in 600 fresh steps)
+- ptxd_specialist resumes parity.pt at 100%, trains 100 steps via
+  streaming, saves back at 100% — full GA-compatible flow intact
+
