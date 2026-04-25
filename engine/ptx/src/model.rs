@@ -213,6 +213,51 @@ impl PtxModel {
         })
     }
 
+    /// Serialize all device weights back into the `Mamba3Model::from_bin`
+    /// format so they can be loaded by another PtxModel instance or by
+    /// ptxd_specialist.py for conversion to a PyTorch `.pt` checkpoint.
+    /// One sync at the start drains the stream; then per-tensor memcpy_dtov
+    /// reads weights to host. Result file is the exact byte-for-byte same
+    /// layout the wgpu engine's `Mamba3Model::from_bin` expects.
+    pub fn save_bin(&self, path: &std::path::Path) -> Result<(), Box<dyn Error>> {
+        use std::io::Write;
+        let stream = self.stream.clone();
+        stream.synchronize()?;
+        let read = |buf: &CudaSlice<f32>| -> Result<Vec<f32>, Box<dyn Error>> {
+            Ok(stream.memcpy_dtov(buf)?)
+        };
+        let mut f = std::fs::File::create(path)?;
+        // Header: 7 u32s — d_model, d_state, headdim, n_layers, vocab, 0, 0
+        let header: [u32; 7] = [
+            self.d_model as u32, self.d_state as u32, self.headdim as u32,
+            self.n_layers as u32, self.vocab_size as u32, 0, 0,
+        ];
+        f.write_all(bytemuck::cast_slice(&header))?;
+        let write_floats = |f: &mut std::fs::File, v: &[f32]| -> Result<(), Box<dyn Error>> {
+            f.write_all(bytemuck::cast_slice(v))?;
+            Ok(())
+        };
+        write_floats(&mut f, &read(&self.embed_w)?)?;
+        write_floats(&mut f, &read(&self.embed_norm_w)?)?;
+        write_floats(&mut f, &read(&self.embed_norm_b)?)?;
+        for layer in &self.layers {
+            write_floats(&mut f, &read(&layer.in_proj_w)?)?;
+            write_floats(&mut f, &read(&layer.out_proj_w)?)?;
+            write_floats(&mut f, &read(&layer.dt_bias)?)?;
+            write_floats(&mut f, &read(&layer.d_param)?)?;
+            write_floats(&mut f, &read(&layer.b_norm_w)?)?;
+            write_floats(&mut f, &read(&layer.b_norm_b)?)?;
+            write_floats(&mut f, &read(&layer.c_norm_w)?)?;
+            write_floats(&mut f, &read(&layer.c_norm_b)?)?;
+            write_floats(&mut f, &read(&layer.layer_norm_w)?)?;
+            write_floats(&mut f, &read(&layer.layer_norm_b)?)?;
+            write_floats(&mut f, &[layer.scale])?;
+        }
+        write_floats(&mut f, &read(&self.final_norm_w)?)?;
+        write_floats(&mut f, &read(&self.final_norm_b)?)?;
+        Ok(())
+    }
+
     /// Block size for the persistent kernel. 512 threads → 2 SSM heads in
     /// parallel per iteration for the run_length_next model (hd*ds=256); 4
     /// serial passes for 8 heads. We tried 1024 (4 heads parallel): it builds

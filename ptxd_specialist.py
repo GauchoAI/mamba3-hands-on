@@ -85,6 +85,35 @@ def main():
     # `steps` is right.
     total_steps = max(1, args.max_cycles * args.steps_per_cycle)
 
+    # Resume from checkpoint if one exists for this task — same convention
+    # specialist_trainer.py uses.
+    ckpt_dir  = REPO_ROOT / "checkpoints" / "specialists"
+    ckpt_path = ckpt_dir / f"{args.task}.pt"
+    init_from_bin = None
+    resume_meta = None
+    if ckpt_path.exists():
+        try:
+            sys.path.insert(0, str(REPO_ROOT))
+            from ckpt_bridge import pt_to_bin
+            tmp_bin = REPO_ROOT / f"/tmp/ptxd_resume_{args.task}.bin"
+            os.makedirs(tmp_bin.parent, exist_ok=True)
+            resume_meta = pt_to_bin(str(ckpt_path), str(tmp_bin))
+            init_from_bin = str(tmp_bin)
+            sys.stderr.write(
+                f"[ptxd_specialist] resuming {args.task} from {ckpt_path} "
+                f"(prev acc={resume_meta.get('accuracy', 0):.0%}, "
+                f"cycles={resume_meta.get('cycles', 0)})\n"
+            )
+        except Exception as e:
+            sys.stderr.write(
+                f"[ptxd_specialist] checkpoint resume FAILED ({e}); "
+                f"starting from random init\n"
+            )
+
+    # save_bin: ptxd writes weights to this path on completion. We then
+    # convert it back to .pt and overwrite the canonical checkpoint.
+    save_bin_path = f"/tmp/ptxd_save_{args.task}.bin"
+
     job = {
         "id": str(uuid.uuid4())[:8],
         "task": "parity",
@@ -100,18 +129,19 @@ def main():
         "batch_size": args.batch_size,
         "target_acc": args.target_acc,
         "seed": args.seed,
+        "save_bin": save_bin_path,
     }
+    if init_from_bin:
+        job["init_from_bin"] = init_from_bin
 
-    # MetricsWriter init — we want the same DB rows specialist_trainer.py emits.
+    # StateDB only — specialist_trainer.py also uses StateDB exclusively for
+    # this DB file (it imports MetricsWriter but never calls it, because
+    # state_db.py and metrics_db.py both define an `experiments` table with
+    # incompatible schemas — using both on the same file raises errors).
     sys.path.insert(0, str(REPO_ROOT))
-    from metrics_db import MetricsWriter
     from state_db import StateDB
 
     db_path = args.db_path or "three_pop/training.db"
-    mw = MetricsWriter(db_path)
-    # StateDB on the SAME db file (the schemas don't conflict — different
-    # tables). three_populations.py reads task_status / lineage / cycle_history
-    # from this DB.
     sdb = StateDB(db_path)
     exp_id = job["id"]
     config = {
@@ -126,10 +156,6 @@ def main():
         "steps_per_cycle": args.steps_per_cycle,
         "engine": "ptxd",
     }
-    # rough param count for the registry — d_model × vocab + per-layer terms
-    n_params_estimate = args.vocab_size * args.d_model * 2  # close enough
-    mw.register_experiment(exp_id, config, n_params_estimate)
-    mw.log_event("ptxd_start", exp_id, json.dumps({"binary": ptxd_bin}))
 
     sys.stderr.write(f"[ptxd_specialist] launching ptxd: {ptxd_bin}\n")
     sys.stderr.write(f"[ptxd_specialist] job: {json.dumps(job)}\n")
@@ -164,19 +190,8 @@ def main():
             continue
         rtype = row.get("type")
         if rtype == "cycle":
-            mw.log_cycle(
-                exp_id,
-                int(row["cycle"]),
-                float(row["loss"]),
-                float(row["fresh_acc"]),
-                float(row["best_fresh"]),
-                train_acc=None,
-                elapsed_s=float(row.get("elapsed_s", 0.0)),
-            )
-            mw.log_tasks(exp_id, int(row["cycle"]), {args.task: float(row["fresh_acc"])})
-            # Also write StateDB cycle_history — this is what get_confidence_score
-            # queries; without it confidence is 0 and the task can never be
-            # promoted to "mastered".
+            # StateDB cycle_history is what get_confidence_score queries;
+            # without it confidence is 0 and the task can never be promoted.
             try:
                 sdb.log_cycle(args.task, int(row["cycle"]),
                               accuracy=float(row["fresh_acc"]),
@@ -190,6 +205,9 @@ def main():
             )
         elif rtype == "final":
             final_result = row
+        elif rtype == "tick":
+            # Scheduler heartbeat; silently ignore (firebase_push handles it).
+            pass
         else:
             sys.stderr.write(f"[ptxd_specialist] unknown row type: {rtype}\n")
 
@@ -199,7 +217,6 @@ def main():
             f"[ptxd_specialist] ptxd produced no final row; stderr:\n"
             f"{proc.stderr.read()}\n"
         )
-        mw.update_status(exp_id, "error")
         sys.exit(3)
 
     elapsed = time.time() - t0
@@ -207,12 +224,7 @@ def main():
     best_acc = float(final_result.get("best_acc", 0.0))
     final_status = ("mastered" if best_acc >= args.target_acc
                     else final_result.get("status", "needs_tuning"))
-    mw.update_status(exp_id, final_status)
     result = final_result
-    mw.log_event("ptxd_done", exp_id, json.dumps({
-        "best_acc": best_acc, "final_loss": final_loss,
-        "ms_per_step": result.get("ms_per_step"), "wall_ms": result.get("wall_ms"),
-    }))
 
     # ---- StateDB final integration (lineage + task_status promotion) ----
     # cycle_history rows were already written above as each cycle arrived;
@@ -276,6 +288,36 @@ def main():
         sdb.close()
     except Exception as e:
         sys.stderr.write(f"[ptxd_specialist] StateDB integration warning: {e}\n")
+
+    # ---- Save checkpoint back to canonical .pt path ----
+    # If ptxd wrote a save_bin file, convert it to PyTorch format and
+    # overwrite checkpoints/specialists/{task}.pt — matches what
+    # specialist_trainer.py would do at end of training.
+    try:
+        if os.path.exists(save_bin_path):
+            from ckpt_bridge import bin_to_pt
+            ckpt_dir.mkdir(parents=True, exist_ok=True)
+            prior_cycles = (resume_meta.get("cycles", 0) if resume_meta else 0)
+            bin_to_pt(
+                save_bin_path, str(ckpt_path),
+                task=args.task, config=config,
+                accuracy=best_acc,
+                cycles=prior_cycles + (cycles_completed if 'cycles_completed' in dir() else int(result.get("steps_executed", 0)) // max(1, args.steps_per_cycle)),
+            )
+            sys.stderr.write(
+                f"[ptxd_specialist] saved {args.task} → {ckpt_path} "
+                f"(acc={best_acc:.0%})\n"
+            )
+            # Cleanup tmp bin
+            try: os.unlink(save_bin_path)
+            except Exception: pass
+        else:
+            sys.stderr.write(
+                f"[ptxd_specialist] WARNING: ptxd did not write {save_bin_path}; "
+                f"checkpoint NOT updated\n"
+            )
+    except Exception as e:
+        sys.stderr.write(f"[ptxd_specialist] checkpoint save FAILED: {e}\n")
 
     # Same human-readable summary to stdout that three_populations might tail.
     print(f"[ptxd_specialist] {args.task}  best_acc={best_acc*100:.1f}%  "

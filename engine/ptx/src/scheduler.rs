@@ -56,6 +56,16 @@ pub struct Job {
     #[serde(default = "d_default_target")]   pub target_acc: f32,
     #[serde(default = "d_default_seed")]     pub seed: u64,
     #[serde(default)] pub stages: Option<Vec<Stage>>,
+    /// Optional path to a `Mamba3Model::from_bin` weight file. If set,
+    /// the JobRunner loads weights from this path instead of running
+    /// `Mamba3Model::new_random + apply_pytorch_init`. This is the hook
+    /// for resuming from a prior checkpoint — `ptxd_specialist.py`
+    /// converts PyTorch `.pt` files into this binary format on the fly.
+    #[serde(default)] pub init_from_bin: Option<String>,
+    /// Optional path to write weights as `from_bin` format at end of
+    /// training. `ptxd_specialist.py` reads this after the job finishes
+    /// and converts it back into a PyTorch `.pt` checkpoint.
+    #[serde(default)] pub save_bin: Option<String>,
 }
 
 fn d_default_d_model() -> usize { 32 }
@@ -146,11 +156,20 @@ impl JobRunner {
     pub fn new(ctx: Arc<PtxContext>, job: Job) -> Result<Self, Box<dyn Error>> {
         let stream = ctx.new_stream()?;
 
-        // Same init recipe as ptxd's apply_pytorch_init / test_parity_train.
-        let mut cpu_model = Mamba3Model::new_random(
-            job.d_model, job.d_state, job.headdim, job.n_layers, job.vocab_size,
-        );
-        apply_pytorch_init(&mut cpu_model, job.seed);
+        // Resume from a prior checkpoint if init_from_bin is provided —
+        // this is how ptxd_specialist.py hands a converted PyTorch .pt
+        // checkpoint to the engine. Otherwise use random init + the
+        // PyTorch-matching recipe (Entry 35).
+        let cpu_model = if let Some(ref path) = job.init_from_bin {
+            eprintln!("[ptxd] {} resuming from checkpoint {}", job.id, path);
+            Mamba3Model::from_bin(std::path::Path::new(path))?
+        } else {
+            let mut m = Mamba3Model::new_random(
+                job.d_model, job.d_state, job.headdim, job.n_layers, job.vocab_size,
+            );
+            apply_pytorch_init(&mut m, job.seed);
+            m
+        };
 
         let stages: Vec<Stage> = match &job.stages {
             Some(s) if !s.is_empty() => s.clone(),
@@ -160,7 +179,19 @@ impl JobRunner {
         let max_seq = (1 + (2 * max_n_bits - 1).max(1) + 3).max(16);
 
         let gpu_model = PtxModel::from_cpu_on_stream(&cpu_model, ctx.clone(), stream.clone(), max_seq)?;
-        let trainer = PtxTrainer::new(gpu_model, job.lr, job.weight_decay, max_seq)?;
+        let mut trainer = PtxTrainer::new(gpu_model, job.lr, job.weight_decay, max_seq)?;
+        // Resume regression mitigation: when loading from a checkpoint, AdamW's
+        // first-moment / second-moment buffers are zero, but the weights are
+        // already at (or near) a minimum. The naive default (warmup=200) lets
+        // the first ~50 steps do real damage to a 100%-accurate checkpoint
+        // because (a) per-step gradients are tiny but nonzero (PTX/PyTorch
+        // training paths aren't bit-exact, Entry 30), and (b) Adam's bias-
+        // corrected moment ratio amplifies them. Bumping warmup gives the
+        // moment estimates time to settle before the optimizer applies real
+        // weight updates. Proper fix is round-tripping m/v in save_bin (TODO).
+        if job.init_from_bin.is_some() {
+            trainer.warmup_steps = 500;
+        }
 
         Ok(Self {
             stream,
@@ -257,15 +288,38 @@ impl JobRunner {
             }
             if self.best_acc >= self.job.target_acc && self.stage_idx + 1 == self.stages.len() {
                 self.done = Some(self.make_final("converged"));
+                self.try_save_bin();
             }
             return Ok(Some(SchedulerEvent::Cycle(event)));
         }
         if self.step >= self.job.steps {
+            // End-of-budget eval, in case the job ran fewer steps than the
+            // 200-step eval cadence (short test runs, or jobs resumed near
+            // their target). Without this, best_acc stays 0 and any short
+            // resume → save round-trip silently zeroes out the .pt's accuracy.
+            if self.step > 0 && self.step % 200 != 0 {
+                self.last_loss = self.trainer.read_last_loss_blocking()?
+                    / self.job.batch_size as f32;
+                let acc = self.eval(200)?;
+                if acc > self.best_acc { self.best_acc = acc; }
+            }
             self.done = Some(self.make_final(
                 if self.best_acc >= 0.7 { "learning" } else { "needs_tuning" }
             ));
+            self.try_save_bin();
         }
         Ok(None)
+    }
+
+    /// Write final weights to job.save_bin (if set). Best-effort — a write
+    /// failure logs to stderr but doesn't fail the job.
+    fn try_save_bin(&self) {
+        if let Some(ref p) = self.job.save_bin {
+            match self.trainer.model.save_bin(std::path::Path::new(p)) {
+                Ok(()) => eprintln!("[ptxd] {} saved checkpoint to {}", self.job.id, p),
+                Err(e) => eprintln!("[ptxd] {} save_bin({}) failed: {}", self.job.id, p, e),
+            }
+        }
     }
 
     fn make_final(&self, status: &str) -> FinalEvent {
