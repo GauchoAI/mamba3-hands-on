@@ -57,6 +57,19 @@ def parse_args():
     p.add_argument("--problems-dir", type=str, default="problems")
     p.add_argument("--db-path", type=str, default=None)
     p.add_argument("--run-dir", type=str, default=None)
+    # Distillation: if --kd-weight > 0 AND a teacher exists for this task in
+    # ModelRegistry, ptxd_specialist runs the teacher forward on every batch
+    # and ships teacher logits via batch v2. ptxd's kd_apply kernel blends
+    # them in. If no teacher is found, falls back to plain CE silently.
+    p.add_argument("--kd-weight", type=float, default=0.0,
+                   help="KD blend weight (default 0 = no distillation, matches "
+                        "specialist_trainer's 0.3 when distilling)")
+    p.add_argument("--kd-temperature", type=float, default=3.0,
+                   help="KD temperature; matches specialist_trainer's T=3")
+    p.add_argument("--teacher-pt", type=str, default=None,
+                   help="Override teacher discovery — load this .pt path "
+                        "directly instead of querying ModelRegistry. Useful "
+                        "for testing or running offline.")
     return p.parse_args()
 
 
@@ -124,10 +137,72 @@ def main():
     # via StateDB (`get_current_stage`), but Phase 1 keeps it simple with
     # a single fixed distribution. Phase 2 will do per-cycle stage advance.
     try:
-        write_task_batches(train_path, args.task, n_examples=max(20000, args.batch_size * 64), stage=0, seed=args.seed)
-        write_task_batches(eval_path,  args.task, n_examples=200,                                stage=0, seed=args.seed + 1)
+        from task_runner import make_examples_for_task
+        from batch_writer import write_examples
+        n_train = max(20000, args.batch_size * 64)
+        train_examples = make_examples_for_task(args.task, n_train,
+                                                stage=0, seed=args.seed)
+        eval_examples  = make_examples_for_task(args.task, 200,
+                                                stage=0, seed=args.seed + 1)
     except Exception as e:
         sys.stderr.write(f"[ptxd_specialist] batch generation FAILED: {e}\n")
+        sys.exit(4)
+
+    # Distillation: load teacher and run forward to get per-example logits
+    # at supervised positions. If the task has no teacher in ModelRegistry,
+    # `find_teacher_for_task` returns None and we silently fall back to CE.
+    teacher_train_logits = None
+    teacher_eval_logits  = None
+    teacher_loaded = False
+    if args.kd_weight > 0.0:
+        try:
+            from teacher import (find_teacher_for_task, load_teacher_model,
+                                 compute_teacher_logits_for_examples)
+            # --teacher-pt overrides discovery. Useful when offline / testing.
+            if args.teacher_pt and Path(args.teacher_pt).exists():
+                import torch as _t
+                _ck = _t.load(args.teacher_pt, map_location="cpu", weights_only=False)
+                t_cfg = _ck.get("config", {})
+                t_acc = _ck.get("accuracy", 0.0)
+                found = (args.teacher_pt, t_cfg, t_acc)
+            else:
+                found = find_teacher_for_task(args.task)
+            if found is None:
+                sys.stderr.write(f"[ptxd_specialist] kd_weight={args.kd_weight} "
+                                 f"but no teacher registered for {args.task!r}; "
+                                 f"falling back to plain CE\n")
+            else:
+                teacher_pt, t_cfg, t_acc = found
+                sys.stderr.write(f"[ptxd_specialist] distilling from teacher "
+                                 f"{teacher_pt} (acc={t_acc:.0%}, "
+                                 f"d={t_cfg.get('d_model')} L={t_cfg.get('n_kernel_layers')})\n")
+                teacher_model, t_device = load_teacher_model(teacher_pt, device="cuda")
+                teacher_train_logits = compute_teacher_logits_for_examples(
+                    teacher_model, train_examples, args.vocab_size,
+                    batch_size=64, device=t_device,
+                )
+                teacher_eval_logits = compute_teacher_logits_for_examples(
+                    teacher_model, eval_examples, args.vocab_size,
+                    batch_size=64, device=t_device,
+                )
+                teacher_loaded = True
+                sys.stderr.write(f"[ptxd_specialist] teacher logits computed on {t_device}\n")
+        except Exception as e:
+            sys.stderr.write(f"[ptxd_specialist] teacher logits computation "
+                             f"failed ({e}); falling back to plain CE\n")
+            teacher_train_logits = None
+            teacher_eval_logits  = None
+
+    # Write batches (v1 if no teacher, v2 if teacher loaded).
+    try:
+        write_examples(train_path, train_examples,
+                       teacher_logits=teacher_train_logits,
+                       vocab_size=args.vocab_size if teacher_loaded else None)
+        write_examples(eval_path, eval_examples,
+                       teacher_logits=teacher_eval_logits,
+                       vocab_size=args.vocab_size if teacher_loaded else None)
+    except Exception as e:
+        sys.stderr.write(f"[ptxd_specialist] batch write FAILED: {e}\n")
         sys.exit(4)
 
     # Map specialist_trainer's flag names → ptxd's tagged-enum job spec.
@@ -154,6 +229,18 @@ def main():
     else:
         sys.stderr.write(f"[ptxd_specialist] unknown loss_fn={args.loss_fn!r}, defaulting to ce\n")
         loss_cfg = {"type": "ce"}
+
+    # If a teacher was successfully loaded, override the loss to ce_kd —
+    # this signals to ptxd's JobRunner to wire kd_apply into the training
+    # path. Without this, the teacher logits would sit unused in the v2
+    # batch file. kd_weight + temperature mirror specialist_trainer's
+    # production values (0.3, 3.0).
+    if teacher_loaded:
+        loss_cfg = {
+            "type": "ce_kd",
+            "kd_weight": args.kd_weight,
+            "temperature": args.kd_temperature,
+        }
 
     job = {
         "id": str(uuid.uuid4())[:8],

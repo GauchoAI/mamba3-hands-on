@@ -66,6 +66,9 @@ impl Default for Loss { fn default() -> Self { Loss::Ce } }
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Optimizer {
+    /// `"type": "adamw"` — match mutations.yaml's spelling, not the
+    /// snake-case-of-CamelCase default which would be `adam_w`.
+    #[serde(rename = "adamw")]
     AdamW { beta1: f32, beta2: f32, eps: f32 },
     /// Stub — Lion isn't in the trainer yet. Falls back to AdamW with
     /// AdamW defaults so the GA's lion mutation doesn't crash.
