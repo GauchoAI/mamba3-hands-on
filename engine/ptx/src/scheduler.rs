@@ -43,21 +43,33 @@ pub struct Stage {
 pub struct Job {
     pub id: String,
     pub task: String,
-    pub d_model: usize,
-    pub d_state: usize,
-    pub headdim: usize,
-    pub n_layers: usize,
-    pub vocab_size: usize,
-    pub lr: f32,
-    pub weight_decay: f32,
-    pub steps: usize,
-    pub batch_size: usize,
-    pub n_bits: usize,
-    pub target_acc: f32,
-    pub seed: u64,
-    #[serde(default)]
-    pub stages: Option<Vec<Stage>>,
+    #[serde(default = "d_default_d_model")] pub d_model: usize,
+    #[serde(default = "d_default_d_state")] pub d_state: usize,
+    #[serde(default = "d_default_headdim")] pub headdim: usize,
+    #[serde(default = "d_default_n_layers")] pub n_layers: usize,
+    #[serde(default = "d_default_vocab")]    pub vocab_size: usize,
+    #[serde(default = "d_default_lr")]       pub lr: f32,
+    #[serde(default = "d_default_wd")]       pub weight_decay: f32,
+    #[serde(default = "d_default_steps")]    pub steps: usize,
+    #[serde(default = "d_default_batch")]    pub batch_size: usize,
+    #[serde(default = "d_default_nbits")]    pub n_bits: usize,
+    #[serde(default = "d_default_target")]   pub target_acc: f32,
+    #[serde(default = "d_default_seed")]     pub seed: u64,
+    #[serde(default)] pub stages: Option<Vec<Stage>>,
 }
+
+fn d_default_d_model() -> usize { 32 }
+fn d_default_d_state() -> usize { 16 }
+fn d_default_headdim() -> usize { 16 }
+fn d_default_n_layers() -> usize { 1 }
+fn d_default_vocab() -> usize { 260 }
+fn d_default_lr() -> f32 { 1e-3 }
+fn d_default_wd() -> f32 { 0.1 }
+fn d_default_steps() -> usize { 5000 }
+fn d_default_batch() -> usize { 16 }
+fn d_default_nbits() -> usize { 4 }
+fn d_default_target() -> f32 { 0.95 }
+fn d_default_seed() -> u64 { 12345 }
 
 #[derive(Serialize, Debug, Clone)]
 pub struct CycleEvent {

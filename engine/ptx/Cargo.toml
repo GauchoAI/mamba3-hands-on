@@ -49,6 +49,10 @@ name = "parity-replay"
 path = "src/bin/parity_replay.rs"
 
 [[bin]]
+name = "test-scheduler"
+path = "src/bin/test_scheduler.rs"
+
+[[bin]]
 name = "test-parity-accuracy"
 path = "src/bin/test_parity_accuracy.rs"
 
