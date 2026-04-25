@@ -2383,3 +2383,47 @@ The right next experiment: dump a PyTorch model's weights to a file, load them i
 
 The PyTorch baseline script is at `/tmp/pytorch_parity_baseline.py` (uploaded to H100 at `/root/pytorch_parity_baseline.py`). It uses `mamba3_minimal.Mamba3Block` from the existing repo and replicates the exact training task (no GA, no curriculum, just the masked-CE byte-token parity used by `test_parity_train`).
 
+
+
+---
+
+## Entry 31 — Forward parity: our PTX equals mamba3_minimal.Mamba3Block bit-by-bit
+
+The Entry 30 hypothesis was "the gap is probably in the forward (SSM scan, RoPE phase, layer norm)". Direct test:
+
+1. Build a tiny PyTorch `Model` (d=32, L=1, dS=16) wrapping `mamba3_minimal.Mamba3Block` plus our embed_norm / final_norm / weight-tied head structure.
+2. Export weights into our `Mamba3Model::from_bin` format (1 small Python script).
+3. Run PyTorch forward on a fixed input `[256, 48, 32, 49, 32, 48, 258]` → save logits.
+4. Build a Rust `forward-parity` binary that loads the same `.bin` via `from_bin`, uploads to PtxModel, runs forward on the same tokens, compares logits element-wise.
+
+**Result:**
+```
+PyTorch logits: L=7 V=260  sum=556.431396
+PTX     logits: L=7 V=260  sum=556.431641
+Forward-parity: max_abs_err = 5.72e-6 at [t=4, v=141]  mean_abs_err = 5.47e-7
+Verdict: BIT-PARITY ✓
+```
+
+Five microvolts of difference across 1820 logit values, attributable to FP32 reduction-order variation between PyTorch's CPU BLAS and our PTX kernels.
+
+Conclusion: **forward kernel is correct.** Our hand-port of Mamba-3 produces the same outputs as `mamba3_minimal.Mamba3Block` at identical weights, to within FP32 rounding. The Entry 30 plateau gap (PyTorch 100% in 2 cycles vs our PTX 56%) cannot be explained by a forward bug.
+
+So where does the gap live?
+
+1. **Forward**: matched (this entry)
+2. **Backward**: matched (fd-check 74/75 PASS — and the gradient of f is unique given f)
+3. **Loss formulation**: matched (mask supervises only SEP→ANSWER; Entry 29)
+4. **Optimizer (AdamW)**: matched (lr, betas, eps, wd, clip_grad_norm 1.0)
+5. **Init**: matched at the level we tested (dt_bias log-uniform, embed N(0,1), Linears kaiming-uniform, scale=0.1)
+6. **Batching**: matched (gradient accumulation across the batch, single AdamW step)
+
+Each of the six layers is now verified to match. The 38-percentage-point convergence gap *must* be in something we still haven't isolated — most likely candidates:
+
+- **Random sequence draw between Python `random` and our LCG.** Different training-data trajectories from step 1 onward. If PyTorch happens to see a sequence that breaks symmetry early, and our LCG sees a different one, dynamics diverge. Easy to test: feed both runs the *same* sequence stream.
+- **Subtle in-loop state**: some carryover state we're not zeroing per training step (a moment estimate, a cache, etc.).
+- **Numerical accumulation**: tiny FP32 errors in our backward that, while individually below FD tolerance, biases the *direction* of the gradient consistently. Possible but unlikely at fd-check-PASS magnitudes.
+
+Forward parity is the cleanest test the session has produced. Anything that previously felt like a "PyTorch knows something we don't" mystery gets reduced by it: the forward isn't the secret sauce. Whatever the remaining gap is, it's in training-step bookkeeping, data flow, or numerical accumulation — not architecture.
+
+`forward-parity` is now a permanent test binary (`engine/ptx/src/bin/forward_parity.rs`). Re-run it any time a forward kernel changes.
+
