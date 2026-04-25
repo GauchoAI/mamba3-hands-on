@@ -57,6 +57,10 @@ name = "tetris-demo"
 path = "src/bin/tetris_demo.rs"
 
 [[bin]]
+name = "scheduler-benchmark"
+path = "src/bin/scheduler_benchmark.rs"
+
+[[bin]]
 name = "test-parity-accuracy"
 path = "src/bin/test_parity_accuracy.rs"
 
