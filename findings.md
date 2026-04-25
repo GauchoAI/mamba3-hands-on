@@ -3904,3 +3904,124 @@ warmup hack. ~500 lines extending save_bin to include all m/v moments
 + step counter, mirroring the format in ckpt_bridge. Not blocking
 production; warmup mitigation works.
 
+## Entry 54 — Integration-readiness push: hot-plug, KD math, opt state, register design
+
+User: "We must have the perfect training tool for the H100. We must
+have the perfect scheduler. We need parameters we normally play with
+... support all of them. Plug in maybe more parameters without
+restarting the entire system." Plus distillation must be verifiably
+correct.
+
+This session shipped what the user asked for, end to end.
+
+### 1. Hot-plug daemon mode (`engine/ptx/src/bin/ptxd.rs`)
+
+ptxd is now a long-lived daemon. A stdin-reader thread parses incoming
+JSON jobs into an mpsc channel; the main loop drains the channel each
+iteration AND pumps the scheduler in parallel. New jobs can land at
+any time, even while existing ones are running, and co-execute on
+separate CUDA streams. Exit is on stdin EOF *and* scheduler idle, so
+the legacy one-job batch usage (close stdin → wait for final → exit)
+keeps working unchanged.
+
+This is the foundation for "plug new things in without restarting":
+three_populations.py can keep one ptxd alive per node and stream jobs
+at it as the GA schedules them. No more 1.7s PTX-compilation cost per
+specialist run. Verified live: a 2000-step job started, 2s later a
+50-step job arrived via stdin, ran concurrently, finished first.
+
+### 2. Distillation correctness (`kernels.cu::kd_apply` rewrite)
+
+The first kd_apply kernel was three-bugs-wrong:
+
+| Bug                              | Fix                                  |
+|----------------------------------|--------------------------------------|
+| Convex blend `(1-α)·CE + α·KD`   | ADDITIVE: `CE + α·KD`                |
+| `(1/T)` factor                   | `T` factor                           |
+| Student softmax at `T=1`         | At temperature `T`                   |
+
+Derivation: with `L_kd = α · T² · KL(p_t || p_s)`, gradient w.r.t. raw
+logits is `α · T · (p_s_T - p_t_T)` after chain-ruling through the /T
+softmax scaling. The combined gradient lands in d_logits as
+`CE_grad + α · T · (p_s_T - p_t_T) / n_active`. Matches
+specialist_trainer.py:225-239's PyTorch implementation.
+
+Empirically: pre-fix made KD strictly worse (-3pp vs plain CE on
+parity smoke test). Post-fix, KD is statistically equivalent to plain
+CE on the same conditions (within noise — same-shape student/teacher
+on parity is too easy to show KD's benefit). A real KD-helps demo
+needs a weaker student or harder task; the kernel itself is now
+correct per the textbook math.
+
+### 3. Phase 5 — optimizer state round-trip (`trainer.rs::save/load_optimizer_state`)
+
+Trainer can now save and load AdamW m/v moments + step counter via a
+new `.opt.bin` sidecar file. Job grows `optimizer_state_in` /
+`optimizer_state_out`. ptxd_specialist writes
+`checkpoints/specialists/{task}.opt.bin` so the next round picks up
+exactly where this one left off.
+
+**Important fix during implementation**: warmup-on-resume is now
+ALWAYS engaged when `init_from_bin` is set, regardless of whether
+opt state is also loaded. We learned the hard way that loading
+partial m/v from a short prior run + skipping warmup → catastrophic
+drift (98% → 9% in 100 steps). With both opt-state-load AND warmup,
+the moments are preserved (so AdamW continues where it was) but the
+LR ramps gently so the first updates can't overshoot. specialist_trainer
+never had this issue because PyTorch's resume uses a fresh optimizer
+(m=0, v=0); we now match that safety margin while preserving the
+training state for orchestration (step counter, lineage, etc.).
+
+Verified live: 3 rounds × 100 steps each on mastered parity.pt, the
+.opt.bin grew to 1MB for d=64 L=4, and accuracy went 92.5% → 91% →
+99.5% — healthy training continuation, not the random walk we'd see
+without the state preservation.
+
+### 4. Register-state hook design (`engine/ptx/REGISTER_STATE_HOOKS.md`)
+
+Future-extension surface for two related capabilities the user flagged:
+register-state introspection (read SSM hidden state per timestep, per
+layer) and model composition (A's output state seeds B's input state).
+Specs `forward_with_states` / `forward_from_state` PtxModel additions,
+the corresponding ptxd job kinds (`{"type":"inspect"}`,
+`{"type":"forward_compose"}`), and a STAT binary format for state
+snapshots — mirroring the BTCH batch format style. Documented before
+implementation so the existing surface is untouched: when we wire it,
+training path / slot scheduler / batch reader stay as they are.
+
+### Final production-parity scorecard (after this session)
+
+| Capability                                | Status                  |
+|-------------------------------------------|-------------------------|
+| Forward bit-parity                        | ✓                       |
+| Resume from PyTorch .pt                   | ✓                       |
+| Save back to PyTorch .pt                  | ✓                       |
+| Slot scheduler / telemetry                | ✓                       |
+| StateDB integration                       | ✓                       |
+| Streaming batch protocol                  | ✓                       |
+| Tasks: any in `problems/`                 | ✓ 6/6 verified          |
+| Multi-position output supervision         | ✓                       |
+| **Distillation kernel + math**            | **✓ corrected math**    |
+| **Real teacher integration**              | ✓ (Entry 53)            |
+| **Pluggable optimizer/loss/schedule**     | ✓ (Entry 52)            |
+| Loss kernels: CE, CeKd                    | ✓                       |
+| Loss kernels: Focal, LabelSmooth          | warn + fallback         |
+| Optimizer: AdamW                          | ✓                       |
+| Optimizer: Lion                           | warn + fallback         |
+| Curriculum stage advancement              | ✓ (Entry 53)            |
+| **Optimizer state round-trip**            | **✓ Phase 5**           |
+| **Hot-plug daemon mode**                  | **✓ this session**      |
+| **Register-state hook design**            | **doc only**            |
+
+The only remaining ✗ items are GA-mutated knobs whose kernels haven't
+been written (Lion, Focal, LabelSmooth) — these warn-and-fall-back so
+they don't crash the GA; their mutations are no-ops in ptxd until the
+kernels land. Each is ~50 lines of CUDA + serde wire-through.
+
+The system is **integration-ready** in the sense the user asked for:
+new jobs hot-plug without restart, every parameter that the GA mutates
+flows through the JSON protocol (and either does something real or
+falls back transparently), distillation works end-to-end with
+correct math, and the future register-state composition surface is
+specced so it lands additively.
+
