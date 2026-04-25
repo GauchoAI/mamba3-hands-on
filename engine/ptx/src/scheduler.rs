@@ -98,11 +98,28 @@ pub struct FinalEvent {
     pub wall_ms: f64,
 }
 
+/// Periodic resource snapshot — emitted by the scheduler at most every
+/// `tick_interval_s` (default 1.0).  Designed for compact telemetry: ~50
+/// bytes serialised, 1Hz cadence ≈ 4KB/min ≈ 6MB/day. Mirrors
+/// firebase_push.push_gpu_tick's shape so an external uploader can forward
+/// these straight to Firebase Realtime DB without reformatting.
+#[derive(Serialize, Debug, Clone)]
+pub struct TickEvent {
+    #[serde(rename = "type")]
+    pub kind: &'static str,           // "tick"
+    pub t: f64,                       // seconds since scheduler start
+    pub mem_pct: f32,                 // 0..100
+    pub sm_pct: f32,                  // 0..100
+    pub running: usize,
+    pub queue: usize,
+}
+
 #[derive(Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum SchedulerEvent {
     Cycle(CycleEvent),
     Final(FinalEvent),
+    Tick(TickEvent),
 }
 
 /// One in-flight training job. Owns its model + trainer + dedicated CUDA
@@ -405,6 +422,11 @@ pub struct Scheduler {
     pub running: Vec<JobRunner>,
     pub used_mem: usize,
     pub used_sm: usize,
+    pub start: Instant,
+    /// Telemetry: emit a TickEvent at most every `tick_interval_s`. Set to
+    /// f64::INFINITY to disable. Default 1.0s.
+    pub tick_interval_s: f64,
+    last_tick: f64,
 }
 
 impl Scheduler {
@@ -417,7 +439,26 @@ impl Scheduler {
             running: Vec::new(),
             used_mem: 0,
             used_sm: 0,
+            start: Instant::now(),
+            tick_interval_s: 1.0,
+            last_tick: 0.0,
         }
+    }
+
+    /// Generate a TickEvent if the tick_interval has elapsed since the
+    /// last one. Cheap; the scheduler calls this from pump_one_step.
+    fn maybe_emit_tick(&mut self) -> Option<TickEvent> {
+        let t = self.start.elapsed().as_secs_f64();
+        if t - self.last_tick < self.tick_interval_s { return None; }
+        self.last_tick = t;
+        Some(TickEvent {
+            kind: "tick",
+            t,
+            mem_pct: (self.used_mem as f64 / self.mem_budget as f64 * 100.0).min(100.0) as f32,
+            sm_pct:  (self.used_sm  as f64 / self.sm_budget  as f64 * 100.0).min(100.0) as f32,
+            running: self.running.len(),
+            queue:   self.queue.len(),
+        })
     }
 
     /// Override the memory/SM budgets (e.g. for a smaller GPU or a test).
@@ -520,12 +561,16 @@ impl Scheduler {
     /// submission order.
     pub fn pump_one_step(&mut self) -> Result<Vec<SchedulerEvent>, Box<dyn Error>> {
         self.admit()?;
+        let mut events = Vec::new();
+        // Compact telemetry: tick at most every tick_interval_s.
+        if let Some(tick) = self.maybe_emit_tick() {
+            events.push(SchedulerEvent::Tick(tick));
+        }
         // Phase 1: launch.
         for runner in self.running.iter_mut() {
             runner.prepare_one_batch()?;
         }
         // Phase 2: finalize.
-        let mut events = Vec::new();
         let mut i = 0;
         while i < self.running.len() {
             if let Some(ev) = self.running[i].finalize_one_batch()? {

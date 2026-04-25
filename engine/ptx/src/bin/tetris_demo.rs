@@ -107,6 +107,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     "{} done ({}, best={:.0}%, {:.1}s)",
                     f.id, f.status, f.best_acc * 100.0, f.wall_ms / 1000.0,
                 ),
+                SchedulerEvent::Tick(t) => format!(
+                    "tick t={:.1}s mem={:.0}% sm={:.0}% running={} queue={}",
+                    t.t, t.mem_pct, t.sm_pct, t.running, t.queue,
+                ),
             };
         }
         // Render after each pump (whether or not events were emitted).

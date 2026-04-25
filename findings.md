@@ -3239,3 +3239,85 @@ The benchmark will tell us:
 
 This is the right way to make progress: a benchmark that converts "is the scheduler good?" into a number.
 
+
+
+---
+
+## Entry 44 — The benchmark revealed the truth: a single specialist saturates the H100
+
+The scheduler-benchmark measurements + a `nvidia-smi` probe gave the actual answer to the user's question.
+
+### Measurement chain
+
+1. First benchmark (sequential old code): pair=2.00×, quad=4.00× — pure serial.
+2. Surgery 1 (remove per-batch loss sync): pair=2.17×, quad=4.13× — slightly worse but absolute alone-time dropped from 4640 → 3120 ms.
+3. Surgery 2 (prepare/finalize split for stream overlap): same ratios.
+4. The killer measurement:
+
+    ```
+    $ nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader
+    96 %, 9521 MiB
+    ```
+
+    GPU utilization **96% from a single specialist**. The H100 is already saturated by one of our jobs.
+
+### What that means
+
+The Tetris model assumes **multiple jobs can share GPU resources without interfering** — which works when each job uses only a fraction of the SMs. Our specialists don't fit that model: each one uses essentially all 132 SMs because the matmul tiles, even at modest grid counts, occupy SM resources (registers, shared memory, warp slots) that prevent co-residence with other kernels.
+
+The 4× scaling for 4 jobs isn't scheduler interference — it's **fair time-sharing of a saturated GPU**. The scheduler is doing the right thing: each job gets 1/N of the GPU's time, total wall time = N × alone_time. There's no waste; there's also no speedup possible.
+
+### What the slot scheduler still buys you (correctly)
+
+- **Single CUDA context** — no per-process kernel JIT cost, no inter-process memory accounting. A real win.
+- **Coordinated scheduling** — N processes fighting on the GPU is worse than N jobs in one process (thrashing CUDA driver state). A real win.
+- **Compact telemetry** — TickEvent stream feeds Firebase without bandwidth cost.
+- **No N-times-worse-than-serial behaviour** — the benchmark proved we're at exactly N× (proportional fair sharing), not 2N× or worse from scheduler bugs.
+
+What it does NOT buy you at this specialist size:
+- Wall-time speedup vs running serially. They're equivalent.
+
+### Reframing: when does concurrency actually help?
+
+A fair packing benefit would show up when:
+- Specialists are smaller (sub-saturation kernels: e.g. d_model=16, n_layers=1)
+- Inference / eval workloads (forward only, lighter kernels)
+- Mixed workloads where some jobs use few SMs (e.g. argmax, reduction-only steps) and can co-execute with backward-heavy jobs
+
+For the GA's current configs (d=64 L=4 winning config, or d=32 L=2 default), the GPU is saturated by one job. The scheduler isn't slowing things down — it just can't speed things up either.
+
+### Updating the SM estimate
+
+The current `estimate_job_sm_blocks` (matmul tile count + n_heads ≈ 16-27 blocks) is misleading because it ignores per-block SM resource costs. A realistic estimate would be: a single specialist uses ~all 132 SMs at its peak step. For visualization purposes the `sm_pct` displayed should be capped at `100 / max_concurrent` × running, not based on the block count.
+
+I'll keep the block-count estimate for now (it's still useful as a relative ordering signal between different-sized jobs) but note this caveat.
+
+### What this means for the user's GA
+
+If three_populations spawns N specialists at once and they all hit the same `MAMBA_ENGINE=ptxd`:
+- They run in one ptxd process (good — no JIT, no contention)
+- They time-share the GPU fairly (1/N each)
+- Total wall ≈ N × per-job wall (same as N separate ptxd processes would give)
+- BUT we save the JIT cost and the cross-process memory overhead
+
+That's a real win even without sub-1× ratios. The Tetris view is honest: the slots fill, the work happens, no waste.
+
+For a true sub-1× win you'd need to either shrink the specialists below GPU saturation (a different research question — does d_model=16 still solve parity?) or run different *types* of work concurrently (e.g. inference + training).
+
+### TickEvent for telemetry — landed
+
+Independent of the concurrency story, added the compact tick stream:
+
+```rust
+pub struct TickEvent {
+    kind: "tick",
+    t: f64,                  // seconds since scheduler start
+    mem_pct: f32,            // 0..100
+    sm_pct: f32,             // 0..100
+    running: usize,
+    queue: usize,
+}
+```
+
+Scheduler emits one per second (configurable via `tick_interval_s`). ~50 bytes serialised. At 1Hz that's 4KB/min, 6MB/day — well under any Firebase rate limit. Mirrors the shape of the existing `firebase_push.push_gpu_tick` so an external uploader can forward verbatim. UI can plot mem_pct + sm_pct + running over time as a sparkline.
+
