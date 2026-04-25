@@ -3079,3 +3079,82 @@ Modest speedup on this micro-benchmark because job a converges at 600 steps and 
 
 The gates kept the refactor honest. Without them, the silent regression (e.g., a missing stream argument somewhere) would only show up after hours of training.
 
+
+
+---
+
+## Entry 42 — Phase 1 close-out: ptxd is the GA orchestrator's worker
+
+The end-to-end test we said we'd run finally ran. With `MAMBA_ENGINE=ptxd`, `three_populations.py.spawn_worker` spawns `ptxd_specialist.py` instead of `specialist_trainer.py`. The shim invokes the ptxd binary, parses streaming JSON cycle events, and writes both MetricsWriter and StateDB rows that match what specialist_trainer.py would write. The orchestrator's `db.get_task_status("parity")` returns the right data on the next iteration — `status`, `best_accuracy`, `total_cycles`, `confidence_score`. Lineage entries land too.
+
+```
+[test] MAMBA_ENGINE=ptxd
+[test] spawning worker...
+[test] worker exited with code=1 in 10.0s    ← non-zero because didn't hit 0.95
+[test] last 5 lines of output:
+  > [ptxd_specialist] cycle 2  loss=0.6619  acc=55%  best=55%  stage=0
+  > [ptxd_specialist] cycle 3  loss=0.6886  acc=48%  best=55%  stage=0
+  > [ptxd_specialist] cycle 4  loss=0.5830  acc=50%  best=55%  stage=0
+  > [ptxd_specialist] cycle 5  loss=0.7212  acc=56%  best=56%  stage=0
+  > [ptxd_specialist] parity  best_acc=55.5%  loss=0.7177  ms/step=8.14  (10.0s wall)
+
+[test] reading back StateDB rows...
+  task_status: status=training  best_accuracy=0.555  total_cycles=5  conf_score=0.4635
+  lineage: 1 entries
+    round=5 acc=0.555 role=champion
+
+[test] integration PASS ✓
+```
+
+This particular spawn plateaued at 55.5% (seed=12345 hits one of the L=2 fixed-3 narrow basins documented in Entry 39 — same trap PyTorch's autograd would also hit if it used this LCG init). The GA's seed exploration loop is exactly designed to handle this: subsequent rounds spawn new specialists with mutated configs, find the seeds that converge, and lineage them forward. The integration mechanics are the deliverable here, not this particular seed's accuracy.
+
+### What three_populations sees, before vs after
+
+Before (`MAMBA_ENGINE` unset, default specialist_trainer.py):
+- Spawns N PyTorch processes per cycle, each holds its own CUDA context
+- Each process JIT-compiles Mamba3Block forward + autograd backward
+- Multi-process GPU contention; CUDA driver thrashes
+- Each process writes the same StateDB / MetricsWriter rows
+
+After (`MAMBA_ENGINE=ptxd`):
+- Spawns N `ptxd_specialist.py` Python processes — but each is just a thin shim
+- Each shim opens a ptxd subprocess that JIT-compiles PTX kernels ONCE
+- Inside ptxd, the slot scheduler runs jobs concurrently on CUDA streams
+- Each shim still writes the same DB rows; the orchestrator can't tell
+
+Wins:
+- No more cross-process CUDA-context contention
+- Kernels compile once per ptxd lifetime, not once per worker
+- Concurrent jobs share the same context (cooperate, not compete)
+- 14× faster training per job (Entry 35) — direct throughput multiplier
+
+Losses (acceptable):
+- ptxd_specialist exits non-zero on plateau (specialist_trainer might too — orchestrator doesn't check returncode)
+- No checkpoint persistence yet; specialists respawn fresh each round (the GA already supports this — `arch_changed` path)
+- Only "parity" task supported in ptxd today; other tasks fall back to specialist_trainer.py automatically (the shim does this)
+
+### To enable in production
+
+```bash
+export MAMBA_ENGINE=ptxd
+python3 three_populations.py --dir three_pop_ptx
+```
+
+The directory should be fresh (or use the existing one — the DB schema is unchanged). Set `PTXD_BIN=/path/to/ptxd` if the binary isn't at the default `engine/ptx/target/release/ptxd` location. To turn it back off, just unset `MAMBA_ENGINE`.
+
+### Phase 2 recap, with the integration now live
+
+| | Status |
+|---|---|
+| Per-instance stream on PtxModel | ✅ shipped |
+| from_cpu_on_stream + new_stream | ✅ shipped |
+| JobRunner abstraction | ✅ shipped |
+| Concurrent execution (multi-stream) | ✅ shipped, verified 1.17× speedup on 2 jobs |
+| Memory-budget admission control | ⏳ academic — small specialists fit easily |
+| ptxd v2 with Scheduler | ✅ shipped |
+| ptxd_specialist.py shim | ✅ shipped, full StateDB integration |
+| three_populations env-var swap | ✅ shipped |
+| End-to-end integration test | ✅ PASS |
+
+Phase 2 ships. The GA orchestrator can now use the PTX engine in production with one environment variable.
+
