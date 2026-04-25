@@ -3321,3 +3321,69 @@ pub struct TickEvent {
 
 Scheduler emits one per second (configurable via `tick_interval_s`). ~50 bytes serialised. At 1Hz that's 4KB/min, 6MB/day — well under any Firebase rate limit. Mirrors the shape of the existing `firebase_push.push_gpu_tick` so an external uploader can forward verbatim. UI can plot mem_pct + sm_pct + running over time as a sparkline.
 
+
+
+---
+
+## Entry 45 — Tiny benchmark closes the case: it's the host, not the GPU
+
+After Entry 44 attributed the lack of speedup to GPU saturation (96% util on a single specialist), the tiny benchmark tested the alternate hypothesis: if a single job uses far less than 100% of the GPU, can N concurrent tiny jobs run in parallel?
+
+```
+$ scheduler-benchmark-tiny      # d=8, L=1, dS=8
+[alone]  n=1 concurrent=1   total_wall=  1.78s   active_med=  1.78s
+[pair]   n=2 concurrent=2   total_wall=  3.82s   active_med=  3.82s
+[quad]   n=4 concurrent=4   total_wall=  7.32s   active_med=  7.32s
+[octa]   n=8 concurrent=8   total_wall= 14.02s   active_med= 14.01s
+
+regime          median_ms   ratio_vs_alone
+alone (n=1)        1779.2   1.00×
+pair  (n=2)        3824.2   2.15×
+quad  (n=4)        7318.6   4.11×
+octa  (n=8)       14013.7   7.88×    ← STILL N×
+```
+
+A tiny d=8 model with single-layer trivial kernels — and 8 concurrent copies still take 8× longer than 1. **The bottleneck isn't GPU saturation.** It's host-side single-threaded launch serialisation.
+
+### What's actually happening
+
+Even when the GPU has 99% headroom, our scheduler iterates runners serially. Each runner's `prepare_one_batch` calls `accumulate_gradients` 16 times, which queues ~50 kernel launches per call. That's ~800 `cuLaunchKernel` API calls per runner per step, all going through a single Rust thread. With 8 runners, that's 6400 API calls per pump_one_step, all on one CPU thread.
+
+`cuLaunchKernel` itself takes ~1-5μs on the host even when it's just queuing the kernel onto an idle stream. At 1μs/call × 6400 calls = 6.4ms of pure host work per step. For a tiny job whose actual GPU work takes <1ms, host overhead dominates.
+
+### Why prepare/finalize didn't fix it
+
+The split into prepare-all-then-finalize-all was supposed to let GPU streams overlap. But: prepare_one_batch's host work is sequential through the runners, so by the time runner 7 starts launching, runner 0's kernels have already FINISHED on the GPU (they were trivially small). Streams never had outstanding work simultaneously.
+
+Even if streams DID overlap, the host launch path is one thread, so each launch waits for the previous one to return from cudarc into Rust. The CPU is the serialisation point, not the GPU.
+
+### The honest answer to the user's question
+
+> "What happens if you have a single job for the entire cluster? How much
+> time does it spend? And that should be the same amount that it spends
+> whenever we push to the limit."
+
+Today: it doesn't. A single job at 1.78s, 8 concurrent jobs at 14.01s each. **8× interference, fundamentally host-bound.**
+
+To get them equal:
+
+1. **Multi-threaded host launch.** One OS thread per JobRunner; each thread independently calls `cuLaunchKernel` on its own stream. cudarc's CudaStream is already `Send`+`Sync`-friendly. The refactor: replace `for runner in &mut self.running` with `running.par_iter_mut()` (rayon) or with manually-spawned threads + channels. Then 8 threads launching in parallel finish their host work in 6.4ms / 8 = 0.8ms total instead of 6.4ms.
+2. **CUDA Graphs.** Compile a "one training step" sequence into a CUDA Graph once, replay it cheaply. ~10× fewer API calls per step. We've already validated CUDA Graph capture + replay in earlier session work.
+3. **Bigger batch_size per launch.** If we did the entire batch in fewer kernels (e.g. one fused mega-kernel), we'd amortize host overhead across more GPU work. That's a kernel-redesign project.
+
+Each of these is real work. (1) is the most direct path and probably worth a half-day. (2) was already partially built earlier in the project. (3) is a research direction.
+
+### What this means in production
+
+For the GA's *current* specialists at d=32 or d=64, both effects pile on:
+- Kernels are big enough to saturate the GPU (Entry 44)
+- AND host launch is single-threaded (this entry)
+
+So the scheduler can't deliver wall-time speedup over running specialists serially — it only delivers the other Tetris benefits (single CUDA context, no JIT, coordinated memory, telemetry).
+
+That's still a genuine win, just not the one I originally pitched. The benchmark we built converts those claims into honest numbers.
+
+### Telemetry pipe ready independent of all this
+
+The TickEvent stream + ptxd_tail.py uploader + scheduler_telemetry.md doc landed. UI can subscribe to `mamba3/scheduler_history/{generation}` and plot `mem`, `sm`, `running`, `queue` over `t`. Even when the scheduler can't speed jobs up, you can still see exactly what it's doing in real time.
+
