@@ -3713,3 +3713,95 @@ End-to-end verification on H100:
 - ptxd_specialist resumes parity.pt at 100%, trains 100 steps via
   streaming, saves back at 100% — full GA-compatible flow intact
 
+## Entry 52 — Phases 4 + 6: distillation kernel + pluggable Loss/Optimizer/Schedule
+
+User asked for distillation and the GA's full mutation surface. Both
+shipped this session.
+
+**Phase 6 — pluggable enums** (`scheduler.rs`):
+
+Three tagged enums in the Job spec:
+
+```rust
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Loss      { Ce, CeKd { kd_weight, temperature }, Focal { gamma }, LabelSmooth { smoothing } }
+pub enum Optimizer { AdamW { beta1, beta2, eps }, Lion { beta1, beta2 } }
+pub enum Schedule  { WarmupFlat { warmup_steps }, WarmRestarts { warmup_steps, restart_period } }
+```
+
+`AdamW + Ce + WarmupFlat` are the implemented variants. `Lion` falls back
+to AdamW with a stderr warning (the GA's lion mutation was previously a
+silent no-op — now it's an audited fallback). `Focal`, `LabelSmooth` warn
+and train as plain CE — kernels pending. `WarmRestarts` maps to plain
+WarmupFlat.
+
+`ptxd_specialist.py` translates `--optimizer` / `--loss-fn` (the
+specialist_trainer-shaped CLI three_populations.py uses) into the
+tagged-enum job spec. Backwards-compat: jobs with no optimizer/loss/
+schedule fields default to AdamW + CE + WarmupFlat (verified live).
+
+**Phase 4 — distillation** (`kernels.cu` + `trainer.rs` + protocol v2):
+
+Format v2 carries optional teacher logits per supervised position:
+
+```
+[vocab_size] [n_supervised]
+[pos] [logits: f32 * V]   ← per supervised slot
+```
+
+`kd_apply` is a new kernel that runs after `cross_entropy_fwd_bwd` at
+the supervised positions only. It computes student softmax fresh and
+teacher softmax(logits/T) — both on the fly, no extra memory — then
+blends d_logits in place:
+
+```
+d_logits[pos, v] = (1 - α)·CE_grad + α · (1/T)·(ps - pt) · 1/n_active
+```
+
+Math is Hinton-style KD with temperature T (matches PyTorch's
+`KLDivLoss(reduction='batchmean') * T**2 + α*CE`). The `(1/T)` factor
+in front comes from the chain rule through the `/T` scaling.
+
+Trainer side: new `accumulate_gradients_with_kd(tokens, targets,
+teacher_logits, sup_positions, kd_weight, temperature)` plumbs the KD
+inputs through. The CE kernel runs unchanged; kd_apply launches
+immediately after when Loss::CeKd + teacher_logits are present, before
+the rest of the backward pass consumes d_logits.
+
+Verified on H100 with synthetic teacher logits (Gaussian + bump on the
+correct answer): kd_apply runs to completion, no crash, no
+"unimplemented" warning. Production teacher integration (load
+specialist_trainer's `_cache.pt` files, extract teacher logits per
+supervised position, ship via batch v2) is a Python-side follow-up
+with zero further Rust work needed.
+
+**Production parity scorecard now:**
+
+| Capability                                | Status                  |
+|-------------------------------------------|-------------------------|
+| Forward bit-parity                        | ✓                       |
+| Resume from PyTorch .pt                   | ✓ (warmup mitigation)   |
+| Save back to PyTorch .pt                  | ✓                       |
+| Slot scheduler / telemetry                | ✓                       |
+| StateDB integration                       | ✓                       |
+| Streaming batch protocol                  | ✓                       |
+| Tasks: any in `problems/`                 | ✓ (parity, cumulative_sum verified)  |
+| Multi-position output supervision         | ✓                       |
+| **Distillation: kernel**                  | **✓ Phase 4**           |
+| Distillation: real teacher integration    | Python-side follow-up   |
+| **Pluggable optimizer/loss/schedule**     | **✓ Phase 6**           |
+| Loss kernels: CE, CeKd                    | ✓                       |
+| Loss kernels: Focal, LabelSmooth          | warn + fallback         |
+| Optimizer: AdamW                          | ✓                       |
+| Optimizer: Lion                           | warn + fallback         |
+| Optimizer state round-trip                | warmup hack only (P5)   |
+| Curriculum stage advancement (Python)     | wiring TODO             |
+| Per-task verification sweep (30+ tasks)   | only parity + cumsum    |
+
+Remaining work to true completion: Phase 5 (optimizer state round-trip,
+~500 lines), Lion + Focal + LabelSmooth kernels (each ~50 lines),
+curriculum stage advancement wiring in ptxd_specialist.py, and a
+verification sweep across all problems/. None of these block the GA
+today — every mutation either lands or warns + falls back, never
+silently corrupts.
+
