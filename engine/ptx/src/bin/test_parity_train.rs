@@ -160,6 +160,32 @@ fn main() -> Result<(), Box<dyn Error>> {
         for layer in cpu_model.layers.iter_mut() {
             layer.scale = 0.1;
         }
+
+        // ---- Match PyTorch's nn.Linear default init: kaiming-uniform ----
+        // PyTorch nn.Linear uses U(-1/sqrt(fan_in), 1/sqrt(fan_in)) by default.
+        // Our CPU new_random uses Xavier-uniform U(-sqrt(6/(fan_in+fan_out)),
+        // +sqrt(...)). The magnitudes differ by 1.2-2x for our shapes; with
+        // the rest of the recipe matched, this is the last unmatched piece.
+        // Side-by-side: PyTorch hits 100% in 2 cycles on this exact task,
+        // so the gap, if any, has to be here or in the forward kernel itself.
+        let d = cpu_model.d_model;
+        for layer in cpu_model.layers.iter_mut() {
+            let dip = layer.d_in_proj;
+            let di = 2 * d;
+            // in_proj fan_in = d_model
+            let in_proj_bound = (1.0f32 / d as f32).sqrt();
+            for w in layer.in_proj_w.iter_mut() {
+                *w = (lcg() * 2.0 - 1.0) * in_proj_bound;
+            }
+            let _ = dip;
+            // out_proj fan_in = d_inner. Bare PyTorch nn.Linear default
+            // (no 0.01 scaling — that's a ProgressiveModel-specific tweak;
+            // our PyTorch baseline uses bare Mamba3Block so we match that).
+            let out_proj_bound = (1.0f32 / di as f32).sqrt();
+            for w in layer.out_proj_w.iter_mut() {
+                *w = (lcg() * 2.0 - 1.0) * out_proj_bound;
+            }
+        }
     }
     // After mutating cpu_model, push the new weights to GPU. (`from_cpu` below
     // uploads the post-mutation values.)
