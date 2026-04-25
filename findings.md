@@ -2350,3 +2350,36 @@ Five layers of correctness, in order of decreasing how-much-fd-check-helps:
 
 Each layer needs its own verification pattern. For (3): grep the reference. For (4): match hyperparameters and clipping strategy. For (5): match accumulation semantics.
 
+
+
+---
+
+## Entry 30 — Side-by-side: PyTorch baseline converges where our PTX plateaus
+
+The Entry 29 question — "is our PTX matching PyTorch, or is there still a hidden delta?" — got a definitive answer by running PyTorch with the *exact same task setup* on the H100's CPU.
+
+**Setup (identical to test_parity_train defaults):** d=32, L=1, dS=16, hd=16, batch=16, lr=1e-3, wd=0.1, 10 cycles × 200 steps. Byte-token parity sequences `[BOS, bit, SPC, bit, ..., SEP, ANSWER, EOS]`. Loss masked to the SEP→ANSWER position only via PyTorch's `ignore_index=-100`. `mamba3_minimal.Mamba3Block` (the same hand-traceable implementation `parity_experiment.py` uses).
+
+**Result:**
+```
+PyTorch CPU:                          Our PTX (same config):
+  cycle  1  loss=6.20  acc=64%        cycle  1  loss=8.91  acc=52%
+  cycle  2  loss=0.56  acc=99%  ★     cycle  2  loss=0.81  acc=56%
+  cycle  3  loss=0.02  acc=100%       (...stuck at 56% for 25+ cycles)
+  cycle 10  loss=0.0000 acc=100%
+```
+
+PyTorch hits 100% in 2 cycles. Our PTX, on the same task with the same hyperparameters, plateaus at 56%.
+
+Conclusion: **the recipe is right, but our hand-port still has a hidden delta.** It's not gradient correctness (fd-check 74/75 PASS), not loss formulation (matched), not optimizer (matched batched accumulation, clip_grad_norm, warmup), not init at this layer (we override dt_bias and embed). The remaining suspects:
+
+1. **`nn.Linear` default init.** PyTorch uses kaiming-uniform `U(-√(1/fan_in), +√(1/fan_in))`; our CPU `new_random` uses Xavier `U(-√(6/(fan_in+fan_out)), +√(...))`. For our shapes the magnitudes differ by ~1.2-2× depending on the layer.
+2. **`nn.LayerNorm` numerical eps.** We use 1e-5 in our kernel; PyTorch defaults to 1e-5 too — should match.
+3. **A subtle forward delta** between our hand-ported SSM and `mamba3_minimal.Mamba3Block`. fd-check verifies the gradient of *our* forward, not bit-equality with PyTorch's forward. We've never directly compared forward outputs at identical weights.
+4. **Weight tying interaction.** Both use `head_weight = embed.weight`, so the embedding gets gradients from two paths (lookup + LM head). Should be the same in both.
+5. **Cumulative phase / RoPE.** PyTorch computes `phase = cumsum(angles * DT_mean, dim=1)`. Our `compute_phase` kernel does the same in principle. But cumsum is sequential — easy to get a stride or starting-state wrong.
+
+The right next experiment: dump a PyTorch model's weights to a file, load them into PtxModel via `from_bin`, run a single forward on a fixed input, compare logits element-wise. Any mismatch above 1e-5 is a forward bug we haven't isolated. fd-check passes the gradient gate but doesn't prove forward parity with the *reference* implementation.
+
+The PyTorch baseline script is at `/tmp/pytorch_parity_baseline.py` (uploaded to H100 at `/root/pytorch_parity_baseline.py`). It uses `mamba3_minimal.Mamba3Block` from the existing repo and replicates the exact training task (no GA, no curriculum, just the masked-CE byte-token parity used by `test_parity_train`).
+
