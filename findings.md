@@ -2747,3 +2747,60 @@ Current orchestration calls `subprocess.Popen([sys.executable, "specialist_train
 
 Either is small. What's *important* is that the training-engine equivalence is now proven (Entry 35) — the orchestration glue is plumbing.
 
+
+
+---
+
+## Entry 37 — Curriculum + drop-in shim: ptxd as a real `specialist_trainer.py` replacement
+
+Two changes turn `ptxd` from a kernel demo into something the GA orchestrator can spawn unchanged.
+
+### Curriculum support in ptxd
+
+`problems/parity/problem.yaml` specifies parity as a 3-stage curriculum:
+```yaml
+stages:
+  - min_len: 2
+    max_len: 4
+    advance_at: 0.90
+  - min_len: 3
+    max_len: 8
+    advance_at: 0.90
+  - min_len: 4
+    max_len: 16
+    advance_at: 0.95
+```
+The original `ptxd` only knew fixed `n_bits` per job. Added an optional `stages` field to the JSON contract:
+```json
+{"task": "parity", "stages": [{"min_len":2, "max_len":4, "advance_at":0.9}, ...], ...}
+```
+ptxd starts at stage 0, samples `n_bits ~ U[min_len, max_len]` per training sample, evaluates every 200 steps, advances stages when eval acc crosses `advance_at`. Backward compatible — jobs without `stages` get the old fixed-length behavior. `max_seq` is now sized for the largest stage's `max_len` so the activation cache fits.
+
+### `ptxd_specialist.py` — the drop-in shim
+
+`three_populations.py.spawn_worker` calls `python3 specialist_trainer.py …` and reads results back through `MetricsWriter`'s SQLite tables. To swap in ptxd without touching the orchestrator:
+
+`ptxd_specialist.py` accepts the same CLI surface (the subset spawn_worker actually passes), maps it to a single ptxd JSON job, pipes it to a ptxd subprocess, parses the result, and writes the same MetricsWriter rows specialist_trainer.py writes:
+
+- `register_experiment(exp_id, config, n_params)` at start
+- `log_event("ptxd_start", ...)` for traceability
+- `log_cycle(...)` and `log_tasks(...)` synthesised from the final summary
+- `update_status(exp_id, "mastered" | "needs_tuning" | ...)` at end
+
+Falls back to spawning `specialist_trainer.py` for non-parity tasks (ptxd only knows parity for now).
+
+To switch the GA from PyTorch training to PTX:
+```diff
+-    cmd = [sys.executable, "-u", "specialist_trainer.py",
++    cmd = [sys.executable, "-u", "ptxd_specialist.py",
+```
+That's the entire integration. Set `PTXD_BIN=/path/to/ptxd` if the binary lives outside the default location.
+
+### What's still missing for a full GA replacement
+
+1. **Per-cycle logging.** Right now ptxd reports a single final summary. The GA monitors per-cycle accuracy in the DB to detect plateaus; for ptxd jobs the synthesised log_cycle row gives one data point per job. Adding a streaming JSON output mode (`{"cycle": N, "loss": ..., "acc": ...}` per line as training progresses) is small but real work.
+2. **Tasks beyond parity.** specialist_trainer.py handles every problem in `problems/`. ptxd only knows parity. Adding a task = adding a `run_<task>` function and a token/eval contract per problem. The framework's there.
+3. **Slot scheduler.** ptxd is still single-process, sequential. The Tetris-like scheduler from earlier (memory + SM packing for concurrent jobs on one H100) is the real upgrade — multi-stream CUDA contexts, per-job activation cache budgeting, etc.
+
+Each of (1) and (2) is roughly a half-day. (3) is the bigger systems piece.
+
