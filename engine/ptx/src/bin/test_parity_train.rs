@@ -151,6 +151,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         for w in cpu_model.embed_w.iter_mut() {
             *w = next_normal();
         }
+
+        // Layer scale: PyTorch inits at 0.01 but with autograd it can move
+        // freely. With our discrete steps and small scalar grads, scale=0.01
+        // is too small for the optimizer to grab onto and gets driven to 0.
+        // Bump initial scale to 0.1 so the SSM signal is detectable from
+        // step 1 and the gradient has direction.
+        for layer in cpu_model.layers.iter_mut() {
+            layer.scale = 0.1;
+        }
     }
     // After mutating cpu_model, push the new weights to GPU. (`from_cpu` below
     // uploads the post-mutation values.)
