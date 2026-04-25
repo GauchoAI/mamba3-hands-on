@@ -468,26 +468,77 @@ def main():
     except Exception as e:
         sys.stderr.write(f"[ptxd_specialist] StateDB integration warning: {e}\n")
 
-    # ---- Save checkpoint back to canonical .pt path ----
-    # If ptxd wrote a save_bin file, convert it to PyTorch format and
-    # overwrite checkpoints/specialists/{task}.pt — matches what
-    # specialist_trainer.py would do at end of training.
+    # ---- Save checkpoint back, with regression guard ----
+    # NEVER overwrite the canonical {task}.pt with a worse model. The 82
+    # checkpoints that exist took a lot of compute to produce; a tighter-
+    # budget ptxd run that doesn't reach the prior accuracy must NOT
+    # clobber them. Mirrors specialist_trainer's _champion convention.
+    #
+    # Decision tree:
+    #   best_acc >= prior_acc        → save canonical (training continues)
+    #   prior_acc - best_acc <= 5%   → save to {task}_ptxd_candidate.pt
+    #                                   (regression within noise; let GA decide)
+    #   prior_acc - best_acc > 5%    → save to {task}_ptxd_candidate.pt
+    #                                   AND log a warning (clear regression)
+    #   no prior .pt                 → save canonical (fresh training run)
+    #
+    # The optimizer state file is gated by the same check — a regressed
+    # run's m/v shouldn't seed the next round either.
     try:
         if os.path.exists(save_bin_path):
             from ckpt_bridge import bin_to_pt
             ckpt_dir.mkdir(parents=True, exist_ok=True)
             prior_cycles = (resume_meta.get("cycles", 0) if resume_meta else 0)
-            bin_to_pt(
-                save_bin_path, str(ckpt_path),
-                task=args.task, config=config,
-                accuracy=best_acc,
-                cycles=prior_cycles + (cycles_completed if 'cycles_completed' in dir() else int(result.get("steps_executed", 0)) // max(1, args.steps_per_cycle)),
-            )
-            sys.stderr.write(
-                f"[ptxd_specialist] saved {args.task} → {ckpt_path} "
-                f"(acc={best_acc:.0%})\n"
-            )
-            # Cleanup tmp bin
+            prior_acc    = (resume_meta.get("accuracy", 0.0) if resume_meta else 0.0)
+
+            total_cycles = prior_cycles + (cycles_completed if 'cycles_completed' in dir()
+                                           else int(result.get("steps_executed", 0)) // max(1, args.steps_per_cycle))
+
+            REGRESSION_TOL = 0.05  # 5pp slack for noise / eval-distribution shift
+            is_fresh   = (resume_meta is None)
+            no_loss    = (best_acc + 1e-6 >= prior_acc)
+            small_drop = (prior_acc - best_acc <= REGRESSION_TOL)
+
+            if is_fresh or no_loss:
+                # Safe to overwrite canonical.
+                bin_to_pt(save_bin_path, str(ckpt_path),
+                          task=args.task, config=config,
+                          accuracy=best_acc, cycles=total_cycles)
+                sys.stderr.write(
+                    f"[ptxd_specialist] saved {args.task} → {ckpt_path} "
+                    f"(acc={best_acc:.0%}; prior={prior_acc:.0%})\n"
+                )
+                if opt_state_path.exists() or args.kd_weight > 0:
+                    pass  # opt state was already written by ptxd to the canonical path
+            else:
+                # Regression — DO NOT overwrite canonical. Save candidate
+                # for the GA / human to inspect. Also avoid tainting the
+                # opt state: if ptxd wrote one to the canonical path,
+                # rename it out of the way so the next round doesn't
+                # resume from a regressed state.
+                candidate_pt = ckpt_dir / f"{args.task}_ptxd_candidate.pt"
+                bin_to_pt(save_bin_path, str(candidate_pt),
+                          task=args.task, config=config,
+                          accuracy=best_acc, cycles=total_cycles)
+                level = "WARNING" if not small_drop else "info"
+                sys.stderr.write(
+                    f"[ptxd_specialist] {level}: {args.task} regressed "
+                    f"(prior={prior_acc:.0%}, this run={best_acc:.0%}, "
+                    f"Δ={(best_acc - prior_acc)*100:+.1f}pp). "
+                    f"Canonical {ckpt_path.name} preserved; "
+                    f"candidate written to {candidate_pt.name}\n"
+                )
+                # Move the regressed opt state out of the canonical path
+                # so the next round resumes from the prior good state.
+                if opt_state_path.exists():
+                    candidate_opt = ckpt_dir / f"{args.task}_ptxd_candidate.opt.bin"
+                    try:
+                        os.replace(opt_state_path, candidate_opt)
+                        sys.stderr.write(f"[ptxd_specialist]   opt state moved to {candidate_opt.name}\n")
+                    except Exception as e:
+                        sys.stderr.write(f"[ptxd_specialist]   couldn't move opt state ({e})\n")
+
+            # Cleanup tmp bin in either path.
             try: os.unlink(save_bin_path)
             except Exception: pass
         else:
