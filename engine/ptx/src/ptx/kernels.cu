@@ -1932,16 +1932,23 @@ extern "C" __global__ void adamw_step(
 
 // ---------- cross_entropy_fwd_bwd ------------------------------------------
 // Per-row softmax with max-subtraction for numerical stability.  Writes:
-//   loss_out[0] += -log(softmax[target]) / L  (atomic across L rows)
-//   d_logits[t, v] = (softmax(t, v) - [v==target]) / L
-// Matches mamba3_engine::backward::cross_entropy_loss.
+//   loss_out[0] += -log(softmax[target]) / n_active  (atomic across rows)
+//   d_logits[t, v] = (softmax(t, v) - [v==target]) / n_active
+//
+// Rows with target == 0xFFFFFFFF (sentinel MASK_TARGET) are masked out:
+// d_logits[t, :] = 0 and no contribution to loss. This matches PyTorch's
+// `loss = (loss_all * mask).sum() / mask.sum()`, which is what
+// specialist_trainer.py does to only supervise the answer position(s)
+// rather than every token in the sequence.
+//
+// `n_active_inv` = 1 / max(1, sum_t [target_t != MASK]) — caller computes.
 // Grid: (L,), Block: (256,) — one block per timestep
 extern "C" __global__ void cross_entropy_fwd_bwd(
     const float* __restrict__ logits,     // (L, V)
-    const unsigned int* __restrict__ targets,  // (L,)
+    const unsigned int* __restrict__ targets,  // (L,) — 0xFFFFFFFF = masked
     float* __restrict__ d_logits,         // (L, V)
     float* __restrict__ loss_out,         // (1,) accumulator — caller must zero
-    int L, int V
+    int L, int V, float n_active_inv
 ) {
     int t = blockIdx.x;
     if (t >= L) return;
@@ -1949,6 +1956,14 @@ extern "C" __global__ void cross_entropy_fwd_bwd(
     int warp = tid >> 5;
     int lane = tid & 31;
     unsigned int target = targets[t];
+
+    // Masked position: zero d_logits and exit. No loss contribution.
+    if (target == 0xFFFFFFFFu) {
+        for (int v = tid; v < V; v += blockDim.x) {
+            d_logits[t * V + v] = 0.0f;
+        }
+        return;
+    }
 
     __shared__ float s_max;
     __shared__ float s_sum;
@@ -1996,20 +2011,19 @@ extern "C" __global__ void cross_entropy_fwd_bwd(
     __syncthreads();
 
     float inv_sum = 1.0f / s_sum;
-    float inv_L = 1.0f / (float)L;
 
-    // --- normalize to softmax, subtract one-hot, scale by 1/L ---
+    // --- normalize to softmax, subtract one-hot, scale by 1/n_active ---
     for (int v = tid; v < V; v += blockDim.x) {
         float sm = d_logits[t * V + v] * inv_sum;
         float g = sm - ((unsigned int)v == target ? 1.0f : 0.0f);
-        d_logits[t * V + v] = g * inv_L;
+        d_logits[t * V + v] = g * n_active_inv;
     }
 
     // --- loss contribution for this row ---
     if (tid == 0) {
         // pred = exp(logits[target] - max) * inv_sum   (avoids re-reading d_logits after write)
         float pred = __expf(logits[t * V + target] - row_max) * inv_sum;
-        float contrib = -__logf(pred) * inv_L;
+        float contrib = -__logf(pred) * n_active_inv;
         atomicAdd(loss_out, contrib);
     }
 }

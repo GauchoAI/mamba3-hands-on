@@ -176,8 +176,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 tokens.push(answer);
                 tokens.push(257);
 
-                let mut targets = tokens[1..].to_vec();
-                targets.push(257);
+                // Mask all positions except the one that predicts the answer:
+                // tokens[L-3]=SEP → predicts tokens[L-2]=ANSWER. So the only
+                // supervised position is index L-3 (targets[L-3] = answer).
+                // Rest use u32::MAX sentinel → skipped by cross_entropy_fwd_bwd.
+                // Matches specialist_trainer.py's mask_flat semantics — without
+                // this, the loss is dominated by un-predictable bit tokens and
+                // training plateaus around log(2).
+                let mut targets: Vec<u32> = vec![u32::MAX; tokens.len()];
+                let answer_pos = tokens.len() - 3;
+                targets[answer_pos] = answer;
 
                 batch_loss += trainer.train_step(&tokens, &targets)?;
                 total_train_steps += 1;

@@ -206,6 +206,10 @@ impl PtxTrainer {
         {
             let l_i = l as i32;
             let v_i = v as i32;
+            // Count unmasked positions (target != MASK sentinel) so the kernel
+            // can normalise by 1/n_active, matching PyTorch's masked CE.
+            let n_active = targets.iter().filter(|&&t| t != u32::MAX).count();
+            let n_active_inv: f32 = if n_active == 0 { 0.0 } else { 1.0 / n_active as f32 };
             let logits = &self.model.scratch.borrow().logits;
             let logits_src: &CudaSlice<f32> = logits;
             let mut lb = stream.launch_builder(&ptx.k.cross_entropy_fwd_bwd);
@@ -215,6 +219,7 @@ impl PtxTrainer {
             lb.arg(&mut self.train_scratch.loss);
             lb.arg(&l_i);
             lb.arg(&v_i);
+            lb.arg(&n_active_inv);
             let cfg = LaunchConfig {
                 grid_dim: (l as u32, 1, 1),
                 block_dim: (256, 1, 1),
