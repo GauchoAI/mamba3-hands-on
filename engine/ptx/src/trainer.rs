@@ -51,7 +51,8 @@ pub struct PtxTrainer {
     pub v_scale: Vec<f32>,
 
     pub step: u32,
-    pub lr: f32,
+    pub lr: f32,                 // peak / steady-state LR
+    pub warmup_steps: u32,       // linear LR ramp from 0 → lr over this many steps
     pub weight_decay: f32,
     pub beta1: f32,
     pub beta2: f32,
@@ -151,6 +152,7 @@ impl PtxTrainer {
             v_scale: vec![0.0; nl],
             step: 0,
             lr,
+            warmup_steps: 200,   // matches specialist_trainer scale; CLI override below
             weight_decay,
             beta1: 0.9,
             beta2: 0.999,
@@ -355,6 +357,17 @@ impl PtxTrainer {
         let bc1_inv = 1.0f32 / (1.0 - self.beta1.powi(self.step as i32));
         let bc2_inv = 1.0f32 / (1.0 - self.beta2.powi(self.step as i32));
 
+        // Linear LR warmup: gradient magnitudes are unstable in the first
+        // few hundred steps because Adam's `v` moment is still tiny, which
+        // amplifies updates. Without warmup, scalars like `scale` overshoot
+        // through zero on step 1 and the optimizer can't recover. We linearly
+        // ramp lr_eff from 0 → self.lr over `warmup_steps`.
+        let lr_eff = if self.step < self.warmup_steps {
+            self.lr * (self.step as f32) / (self.warmup_steps as f32)
+        } else {
+            self.lr
+        };
+
         // Uniform weight decay across all params. PyTorch's "no_decay" idiom
         // requires the FULL gradient chain to be implemented first; with our
         // partial gradients, removing WD on 1-D tensors (d_param especially)
@@ -364,10 +377,71 @@ impl PtxTrainer {
         // have the full backward chain, everyone gets the same wd.
         let no_decay_wd = self.weight_decay;
 
+        // -- Global-norm gradient clipping (matches PyTorch's
+        //    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)). Without
+        //    this, AdamW applies updates element-wise without seeing the total
+        //    norm, and small parameters like the per-layer `scale` get over-
+        //    corrected toward zero on the very first step (the gradient says
+        //    "SSM output is random noise, decrease scale" — the optimizer
+        //    obeys aggressively).  PyTorch's global clip implicitly damps each
+        //    parameter's update by 1/||all_grads||_2 when the total norm is
+        //    above 1.0.
+        const MAX_NORM: f32 = 1.0;
+        let mut sumsq_dev = stream.alloc_zeros::<f32>(1)?;
+        // Accumulate sum of squares across every gradient tensor we'll AdamW.
+        let acc_sumsq = |stream: &Arc<cudarc::driver::CudaStream>,
+                          ptx: &Arc<PtxContext>,
+                          buf: &CudaSlice<f32>,
+                          n: usize,
+                          out: &mut CudaSlice<f32>|
+         -> Result<(), Box<dyn Error>> {
+            let mut lb = stream.launch_builder(&ptx.k.reduce_dot_f32);
+            let n_i = n as i32;
+            lb.arg(buf);
+            lb.arg(buf);
+            lb.arg(out);
+            lb.arg(&n_i);
+            let cfg = LaunchConfig {
+                grid_dim: ((n as u32 + 255) / 256, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+            Ok(())
+        };
+        acc_sumsq(&stream, &ptx, &self.train_scratch.d_embed, v * d, &mut sumsq_dev)?;
+        acc_sumsq(&stream, &ptx, &self.train_scratch.d_fnorm_w, d, &mut sumsq_dev)?;
+        acc_sumsq(&stream, &ptx, &self.train_scratch.d_fnorm_b, d, &mut sumsq_dev)?;
+        acc_sumsq(&stream, &ptx, &self.train_scratch.d_embed_norm_w, d, &mut sumsq_dev)?;
+        acc_sumsq(&stream, &ptx, &self.train_scratch.d_embed_norm_b, d, &mut sumsq_dev)?;
+        let ds_local = self.model.d_state;
+        for li in 0..self.model.n_layers {
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_in_proj_w[li], dip * d, &mut sumsq_dev)?;
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_out_proj_w[li], d * di, &mut sumsq_dev)?;
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_d_param[li], nh, &mut sumsq_dev)?;
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_dt_bias[li], nh, &mut sumsq_dev)?;
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_layer_norm_w[li], d, &mut sumsq_dev)?;
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_layer_norm_b[li], d, &mut sumsq_dev)?;
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_b_norm_w[li], ds_local, &mut sumsq_dev)?;
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_b_norm_b[li], ds_local, &mut sumsq_dev)?;
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_c_norm_w[li], ds_local, &mut sumsq_dev)?;
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_c_norm_b[li], ds_local, &mut sumsq_dev)?;
+            acc_sumsq(&stream, &ptx, &self.train_scratch.d_scale[li], 1, &mut sumsq_dev)?;
+        }
+        let sumsq = stream.memcpy_dtov(&sumsq_dev)?[0];
+        let total_norm = sumsq.max(0.0).sqrt();
+        let g_mul: f32 = if total_norm.is_finite() && total_norm > MAX_NORM {
+            MAX_NORM / total_norm
+        } else if !total_norm.is_finite() {
+            0.0
+        } else {
+            1.0
+        };
+
         launch_adamw(&stream, &ptx,
             &mut self.model.embed_w, &self.train_scratch.d_embed,
             &mut self.m_embed, &mut self.v_embed,
-            self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+            lr_eff, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv, g_mul,
             v * d,
         )?;
         for li in 0..self.model.n_layers {
@@ -375,87 +449,87 @@ impl PtxTrainer {
             launch_adamw(&stream, &ptx,
                 &mut layer.in_proj_w, &self.train_scratch.d_in_proj_w[li],
                 &mut self.m_in_proj[li], &mut self.v_in_proj[li],
-                self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+                lr_eff, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv, g_mul,
                 dip * d,
             )?;
             launch_adamw(&stream, &ptx,
                 &mut layer.out_proj_w, &self.train_scratch.d_out_proj_w[li],
                 &mut self.m_out_proj[li], &mut self.v_out_proj[li],
-                self.lr, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv,
+                lr_eff, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv, g_mul,
                 d * di,
             )?;
             launch_adamw(&stream, &ptx,
                 &mut layer.d_param, &self.train_scratch.d_d_param[li],
                 &mut self.m_d_param[li], &mut self.v_d_param[li],
-                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 nh,
             )?;
             launch_adamw(&stream, &ptx,
                 &mut layer.dt_bias, &self.train_scratch.d_dt_bias[li],
                 &mut self.m_dt_bias[li], &mut self.v_dt_bias[li],
-                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 nh,
             )?;
             launch_adamw(&stream, &ptx,
                 &mut layer.layer_norm_w, &self.train_scratch.d_layer_norm_w[li],
                 &mut self.m_layer_norm_w[li], &mut self.v_layer_norm_w[li],
-                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 d,
             )?;
             launch_adamw(&stream, &ptx,
                 &mut layer.layer_norm_b, &self.train_scratch.d_layer_norm_b[li],
                 &mut self.m_layer_norm_b[li], &mut self.v_layer_norm_b[li],
-                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 d,
             )?;
             let ds = self.model.d_state;
             launch_adamw(&stream, &ptx,
                 &mut layer.b_norm_w, &self.train_scratch.d_b_norm_w[li],
                 &mut self.m_b_norm_w[li], &mut self.v_b_norm_w[li],
-                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 ds,
             )?;
             launch_adamw(&stream, &ptx,
                 &mut layer.b_norm_b, &self.train_scratch.d_b_norm_b[li],
                 &mut self.m_b_norm_b[li], &mut self.v_b_norm_b[li],
-                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 ds,
             )?;
             launch_adamw(&stream, &ptx,
                 &mut layer.c_norm_w, &self.train_scratch.d_c_norm_w[li],
                 &mut self.m_c_norm_w[li], &mut self.v_c_norm_w[li],
-                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 ds,
             )?;
             launch_adamw(&stream, &ptx,
                 &mut layer.c_norm_b, &self.train_scratch.d_c_norm_b[li],
                 &mut self.m_c_norm_b[li], &mut self.v_c_norm_b[li],
-                self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+                lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 ds,
             )?;
         }
         launch_adamw(&stream, &ptx,
             &mut self.model.final_norm_w, &self.train_scratch.d_fnorm_w,
             &mut self.m_fnorm_w, &mut self.v_fnorm_w,
-            self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+            lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
             d,
         )?;
         launch_adamw(&stream, &ptx,
             &mut self.model.final_norm_b, &self.train_scratch.d_fnorm_b,
             &mut self.m_fnorm_b, &mut self.v_fnorm_b,
-            self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+            lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
             d,
         )?;
         launch_adamw(&stream, &ptx,
             &mut self.model.embed_norm_w, &self.train_scratch.d_embed_norm_w,
             &mut self.m_embed_norm_w, &mut self.v_embed_norm_w,
-            self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+            lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
             d,
         )?;
         launch_adamw(&stream, &ptx,
             &mut self.model.embed_norm_b, &self.train_scratch.d_embed_norm_b,
             &mut self.m_embed_norm_b, &mut self.v_embed_norm_b,
-            self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+            lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
             d,
         )?;
 
@@ -464,17 +538,17 @@ impl PtxTrainer {
         // D→H copy per layer per step — cheap (8 bytes × n_layers).
         for li in 0..self.model.n_layers {
             let g = stream.memcpy_dtov(&self.train_scratch.d_scale[li])?[0];
-            let g = if g.is_finite() { g.clamp(-1.0, 1.0) } else { 0.0 };
+            let g = if g.is_finite() { g.clamp(-1.0, 1.0) * g_mul } else { 0.0 };
             let p = self.model.layers[li].scale;
             // no_decay for scalar: wd=0 semantically, but match uniform wd for now
-            let p = p * (1.0 - self.lr * no_decay_wd);
+            let p = p * (1.0 - lr_eff * no_decay_wd);
             let mi = self.beta1 * self.m_scale[li] + (1.0 - self.beta1) * g;
             let vi = self.beta2 * self.v_scale[li] + (1.0 - self.beta2) * g * g;
             self.m_scale[li] = mi;
             self.v_scale[li] = vi;
             let m_hat = mi * bc1_inv;
             let v_hat = vi * bc2_inv;
-            let p_new = p - self.lr * m_hat / (v_hat.sqrt() + self.eps);
+            let p_new = p - lr_eff * m_hat / (v_hat.sqrt() + self.eps);
             self.model.layers[li].scale = p_new;
         }
         Ok(())
@@ -1120,6 +1194,7 @@ fn launch_adamw(
     v: &mut CudaSlice<f32>,
     lr: f32, beta1: f32, beta2: f32, eps: f32, wd: f32,
     bc1_inv: f32, bc2_inv: f32,
+    g_mul: f32,
     n: usize,
 ) -> Result<(), Box<dyn Error>> {
     let n_i = n as i32;
@@ -1130,6 +1205,7 @@ fn launch_adamw(
     lb.arg(v);
     lb.arg(&lr); lb.arg(&beta1); lb.arg(&beta2); lb.arg(&eps); lb.arg(&wd);
     lb.arg(&bc1_inv); lb.arg(&bc2_inv);
+    lb.arg(&g_mul);
     lb.arg(&n_i);
     let cfg = LaunchConfig {
         grid_dim: ((n as u32 + 255) / 256, 1, 1),

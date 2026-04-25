@@ -110,10 +110,52 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ptx = Arc::new(PtxContext::new()?);
     println!("kernels compiled in {:.2}s", t0.elapsed().as_secs_f64());
 
-    let cpu_model = Mamba3Model::new_random(
+    let mut cpu_model = Mamba3Model::new_random(
         args.d_model, args.d_state, args.headdim, args.n_layers, args.vocab_size,
     );
-    println!("Model: {} params", cpu_model.param_count());
+
+    // --- Match PyTorch (mamba3_minimal.py) init ----------------------------
+    // The CPU `new_random` uses Xavier-uniform everywhere and dt_bias=-3.0
+    // uniformly across heads. PyTorch uses two important recipe-specific inits:
+    //   1. dt_bias log-uniform per head: each head gets a different timescale
+    //      sampled in [dt_min=0.001, dt_max=0.1]. dt_bias = inv_softplus(dt) =
+    //      dt + log(-expm1(-dt)).  This is the classic Mamba init and is the
+    //      most likely fix for the variable-length parity plateau.
+    //   2. embed_w ~ N(0, 1) (PyTorch nn.Embedding default), much larger than
+    //      our Xavier-uniform default (~7× difference for V=260, d=64).
+    {
+        // LCG matching the seed style elsewhere in this binary.
+        let mut s: u64 = args.seed;
+        let mut lcg = || -> f32 {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((s >> 33) as u32) as f32 / u32::MAX as f32
+        };
+        let dt_min: f32 = 0.001;
+        let dt_max: f32 = 0.1;
+        let log_dt_min = dt_min.ln();
+        let log_dt_max = dt_max.ln();
+        for layer in cpu_model.layers.iter_mut() {
+            for h in 0..layer.dt_bias.len() {
+                let r = lcg();                               // U[0,1)
+                let dt_h = (r * (log_dt_max - log_dt_min) + log_dt_min).exp().max(1e-4);
+                // inv_softplus: bias such that softplus(bias) = dt_h.
+                layer.dt_bias[h] = dt_h + (-(-dt_h).exp_m1()).ln();
+            }
+        }
+        // Box–Muller standard normal for embedding to match PyTorch nn.Embedding.
+        let mut next_normal = || -> f32 {
+            let u1 = lcg().max(1e-30);
+            let u2 = lcg();
+            ((-2.0 * u1.ln()).sqrt()) * (2.0 * std::f32::consts::PI * u2).cos()
+        };
+        for w in cpu_model.embed_w.iter_mut() {
+            *w = next_normal();
+        }
+    }
+    // After mutating cpu_model, push the new weights to GPU. (`from_cpu` below
+    // uploads the post-mutation values.)
+    println!("Model: {} params  (dt_bias log-uniform; embed N(0,1))",
+        cpu_model.param_count());
 
     // Max sequence length for scratch buffer sizing: max_bits (16) + BOS + SEP + answer + EOS
     let max_seq = 21;

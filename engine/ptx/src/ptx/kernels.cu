@@ -1935,18 +1935,23 @@ extern "C" __global__ void adamw_step(
     float* __restrict__ v,
     float lr, float beta1, float beta2, float eps, float wd,
     float bc1_inv, float bc2_inv,
+    float g_mul,    // global gradient-norm clip multiplier (≤1, host-computed)
     int n
 ) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     float g = grads[i];
-    // Simple per-element clipping: caps runaway gradients and NaN propagation
-    // that can arise from newly-enabled gradient paths (e.g. d_dt_bias when
-    // dt is small, making inp/dt blow up). Matches PyTorch's common
-    // clip_grad_norm behavior in spirit.
+    // 1. NaN/Inf safety net — keeps a single bad value from poisoning a
+    //    whole tensor's moment estimates.
     if (!isfinite(g)) g = 0.0f;
+    // 2. Per-element clamp at [-1, 1] as a hard ceiling for outliers.
     if (g > 1.0f)  g = 1.0f;
     if (g < -1.0f) g = -1.0f;
+    // 3. Global-norm clip multiplier: if ||all_grads||_2 > max_norm, host
+    //    computes g_mul = max_norm / ||all_grads||_2 (else 1.0). Mirrors
+    //    PyTorch's torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    //    which preserves gradient direction while bounding the step size.
+    g *= g_mul;
     float p = params[i] * (1.0f - lr * wd);
     float mi = __fmaf_rn(1.0f - beta1, g, beta1 * m[i]);
     float vi = __fmaf_rn(1.0f - beta2, g * g, beta2 * v[i]);
