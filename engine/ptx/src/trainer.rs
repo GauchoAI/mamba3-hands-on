@@ -663,17 +663,62 @@ impl PtxTrainer {
         Ok(())
     }
 
-    /// Backward chain for the b_norm/c_norm + RoPE that sits between
-    /// proj[bp/cp_slice] and the post-LN+RoPE bp/cp fed into the SSM scan.
-    ///
-    /// Inputs (already populated):
-    ///   d_bp_post, d_cp_post   — grad w.r.t. post-LN+RoPE bp/cp
-    ///   layer_phases[li]       — cached rotation phases
-    ///   layer_projs[li]        — holds raw bp/cp slices in-place
-    ///
-    /// Outputs (accumulated into):
-    ///   d_proj[bp_slice], d_proj[cp_slice]   (atomic via scatter_add)
-    ///   d_b_norm_w/b[li], d_c_norm_w/b[li]   (atomic via layer_norm_bwd)
+    /// Phase-chain part of the bp/cp backward: rope_bwd in-place on both
+    /// d_bp_post and d_cp_post, accumulating d_phase for use by the
+    /// reverse-cumsum + phase_step_bwd that follows.  Splits out of the
+    /// full bp_cp_norm_bwd so the caller can interleave the phase chain
+    /// (which feeds d_dt_mean into ssm_param_grads) before running the
+    /// layer-norm half of the chain.
+    fn bp_cp_rope_bwd(
+        &mut self,
+        stream: &Arc<cudarc::driver::CudaStream>,
+        ptx: &Arc<PtxContext>,
+        li: usize,
+        l: usize,
+        ds: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        let n_angles = self.model.layers[li].num_rope_angles;
+        if n_angles == 0 { return Ok(()); }
+        let l_i = l as i32;
+        let ds_i = ds as i32;
+        let na_i = n_angles as i32;
+        let phase_off = li * self.train_scratch.layer_phase_stride;
+        let phase_len = l * n_angles;
+        let phase_view = self.train_scratch.layer_phases.slice(phase_off..phase_off + phase_len);
+        let cp_off = li * self.train_scratch.layer_cp_stride;
+        let bp_view = self.train_scratch.layer_bps.slice(cp_off..cp_off + l * ds);
+        let cp_view = self.train_scratch.layer_cps.slice(cp_off..cp_off + l * ds);
+        let cfg = LaunchConfig {
+            grid_dim: (l as u32, 1, 1),
+            block_dim: (n_angles as u32, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        // bp
+        {
+            let mut lb = stream.launch_builder(&ptx.k.rope_bwd);
+            lb.arg(&mut self.train_scratch.d_bp_post);
+            lb.arg(&bp_view);
+            lb.arg(&phase_view);
+            lb.arg(&mut self.train_scratch.d_phase);
+            lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&na_i);
+            unsafe { lb.launch(cfg)? };
+        }
+        // cp
+        {
+            let mut lb = stream.launch_builder(&ptx.k.rope_bwd);
+            lb.arg(&mut self.train_scratch.d_cp_post);
+            lb.arg(&cp_view);
+            lb.arg(&phase_view);
+            lb.arg(&mut self.train_scratch.d_phase);
+            lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&na_i);
+            unsafe { lb.launch(cfg)? };
+        }
+        Ok(())
+    }
+
+    /// LayerNorm half of the bp/cp chain: d_{bp,cp}_post (now post-rope_bwd,
+    /// i.e. holding d_normed) → ln_bwd → scatter into d_proj[bp/cp_slice].
+    /// Accumulates d_b_norm_w/b and d_c_norm_w/b along the way.
     fn bp_cp_norm_bwd(
         &mut self,
         stream: &Arc<cudarc::driver::CudaStream>,
@@ -685,39 +730,12 @@ impl PtxTrainer {
         ds: usize,
         dip: usize,
     ) -> Result<(), Box<dyn Error>> {
-        let n_angles = self.model.layers[li].num_rope_angles;
         let l_i = l as i32;
         let ds_i = ds as i32;
         let dip_i = dip as i32;
-
-        // rope_bwd in-place (d_out: post-RoPE → post-LN).
-        if n_angles > 0 {
-            let phase_off = li * self.train_scratch.layer_phase_stride;
-            let phase_len = l * n_angles;
-            let phase_view = self.train_scratch.layer_phases.slice(phase_off..phase_off + phase_len);
-            let na_i = n_angles as i32;
-            let cfg = LaunchConfig {
-                grid_dim: (l as u32, 1, 1),
-                block_dim: (n_angles as u32, 1, 1),
-                shared_mem_bytes: 0,
-            };
-            // bp
-            {
-                let mut lb = stream.launch_builder(&ptx.k.rope_bwd);
-                lb.arg(&mut self.train_scratch.d_bp_post);
-                lb.arg(&phase_view);
-                lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&na_i);
-                unsafe { lb.launch(cfg)? };
-            }
-            // cp
-            {
-                let mut lb = stream.launch_builder(&ptx.k.rope_bwd);
-                lb.arg(&mut self.train_scratch.d_cp_post);
-                lb.arg(&phase_view);
-                lb.arg(&l_i); lb.arg(&ds_i); lb.arg(&na_i);
-                unsafe { lb.launch(cfg)? };
-            }
-        }
+        // rope_bwd half is now run separately by bp_cp_rope_bwd before this
+        // function — d_bp_post and d_cp_post already hold post-rope (i.e.
+        // pre-RoPE = post-LN-only) gradients.
 
         // For each of {bp, cp}: gather raw slice from proj → bc_raw_tmp;
         // run layer_norm_bwd(d_out=d_*_post, x=bc_raw_tmp, w=*_norm_w);
@@ -898,6 +916,11 @@ impl PtxTrainer {
         launch_fill_zero(stream, ptx, &mut self.train_scratch.d_bp_post, l * ds)?;
         launch_fill_zero(stream, ptx, &mut self.train_scratch.d_cp_post, l * ds)?;
         launch_fill_zero(stream, ptx, &mut self.train_scratch.d_trap_pre, l * nh)?;
+        let n_angles = self.model.layers[li].num_rope_angles;
+        if n_angles > 0 {
+            launch_fill_zero(stream, ptx, &mut self.train_scratch.d_phase, l * n_angles)?;
+        }
+        launch_fill_zero(stream, ptx, &mut self.train_scratch.d_dt_mean, l)?;
 
         // Step D: gate_bwd writes d_proj[z slice] + d_y_pregate
         {
@@ -971,43 +994,10 @@ impl PtxTrainer {
             unsafe { lb.launch(cfg)? };
         }
 
-        // Step E2: ssm_param_grads — writes d_proj[dt_off] and d_proj[a_off]
-        // (overwrite — currently 0), plus atomic d_dt_bias[h]. Needs
-        // d_decay + d_dt_from_inp (both filled by ssm_scan_bwd_full; dt_from_inp
-        // is held at 0 by design for stability, so this is the decay-path
-        // d_dt only). FD-verified: before re-enable, d_dt_bias analytical was
-        // 0.0 while FD showed ~2e-4; after this, dt_bias should PASS the gate.
-        {
-            let proj_off = li * self.train_scratch.layer_proj_stride;
-            let dc_off = li * self.train_scratch.layer_decay_stride;
-            let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
-            let dt_view = self.train_scratch.layer_dts.slice(dc_off..dc_off + l * nh);
-            let dc_view = self.train_scratch.layer_decays.slice(dc_off..dc_off + l * nh);
-            let dt_bias_ref: &CudaSlice<f32> = &self.model.layers[li].dt_bias;
-            let l_i = l as i32;
-            let h_i = nh as i32;
-            let dip_i = dip as i32;
-            let di_i = di as i32;
-            let ds_i = ds as i32;
-            let mut lb = stream.launch_builder(&ptx.k.ssm_param_grads);
-            lb.arg(&proj_view);
-            lb.arg(dt_bias_ref);
-            lb.arg(&dt_view);
-            lb.arg(&dc_view);
-            lb.arg(&self.train_scratch.d_decay);
-            lb.arg(&self.train_scratch.d_dt_from_inp);
-            lb.arg(&mut self.train_scratch.d_proj);
-            lb.arg(&mut self.train_scratch.d_dt_bias[li]);
-            lb.arg(&l_i); lb.arg(&h_i); lb.arg(&dip_i); lb.arg(&di_i); lb.arg(&ds_i);
-            let block_x = nh.max(32) as u32;
-            let cfg = LaunchConfig {
-                grid_dim: (l as u32, 1, 1),
-                block_dim: (block_x, 1, 1),
-                shared_mem_bytes: 0,
-            };
-            unsafe { lb.launch(cfg)? };
-        }
         let _ = (dip, ds, di);
+        // ssm_param_grads has moved — it now runs AFTER the phase chain so it
+        // can incorporate d_dt_mean's contribution to d_dt[t,h]. See Step E2'
+        // below (after F1.5 / F-phase).
 
         // Step F: bx_bwd — accumulates d_proj[x_off] (atomic) and d_bp_post
         // (atomic). Uses post-LN+RoPE bp from cache, not raw proj[bp_off].
@@ -1066,10 +1056,95 @@ impl PtxTrainer {
             unsafe { lb.launch(cfg)? };
         }
 
-        // Step F2: Chain d_{bp,cp}_post → rope_bwd → layer_norm_bwd →
-        // scatter-add into d_proj[{bp,cp}_slice]. Fixes the remaining
-        // in_proj_w[cp/bp_row] FAILs. Also accumulates d_{b,c}_norm_w/b
-        // (populated but not yet AdamW'd until verified).
+        // Step F-phase-1: rope_bwd half — rotates d_bp_post / d_cp_post by
+        // -phase in place AND accumulates d_phase from BOTH chains.  After
+        // this, d_bp_post / d_cp_post hold post-LN-only gradients (ready
+        // for the LN bwd half), and d_phase has the full phase-side gradient.
+        self.bp_cp_rope_bwd(&stream, &ptx, li, l, ds)?;
+
+        // Step F-phase-2: reverse_cumsum d_phase → d_phase_step.
+        let n_angles_li = self.model.layers[li].num_rope_angles;
+        if n_angles_li > 0 {
+            let l_i = l as i32;
+            let k_i = n_angles_li as i32;
+            let mut lb = stream.launch_builder(&ptx.k.reverse_cumsum_f32);
+            lb.arg(&self.train_scratch.d_phase);
+            lb.arg(&mut self.train_scratch.d_phase_step);
+            lb.arg(&l_i); lb.arg(&k_i);
+            let cfg = LaunchConfig {
+                grid_dim: (n_angles_li as u32, 1, 1),
+                block_dim: (1, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+
+        // Step F-phase-3: phase_step_bwd writes d_proj[angles_off + k] and
+        // accumulates d_dt_mean[t] = Σ_k d_phase_step[t,k] · angles[t,k].
+        if n_angles_li > 0 {
+            let proj_off = li * self.train_scratch.layer_proj_stride;
+            let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
+            let dtm_off = li * self.train_scratch.max_seq;
+            let dtm_view = self.train_scratch.layer_dt_means.slice(dtm_off..dtm_off + l);
+            let l_i = l as i32;
+            let k_i = n_angles_li as i32;
+            let h_i = nh as i32;
+            let di_i = di as i32;
+            let ds_i = ds as i32;
+            let dip_i = dip as i32;
+            let mut lb = stream.launch_builder(&ptx.k.phase_step_bwd);
+            lb.arg(&self.train_scratch.d_phase_step);
+            lb.arg(&proj_view);
+            lb.arg(&dtm_view);
+            lb.arg(&mut self.train_scratch.d_proj);
+            lb.arg(&mut self.train_scratch.d_dt_mean);
+            lb.arg(&l_i); lb.arg(&k_i); lb.arg(&h_i); lb.arg(&di_i); lb.arg(&ds_i); lb.arg(&dip_i);
+            let block_x = (n_angles_li.max(32)).next_power_of_two().min(64) as u32;
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (block_x, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+
+        // Step E2 (moved): ssm_param_grads — now sees d_dt_mean from the
+        // phase chain so the dt gradient picks up the phase-DT_mean term.
+        {
+            let proj_off = li * self.train_scratch.layer_proj_stride;
+            let dc_off = li * self.train_scratch.layer_decay_stride;
+            let proj_view = self.train_scratch.layer_projs.slice(proj_off..proj_off + l * dip);
+            let dt_view = self.train_scratch.layer_dts.slice(dc_off..dc_off + l * nh);
+            let dc_view = self.train_scratch.layer_decays.slice(dc_off..dc_off + l * nh);
+            let dt_bias_ref: &CudaSlice<f32> = &self.model.layers[li].dt_bias;
+            let l_i = l as i32;
+            let h_i = nh as i32;
+            let dip_i = dip as i32;
+            let di_i = di as i32;
+            let ds_i = ds as i32;
+            let mut lb = stream.launch_builder(&ptx.k.ssm_param_grads);
+            lb.arg(&proj_view);
+            lb.arg(dt_bias_ref);
+            lb.arg(&dt_view);
+            lb.arg(&dc_view);
+            lb.arg(&self.train_scratch.d_decay);
+            lb.arg(&self.train_scratch.d_dt_from_inp);
+            lb.arg(&self.train_scratch.d_dt_mean);
+            lb.arg(&mut self.train_scratch.d_proj);
+            lb.arg(&mut self.train_scratch.d_dt_bias[li]);
+            lb.arg(&l_i); lb.arg(&h_i); lb.arg(&dip_i); lb.arg(&di_i); lb.arg(&ds_i);
+            let block_x = nh.max(32) as u32;
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (block_x, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+
+        // Step F2: LN-bwd half of the bp/cp chain — d_bp_post / d_cp_post
+        // (now holding post-LN-only gradients after rope_bwd) → ln_bwd →
+        // scatter into d_proj[bp/cp_slice].
         self.bp_cp_norm_bwd(&stream, &ptx, li, l, d, di, ds, dip)?;
 
         // Step G: in_proj backward

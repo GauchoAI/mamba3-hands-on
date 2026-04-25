@@ -537,6 +537,28 @@ impl PtxModel {
                 };
                 unsafe { lb.launch(cfg)? };
             }
+            // Cache dt_mean per layer for phase_step_bwd.
+            {
+                let off = li * l;   // n_layers * max_seq stride; we write l elems
+                // Actually layer_dt_means stride is max_seq, but we're storing
+                // per-layer L-long vectors back-to-back. Use max_seq-per-layer.
+                let stride = train_scratch.max_seq;
+                let off_corrected = li * stride;
+                let mut dst = train_scratch.layer_dt_means.slice_mut(off_corrected..off_corrected + l);
+                let src = scratch.dt_mean.slice(0..l);
+                let n_i = l as i32;
+                let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+                lb.arg(&src);
+                lb.arg(&mut dst);
+                lb.arg(&n_i);
+                let cfg = LaunchConfig {
+                    grid_dim: ((l as u32 + 255) / 256, 1, 1),
+                    block_dim: (256, 1, 1),
+                    shared_mem_bytes: 0,
+                };
+                unsafe { lb.launch(cfg)? };
+                let _ = off;
+            }
             // Cache trap (= sigmoid(tr_raw)) per layer for trap_to_proj_bwd.
             {
                 let d_off = li * train_scratch.layer_decay_stride;

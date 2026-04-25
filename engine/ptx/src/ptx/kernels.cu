@@ -368,16 +368,28 @@ extern "C" __global__ void scatter_add_to_proj(
 }
 
 // ---------- rope_bwd --------------------------------------------------------
-// Inverse of apply_rope: rotate (dv_e, dv_o) by -phase[t, k]. Forward is:
-//   v'_e = v_e·c - v_o·s,   v'_o = v_e·s + v_o·c
-// Gradient w.r.t. v (treating phase as constant):
+// Inverse of apply_rope, AND accumulate d_phase via the rotation's gradient
+// w.r.t. its angle parameter.
+//
+// Forward (per (t, k) pair):
+//   v'_e = v_e·c - v_o·s,   v'_o = v_e·s + v_o·c     where c=cos(a), s=sin(a)
+// Backward w.r.t. v (treating phase as constant) — rotates dv' by -a:
 //   dv_e =  dv'_e·c + dv'_o·s
 //   dv_o = -dv'_e·s + dv'_o·c
-// Operates in-place (d_v starts holding dv', ends holding dv).
+// Backward w.r.t. a:
+//   ∂v'_e/∂a = -v_e·s - v_o·c = -v'_o
+//   ∂v'_o/∂a =  v_e·c - v_o·s =  v'_e
+//   d_phase[t,k] += dv'_e · (-v'_o) + dv'_o · v'_e
+//                = dv'_o · v'_e − dv'_e · v'_o
+// We need v' (post-RoPE forward value) for the phase gradient — passed in as
+// `v_post`. Accumulates into `d_phase` (atomicAdd; both bp and cp chains
+// write into the same buffer).  Set `d_phase = nullptr` to skip phase grad.
 // Grid: (L,), Block: (n_angles,)
 extern "C" __global__ void rope_bwd(
-    float* __restrict__ d_v,
-    const float* __restrict__ phase,
+    float* __restrict__ d_v,                     // (L, ds), in-place
+    const float* __restrict__ v_post,            // (L, ds), post-RoPE forward values
+    const float* __restrict__ phase,             // (L, n_angles)
+    float* __restrict__ d_phase,                 // (L, n_angles), atomicAdd accumulator
     int L, int ds, int n_angles
 ) {
     int t = blockIdx.x;
@@ -390,8 +402,89 @@ extern "C" __global__ void rope_bwd(
     int idx_o = idx_e + 1;
     float dpe = d_v[idx_e];
     float dpo = d_v[idx_o];
+
+    // d_phase contribution computed BEFORE the in-place rotation — uses the
+    // un-rotated dv' values that came in.
+    if (d_phase != 0) {
+        float v_e_post = v_post[idx_e];
+        float v_o_post = v_post[idx_o];
+        float d_a = dpo * v_e_post - dpe * v_o_post;
+        atomicAdd(&d_phase[t * n_angles + k], d_a);
+    }
+
+    // d_v in-place: rotate by -a.
     d_v[idx_e] = __fmaf_rn(dpe, c,  dpo * s);
     d_v[idx_o] = __fmaf_rn(dpo, c, -dpe * s);
+}
+
+// ---------- reverse_cumsum_f32 ----------------------------------------------
+// out[t, k] = Σ_{t' >= t} src[t', k]   for k = 0..K, t = 0..L-1.
+// Equivalent to PyTorch's `torch.flip(torch.cumsum(torch.flip(x, [0]), dim=0), [0])`.
+// Backward of cumsum is reverse-cumsum: if y = cumsum(x), then dx[t] = Σ_{t'>=t} dy[t'].
+// Grid: (K,), Block: (1,) — one thread sweeps t backward per k. K is small (=dS/2).
+extern "C" __global__ void reverse_cumsum_f32(
+    const float* __restrict__ src,    // (L, K)
+    float* __restrict__ out,          // (L, K)
+    int L, int K
+) {
+    int k = blockIdx.x;
+    if (k >= K) return;
+    float acc = 0.0f;
+    for (int t = L - 1; t >= 0; t--) {
+        acc += src[t * K + k];
+        out[t * K + k] = acc;
+    }
+}
+
+// ---------- phase_step_bwd --------------------------------------------------
+// Forward: phase_step[t, k] = angles[t, k] · DT_mean[t]
+//          where angles[t, k] = proj[t * dip + angles_off + k]
+//                DT_mean[t]   = mean_h(DT[t, h])
+// Backward (given d_phase_step, accumulate into):
+//   d_proj[t * dip + angles_off + k] = d_phase_step[t, k] · DT_mean[t]
+//   d_DT_mean[t] += Σ_k d_phase_step[t, k] · angles[t, k]
+// Grid: (L,), Block: (max(K, 32),)
+extern "C" __global__ void phase_step_bwd(
+    const float* __restrict__ d_phase_step,   // (L, K)
+    const float* __restrict__ proj,           // (L, dip)  — read angles slice
+    const float* __restrict__ dt_mean,        // (L,)
+    float* __restrict__ d_proj,               // (L, dip)
+    float* __restrict__ d_dt_mean,            // (L,)
+    int L, int K, int H, int di, int ds, int dip
+) {
+    int t = blockIdx.x;
+    int k = threadIdx.x;
+    if (t >= L) return;
+    int angles_off = 2 * di + 2 * ds + 3 * H;
+
+    // d_proj write (one thread per k handles its own slot).
+    if (k < K) {
+        float dps = d_phase_step[t * K + k];
+        float dtm = dt_mean[t];
+        d_proj[t * dip + angles_off + k] = dps * dtm;
+    }
+
+    // d_DT_mean[t] += Σ_k d_phase_step[t,k] * angles[t,k]
+    // Block-reduce across k (K is small — use shared mem).
+    __shared__ float smem[64];
+    float partial = 0.0f;
+    if (k < K) {
+        float dps = d_phase_step[t * K + k];
+        float ang = proj[t * dip + angles_off + k];
+        partial = dps * ang;
+    }
+    smem[threadIdx.x] = partial;
+    __syncthreads();
+    int bd = blockDim.x;
+    for (int stride = bd >> 1; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride && threadIdx.x + stride < bd) {
+            smem[threadIdx.x] += smem[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        atomicAdd(&d_dt_mean[t], smem[0]);
+    }
 }
 
 // ---------- compute_z_silu --------------------------------------------------
@@ -1767,6 +1860,7 @@ extern "C" __global__ void ssm_param_grads(
     const float* __restrict__ decay,
     const float* __restrict__ d_decay,
     const float* __restrict__ d_dt_from_inp,
+    const float* __restrict__ d_dt_mean,    // (L,) — phase-chain contribution; nullable
     float* __restrict__ d_proj,
     float* __restrict__ d_dt_bias,
     int L, int H, int dip, int di, int ds
@@ -1790,8 +1884,11 @@ extern "C" __global__ void ssm_param_grads(
     float d_decay_th = d_decay[t * H + h];
     float d_dt_inp = d_dt_from_inp[t * H + h];
 
-    // d_dt = d_decay · a · decay + d_dt_from_inp
-    float d_dt = d_decay_th * a * dec + d_dt_inp;
+    // d_dt total: decay-path + inp-path + phase-chain.
+    // Phase chain: DT_mean[t] = mean_h DT[t,h], so ∂DT_mean/∂DT[t,h] = 1/H.
+    //              d_DT[t,h] += d_DT_mean[t] / H.
+    float d_dt_phase = (d_dt_mean != 0) ? (d_dt_mean[t] / (float)H) : 0.0f;
+    float d_dt = d_decay_th * a * dec + d_dt_inp + d_dt_phase;
     // d_a  = d_decay · dt · decay
     float d_a = d_decay_th * dt_v * dec;
 

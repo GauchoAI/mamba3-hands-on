@@ -43,6 +43,8 @@ pub struct Kernels {
     pub gather_slice_from_proj: CudaFunction,
     pub reduce_dot_f32: CudaFunction,
     pub trap_to_proj_bwd: CudaFunction,
+    pub reverse_cumsum_f32: CudaFunction,
+    pub phase_step_bwd: CudaFunction,
 }
 
 pub struct PtxContext {
@@ -129,6 +131,8 @@ impl PtxContext {
             gather_slice_from_proj: module.load_function("gather_slice_from_proj")?,
             reduce_dot_f32: module.load_function("reduce_dot_f32")?,
             trap_to_proj_bwd: module.load_function("trap_to_proj_bwd")?,
+            reverse_cumsum_f32: module.load_function("reverse_cumsum_f32")?,
+            phase_step_bwd: module.load_function("phase_step_bwd")?,
         };
 
         Ok(Self {

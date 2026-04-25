@@ -90,6 +90,16 @@ pub struct TrainScratch {
     // trap_to_proj_bwd then multiplies by trap*(1-trap) to get d_tr_raw and
     // writes the result into d_proj[tr_off + h]. (L, H)
     pub d_trap_pre: CudaSlice<f32>,
+    // Phase-chain backward scratch:
+    //   d_phase     ← from rope_bwd (atomicAdd from both bp and cp chains)
+    //   d_phase_step ← reverse_cumsum of d_phase
+    //   d_dt_mean   ← reduction of d_phase_step · angles, fed back into d_dt
+    // Sized to max_seq * max_n_angles. d_dt_mean is (L,) only.
+    pub d_phase: CudaSlice<f32>,        // (L, n_angles)
+    pub d_phase_step: CudaSlice<f32>,   // (L, n_angles)
+    pub d_dt_mean: CudaSlice<f32>,      // (L,)
+    // Cache of dt_mean[t] per layer (needed by phase_step_bwd).
+    pub layer_dt_means: CudaSlice<f32>, // (n_layers, L)
     // Post-LN+RoPE gradient slots for the bp/cp chain. Zero-init at step
     // start; ssm_scan_bwd_full and bx_bwd atomicAdd into these; then rope_bwd
     // + layer_norm_bwd produce the pre-LN raw gradient, which gets
@@ -209,6 +219,10 @@ impl TrainScratch {
             d_decay: stream.alloc_zeros::<f32>(max_seq * n_heads)?,
             d_dt_from_inp: stream.alloc_zeros::<f32>(max_seq * n_heads)?,
             d_trap_pre: stream.alloc_zeros::<f32>(max_seq * n_heads)?,
+            d_phase: stream.alloc_zeros::<f32>(lphase)?,
+            d_phase_step: stream.alloc_zeros::<f32>(lphase)?,
+            d_dt_mean: stream.alloc_zeros::<f32>(max_seq)?,
+            layer_dt_means: stream.alloc_zeros::<f32>(n_layers * max_seq)?,
             d_bp_post: stream.alloc_zeros::<f32>(lc)?,
             d_cp_post: stream.alloc_zeros::<f32>(lc)?,
             bc_raw_tmp: stream.alloc_zeros::<f32>(lc)?,
