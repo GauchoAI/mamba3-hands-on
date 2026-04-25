@@ -51,6 +51,8 @@ pub struct TrainScratch {
     pub x_before_head: CudaSlice<f32>,
     // x BEFORE the final norm — for final-norm backward. (L, d_model)
     pub x_before_final_norm: CudaSlice<f32>,
+    // x BEFORE the embed norm — for embed-norm backward. (L, d_model)
+    pub x_before_embed_norm: CudaSlice<f32>,
     // Single-float accumulator for cross-entropy loss.
     pub loss: CudaSlice<f32>,
     // Gradient of logits.  (L, vocab)
@@ -66,6 +68,8 @@ pub struct TrainScratch {
     pub d_embed: CudaSlice<f32>,    // (vocab, d)
     pub d_fnorm_w: CudaSlice<f32>,  // (d,)
     pub d_fnorm_b: CudaSlice<f32>,  // (d,)
+    pub d_embed_norm_w: CudaSlice<f32>,  // (d,)
+    pub d_embed_norm_b: CudaSlice<f32>,  // (d,)
     pub d_in_proj_w: Vec<CudaSlice<f32>>,   // per layer, (dip, d)
     pub d_out_proj_w: Vec<CudaSlice<f32>>,  // per layer, (d, di)
     pub d_d_param: Vec<CudaSlice<f32>>,     // per layer, (H,)
@@ -164,6 +168,7 @@ impl TrainScratch {
             layer_states: stream.alloc_zeros::<f32>(n_layers * ls)?,
             x_before_head: stream.alloc_zeros::<f32>(max_seq * d_model)?,
             x_before_final_norm: stream.alloc_zeros::<f32>(max_seq * d_model)?,
+            x_before_embed_norm: stream.alloc_zeros::<f32>(max_seq * d_model)?,
             loss: stream.alloc_zeros::<f32>(1)?,
             d_logits: stream.alloc_zeros::<f32>(max_seq * vocab_size)?,
             d_x: stream.alloc_zeros::<f32>(max_seq * d_model)?,
@@ -175,6 +180,8 @@ impl TrainScratch {
             d_embed: stream.alloc_zeros::<f32>(vocab_size * d_model)?,
             d_fnorm_w: stream.alloc_zeros::<f32>(d_model)?,
             d_fnorm_b: stream.alloc_zeros::<f32>(d_model)?,
+            d_embed_norm_w: stream.alloc_zeros::<f32>(d_model)?,
+            d_embed_norm_b: stream.alloc_zeros::<f32>(d_model)?,
             d_in_proj_w,
             d_out_proj_w,
             d_d_param,

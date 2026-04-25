@@ -42,6 +42,10 @@ pub struct PtxTrainer {
     pub v_c_norm_w: Vec<CudaSlice<f32>>,
     pub m_c_norm_b: Vec<CudaSlice<f32>>,
     pub v_c_norm_b: Vec<CudaSlice<f32>>,
+    pub m_embed_norm_w: CudaSlice<f32>,
+    pub v_embed_norm_w: CudaSlice<f32>,
+    pub m_embed_norm_b: CudaSlice<f32>,
+    pub v_embed_norm_b: CudaSlice<f32>,
 
     pub step: u32,
     pub lr: f32,
@@ -117,6 +121,10 @@ impl PtxTrainer {
         let v_fnorm_w = stream.alloc_zeros::<f32>(d)?;
         let m_fnorm_b = stream.alloc_zeros::<f32>(d)?;
         let v_fnorm_b = stream.alloc_zeros::<f32>(d)?;
+        let m_embed_norm_w = stream.alloc_zeros::<f32>(d)?;
+        let v_embed_norm_w = stream.alloc_zeros::<f32>(d)?;
+        let m_embed_norm_b = stream.alloc_zeros::<f32>(d)?;
+        let v_embed_norm_b = stream.alloc_zeros::<f32>(d)?;
 
         Ok(Self {
             model,
@@ -134,6 +142,8 @@ impl PtxTrainer {
             m_b_norm_b, v_b_norm_b,
             m_c_norm_w, v_c_norm_w,
             m_c_norm_b, v_c_norm_b,
+            m_embed_norm_w, v_embed_norm_w,
+            m_embed_norm_b, v_embed_norm_b,
             step: 0,
             lr,
             weight_decay,
@@ -264,8 +274,32 @@ impl PtxTrainer {
             self.layer_backward(&stream, &ptx, li, l)?;
         }
 
-        // 4. Embedding scatter backward: d_embed[token[t], :] += d_x[t, :]
-        //    Note: embed_norm is skipped in CPU reference — we do the same.
+        // 4a. Embed-norm backward: d_x (w.r.t. post-LN residual) flows back
+        // through layer_norm to give d_x_pre (w.r.t. pre-LN embedded x) plus
+        // accumulated d_embed_norm_w/b. Writes d_x_pre into d_y_out (scratch).
+        {
+            let l_i = l as i32;
+            let d_i = d as i32;
+            let mut lb = stream.launch_builder(&ptx.k.layer_norm_bwd);
+            lb.arg(&self.train_scratch.d_x);
+            lb.arg(&self.train_scratch.x_before_embed_norm);
+            lb.arg(&self.model.embed_norm_w);
+            lb.arg(&mut self.train_scratch.d_y_out);
+            lb.arg(&mut self.train_scratch.d_embed_norm_w);
+            lb.arg(&mut self.train_scratch.d_embed_norm_b);
+            lb.arg(&l_i);
+            lb.arg(&d_i);
+            let cfg = LaunchConfig {
+                grid_dim: (l as u32, 1, 1),
+                block_dim: (64, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
+        // Copy d_y_out → d_x (d_x now holds pre-embed-norm gradient).
+        launch_copy(&stream, &ptx, &self.train_scratch.d_y_out, &mut self.train_scratch.d_x, l * d)?;
+
+        // 4b. Embedding scatter backward: d_embed[token[t], :] += d_x[t, :]
         {
             let tokens_dev = &self.model.scratch.borrow().tokens;
             let l_i = l as i32;
@@ -402,6 +436,18 @@ impl PtxTrainer {
             self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
             d,
         )?;
+        launch_adamw(&stream, &ptx,
+            &mut self.model.embed_norm_w, &self.train_scratch.d_embed_norm_w,
+            &mut self.m_embed_norm_w, &mut self.v_embed_norm_w,
+            self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+            d,
+        )?;
+        launch_adamw(&stream, &ptx,
+            &mut self.model.embed_norm_b, &self.train_scratch.d_embed_norm_b,
+            &mut self.m_embed_norm_b, &mut self.v_embed_norm_b,
+            self.lr, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv,
+            d,
+        )?;
         Ok(())
     }
 
@@ -434,6 +480,8 @@ impl PtxTrainer {
         zero(&mut self.train_scratch.d_embed, v * d)?;
         zero(&mut self.train_scratch.d_fnorm_w, d)?;
         zero(&mut self.train_scratch.d_fnorm_b, d)?;
+        zero(&mut self.train_scratch.d_embed_norm_w, d)?;
+        zero(&mut self.train_scratch.d_embed_norm_b, d)?;
         for li in 0..self.model.n_layers {
             zero(&mut self.train_scratch.d_in_proj_w[li], dip * d)?;
             zero(&mut self.train_scratch.d_out_proj_w[li], d * di)?;

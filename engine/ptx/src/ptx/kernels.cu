@@ -1784,9 +1784,16 @@ extern "C" __global__ void ssm_param_grads(
 // ---------- bx_bwd ----------------------------------------------------------
 // From d_scan_inp, produce d_bp_post (post-LN+RoPE gradient — chained to
 // d_proj[bp_slice] via rope_bwd + layer_norm_bwd in Rust) and d_proj[x_off].
-// Per timestep/head/p: d_bx[n] = d_scan_inp[n] · dt · trap;
-//                      d_bp_post[n] += d_bx[n] · x_val[h*hd+p]
-//                      d_proj[x_off + h*hd+p] += sum_n(d_bx[n] · bp[n])   (bp = post-LN+RoPE, from cache)
+//
+// Forward:
+//   blended[t,h,p,n] = trap[t]·bp[t,n]·x[t,h,p] + (1-trap[t])·bp[t-1,n]·x[t-1,h,p]
+//   inp_val[t,h,p,n] = dt[t,h] · blended
+// Backward (per (t,h,p,n) with d_scan_inp = ∂L/∂inp_val):
+//   d_blended         = d_scan_inp · dt
+//   d_bp_post[t, n]  += d_blended ·    trap[t]     · x[t,h,p]
+//   d_bp_post[t-1,n] += d_blended · (1-trap[t])    · x[t-1,h,p]    (cross-time)
+//   d_x[t,h,p]       += sum_n d_blended · trap[t]    · bp[t,n]
+//   d_x[t-1,h,p]     += sum_n d_blended · (1-trap[t])· bp[t-1,n]   (cross-time)
 // Grid: (H,), Block: (hd*ds,) — same layout as ssm_scan_bwd.
 extern "C" __global__ void bx_bwd(
     const float* __restrict__ d_scan_inp,
@@ -1806,9 +1813,10 @@ extern "C" __global__ void bx_bwd(
     int dt_off = 2 * di + 2 * ds;
     int a_off = dt_off + H;
     int tr_off = a_off + H;
+    (void)a_off;
 
     extern __shared__ float smem[];
-    // Tree-reduce buffer per (h, p) for d_x_val sum over n.
+    // smem[tid] reused each timestep for (h,p)-group sum over n.
     // smem size = hd*ds
 
     for (int t = 0; t < L; t++) {
@@ -1816,30 +1824,53 @@ extern "C" __global__ void bx_bwd(
         float dt_v = softplus_f(dt_raw);
         float tr_raw = proj[t * dip + tr_off + h];
         float tr = sigmoid_f(tr_raw);
+        float dsi = d_scan_inp[((t * H + h) * hd + p) * ds + n];
+        float d_blended = dsi * dt_v;
 
-        // inp_val = blended · dt, blended ≈ trap · bx_cur, bx_cur = bp · x_val
-        // where bp is POST-LN+RoPE (from cache), NOT proj[bp_off+n].
-        float d_bx = d_scan_inp[((t * H + h) * hd + p) * ds + n] * (dt_v * tr);
-        float x_val = proj[t * dip + di + h * hd + p];
-        float bp_tn = bp[t * ds + n];
+        float x_cur = proj[t * dip + di + h * hd + p];
+        float bp_cur = bp[t * ds + n];
 
-        // d_bp_post[t, n] += d_bx · x_val   (x_val same for all n in (h, p))
-        atomicAdd(&d_bp_post[t * ds + n], d_bx * x_val);
+        // Current-time contributions (bp[t] · x[t])
+        float d_bp_cur_n = d_blended * tr * x_cur;
+        atomicAdd(&d_bp_post[t * ds + n], d_bp_cur_n);
+        float d_x_cur_partial = d_blended * tr * bp_cur;
 
-        // d_x[h*hd+p] partial: d_bx · bp_tn; sum over n in p-group
-        smem[tid] = d_bx * bp_tn;
+        // Cross-time contributions for t >= 1: bp[t-1] · x[t-1] with (1-trap[t]).
+        float d_x_prev_partial = 0.0f;
+        if (t > 0) {
+            float x_prev  = proj[(t - 1) * dip + di + h * hd + p];
+            float bp_prev = bp[(t - 1) * ds + n];
+            float one_mtr = 1.0f - tr;
+            float d_bp_prev_n = d_blended * one_mtr * x_prev;
+            atomicAdd(&d_bp_post[(t - 1) * ds + n], d_bp_prev_n);
+            d_x_prev_partial = d_blended * one_mtr * bp_prev;
+        }
+
+        // Reduce over n to get d_x[t,h,p] += sum_n d_x_cur_partial
+        smem[tid] = d_x_cur_partial;
         __syncthreads();
-
-        // Tree reduce across n for each p-group of ds threads
         for (int stride = ds >> 1; stride > 0; stride >>= 1) {
             if (n < stride) smem[tid] += smem[tid + stride];
             __syncthreads();
         }
-
         if (n == 0) {
             atomicAdd(&d_proj[t * dip + di + h * hd + p], smem[p * ds]);
         }
         __syncthreads();
+
+        // Reduce cross-time partial and add to d_x[t-1, h, p]
+        if (t > 0) {
+            smem[tid] = d_x_prev_partial;
+            __syncthreads();
+            for (int stride = ds >> 1; stride > 0; stride >>= 1) {
+                if (n < stride) smem[tid] += smem[tid + stride];
+                __syncthreads();
+            }
+            if (n == 0) {
+                atomicAdd(&d_proj[(t - 1) * dip + di + h * hd + p], smem[p * ds]);
+            }
+            __syncthreads();
+        }
     }
 }
 

@@ -269,6 +269,23 @@ impl PtxModel {
             };
             unsafe { lb.launch(cfg)? };
         }
+        // 1b. Cache pre-embed-norm x (needed by embed_norm backward).
+        {
+            let n_copy = l * d;
+            let src = scratch.x.slice(0..n_copy);
+            let mut dst = train_scratch.x_before_embed_norm.slice_mut(0..n_copy);
+            let n_i = n_copy as i32;
+            let mut lb = stream.launch_builder(&self.ptx.k.copy_f32);
+            lb.arg(&src);
+            lb.arg(&mut dst);
+            lb.arg(&n_i);
+            let cfg = LaunchConfig {
+                grid_dim: ((n_copy as u32 + 255) / 256, 1, 1),
+                block_dim: (256, 1, 1),
+                shared_mem_bytes: 0,
+            };
+            unsafe { lb.launch(cfg)? };
+        }
         // 2. Embed norm in-place
         launch_layer_norm(
             &stream, &self.ptx,

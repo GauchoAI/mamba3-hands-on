@@ -171,7 +171,15 @@ enum Tensor {
     DParam { layer: usize, idx: usize },
     DtBias { layer: usize, idx: usize },
     LayerNormW { layer: usize, idx: usize },
+    LayerNormB { layer: usize, idx: usize },
+    BNormW { layer: usize, idx: usize },
+    BNormB { layer: usize, idx: usize },
+    CNormW { layer: usize, idx: usize },
+    CNormB { layer: usize, idx: usize },
     FNormW { idx: usize },
+    FNormB { idx: usize },
+    EmbedNormW { idx: usize },
+    EmbedNormB { idx: usize },
 }
 
 impl Tensor {
@@ -183,7 +191,15 @@ impl Tensor {
             Tensor::DParam { layer, idx } => (&t.train_scratch.d_d_param[layer], idx),
             Tensor::DtBias { layer, idx } => (&t.train_scratch.d_dt_bias[layer], idx),
             Tensor::LayerNormW { layer, idx } => (&t.train_scratch.d_layer_norm_w[layer], idx),
+            Tensor::LayerNormB { layer, idx } => (&t.train_scratch.d_layer_norm_b[layer], idx),
+            Tensor::BNormW { layer, idx } => (&t.train_scratch.d_b_norm_w[layer], idx),
+            Tensor::BNormB { layer, idx } => (&t.train_scratch.d_b_norm_b[layer], idx),
+            Tensor::CNormW { layer, idx } => (&t.train_scratch.d_c_norm_w[layer], idx),
+            Tensor::CNormB { layer, idx } => (&t.train_scratch.d_c_norm_b[layer], idx),
             Tensor::FNormW { idx } => (&t.train_scratch.d_fnorm_w, idx),
+            Tensor::FNormB { idx } => (&t.train_scratch.d_fnorm_b, idx),
+            Tensor::EmbedNormW { idx } => (&t.train_scratch.d_embed_norm_w, idx),
+            Tensor::EmbedNormB { idx } => (&t.train_scratch.d_embed_norm_b, idx),
         }
     }
 
@@ -195,7 +211,15 @@ impl Tensor {
             Tensor::DParam { layer, .. } => &t.model.layers[layer].d_param,
             Tensor::DtBias { layer, .. } => &t.model.layers[layer].dt_bias,
             Tensor::LayerNormW { layer, .. } => &t.model.layers[layer].layer_norm_w,
+            Tensor::LayerNormB { layer, .. } => &t.model.layers[layer].layer_norm_b,
+            Tensor::BNormW { layer, .. } => &t.model.layers[layer].b_norm_w,
+            Tensor::BNormB { layer, .. } => &t.model.layers[layer].b_norm_b,
+            Tensor::CNormW { layer, .. } => &t.model.layers[layer].c_norm_w,
+            Tensor::CNormB { layer, .. } => &t.model.layers[layer].c_norm_b,
             Tensor::FNormW { .. } => &t.model.final_norm_w,
+            Tensor::FNormB { .. } => &t.model.final_norm_b,
+            Tensor::EmbedNormW { .. } => &t.model.embed_norm_w,
+            Tensor::EmbedNormB { .. } => &t.model.embed_norm_b,
         }
     }
 
@@ -207,7 +231,15 @@ impl Tensor {
             Tensor::DParam { layer, .. } => &mut t.model.layers[layer].d_param,
             Tensor::DtBias { layer, .. } => &mut t.model.layers[layer].dt_bias,
             Tensor::LayerNormW { layer, .. } => &mut t.model.layers[layer].layer_norm_w,
+            Tensor::LayerNormB { layer, .. } => &mut t.model.layers[layer].layer_norm_b,
+            Tensor::BNormW { layer, .. } => &mut t.model.layers[layer].b_norm_w,
+            Tensor::BNormB { layer, .. } => &mut t.model.layers[layer].b_norm_b,
+            Tensor::CNormW { layer, .. } => &mut t.model.layers[layer].c_norm_w,
+            Tensor::CNormB { layer, .. } => &mut t.model.layers[layer].c_norm_b,
             Tensor::FNormW { .. } => &mut t.model.final_norm_w,
+            Tensor::FNormB { .. } => &mut t.model.final_norm_b,
+            Tensor::EmbedNormW { .. } => &mut t.model.embed_norm_w,
+            Tensor::EmbedNormB { .. } => &mut t.model.embed_norm_b,
         }
     }
 
@@ -219,7 +251,15 @@ impl Tensor {
             Tensor::DParam { layer, idx } => format!("layer{}.d_param[{}]", layer, idx),
             Tensor::DtBias { layer, idx } => format!("layer{}.dt_bias[{}]", layer, idx),
             Tensor::LayerNormW { layer, idx } => format!("layer{}.layer_norm_w[{}]", layer, idx),
+            Tensor::LayerNormB { layer, idx } => format!("layer{}.layer_norm_b[{}]", layer, idx),
+            Tensor::BNormW { layer, idx } => format!("layer{}.b_norm_w[{}]", layer, idx),
+            Tensor::BNormB { layer, idx } => format!("layer{}.b_norm_b[{}]", layer, idx),
+            Tensor::CNormW { layer, idx } => format!("layer{}.c_norm_w[{}]", layer, idx),
+            Tensor::CNormB { layer, idx } => format!("layer{}.c_norm_b[{}]", layer, idx),
             Tensor::FNormW { idx } => format!("final_norm_w[{}]", idx),
+            Tensor::FNormB { idx } => format!("final_norm_b[{}]", idx),
+            Tensor::EmbedNormW { idx } => format!("embed_norm_w[{}]", idx),
+            Tensor::EmbedNormB { idx } => format!("embed_norm_b[{}]", idx),
         }
     }
 }
@@ -280,6 +320,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     for idx in top_indices(&trainer.train_scratch.d_embed, s)? {
         checks.push(Tensor::Embed { idx });
     }
+    for idx in top_indices(&trainer.train_scratch.d_embed_norm_w, s)? {
+        checks.push(Tensor::EmbedNormW { idx });
+    }
+    for idx in top_indices(&trainer.train_scratch.d_embed_norm_b, s)? {
+        checks.push(Tensor::EmbedNormB { idx });
+    }
     for li in 0..args.n_layers {
         for idx in top_indices(&trainer.train_scratch.d_in_proj_w[li], s)? {
             checks.push(Tensor::InProj { layer: li, idx });
@@ -298,9 +344,31 @@ fn main() -> Result<(), Box<dyn Error>> {
         for idx in top_indices(&trainer.train_scratch.d_layer_norm_w[li], s)? {
             checks.push(Tensor::LayerNormW { layer: li, idx });
         }
+        for idx in top_indices(&trainer.train_scratch.d_layer_norm_b[li], s)? {
+            checks.push(Tensor::LayerNormB { layer: li, idx });
+        }
+        for idx in top_indices(&trainer.train_scratch.d_b_norm_w[li],
+                                cpu_model.d_state.min(s))? {
+            checks.push(Tensor::BNormW { layer: li, idx });
+        }
+        for idx in top_indices(&trainer.train_scratch.d_b_norm_b[li],
+                                cpu_model.d_state.min(s))? {
+            checks.push(Tensor::BNormB { layer: li, idx });
+        }
+        for idx in top_indices(&trainer.train_scratch.d_c_norm_w[li],
+                                cpu_model.d_state.min(s))? {
+            checks.push(Tensor::CNormW { layer: li, idx });
+        }
+        for idx in top_indices(&trainer.train_scratch.d_c_norm_b[li],
+                                cpu_model.d_state.min(s))? {
+            checks.push(Tensor::CNormB { layer: li, idx });
+        }
     }
     for idx in top_indices(&trainer.train_scratch.d_fnorm_w, s)? {
         checks.push(Tensor::FNormW { idx });
+    }
+    for idx in top_indices(&trainer.train_scratch.d_fnorm_b, s)? {
+        checks.push(Tensor::FNormB { idx });
     }
 
     // FD noise floor = 1 ULP of loss divided by 2·eps.  For fp32 loss ~ O(1)
