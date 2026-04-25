@@ -61,6 +61,10 @@ name = "scheduler-benchmark"
 path = "src/bin/scheduler_benchmark.rs"
 
 [[bin]]
+name = "scheduler-benchmark-tiny"
+path = "src/bin/scheduler_benchmark_tiny.rs"
+
+[[bin]]
 name = "test-parity-accuracy"
 path = "src/bin/test_parity_accuracy.rs"
 
