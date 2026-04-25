@@ -566,9 +566,33 @@ impl Scheduler {
         if let Some(tick) = self.maybe_emit_tick() {
             events.push(SchedulerEvent::Tick(tick));
         }
-        // Phase 1: launch.
-        for runner in self.running.iter_mut() {
-            runner.prepare_one_batch()?;
+        // Phase 1 (PARALLEL): each runner launches its kernels on its own
+        // OS thread.  Single-threaded launching is the actual bottleneck
+        // (Entry 45 of findings.md): cuLaunchKernel through cudarc takes
+        // ~1-5μs per call, and at ~50 launches × batch_size per runner per
+        // step, N runners on one thread = N× wall time. With one thread
+        // per runner each independently issues its own launches, and the
+        // CPU work goes from N×T to T (the slowest runner).
+        //
+        // std::thread::scope gives us thread-spawning without the 'static
+        // lifetime requirement — each scoped thread gets exclusive
+        // &mut JobRunner ownership for the duration of prepare_one_batch.
+        let prep_errors: Vec<String> = std::thread::scope(|s| {
+            let handles: Vec<_> = self.running.iter_mut().map(|runner| {
+                s.spawn(move || -> Result<(), String> {
+                    runner.prepare_one_batch().map_err(|e| format!("{}", e))
+                })
+            }).collect();
+            handles.into_iter()
+                .filter_map(|h| match h.join() {
+                    Ok(Ok(())) => None,
+                    Ok(Err(s)) => Some(s),
+                    Err(_) => Some("prepare thread panicked".into()),
+                })
+                .collect()
+        });
+        if let Some(first) = prep_errors.into_iter().next() {
+            return Err(first.into());
         }
         // Phase 2: finalize.
         let mut i = 0;
