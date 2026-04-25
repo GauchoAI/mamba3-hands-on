@@ -2202,6 +2202,125 @@ extern "C" __global__ void cross_entropy_fwd_bwd(
     }
 }
 
+// ---------- kd_apply -------------------------------------------------------
+// Blends KD (knowledge-distillation) gradient into d_logits at supervised
+// positions, AFTER cross_entropy_fwd_bwd has run. Use is conditional on
+// Loss::CeKd; the CE kernel runs unchanged.
+//
+// Math (Hinton-style KD, matching PyTorch's KLDivLoss with T):
+//   ps = softmax(student_logits[pos, :])           (NB: at T=1 for the blend)
+//   pt = softmax(teacher_logits / T)
+//   kd_grad = (1/T) * (ps - pt) * n_active_inv
+//   d_logits[pos, v] = (1 - kd_weight) * d_logits[pos, v]
+//                    + kd_weight * kd_grad[v]
+//
+// We compute student softmax fresh (cheap; one block per supervised pos).
+// teacher softmax uses T-scaled logits to keep the temperature semantics.
+// The (1/T) factor in front comes from differentiating through the /T scale.
+//
+// Grid: (n_supervised,), Block: (256,)
+extern "C" __global__ void kd_apply(
+    float* __restrict__ d_logits,                 // (L, V) modified in place
+    const float* __restrict__ logits,             // (L, V) student
+    const float* __restrict__ teacher_logits,     // (n_sup, V) teacher
+    const unsigned int* __restrict__ sup_positions, // (n_sup,) timestep idx
+    int V, int n_sup,
+    float kd_weight, float temperature, float n_active_inv
+) {
+    int s = blockIdx.x;
+    if (s >= n_sup) return;
+    unsigned int pos = sup_positions[s];
+    int tid = threadIdx.x;
+    int warp = tid >> 5;
+    int lane = tid & 31;
+
+    __shared__ float s_max_st;
+    __shared__ float s_sum_st;
+    __shared__ float s_max_te;
+    __shared__ float s_sum_te;
+    __shared__ float warp_buf[8];
+    float inv_T = 1.0f / temperature;
+
+    // ===== student softmax (no temperature for the blend, plain ps) =====
+    float my_max = -3.4028235e38f;
+    for (int v = tid; v < V; v += blockDim.x) {
+        my_max = fmaxf(my_max, logits[pos * V + v]);
+    }
+    for (int off = 16; off > 0; off >>= 1) {
+        my_max = fmaxf(my_max, __shfl_xor_sync(0xffffffff, my_max, off));
+    }
+    if (lane == 0) warp_buf[warp] = my_max;
+    __syncthreads();
+    if (warp == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        my_max = (lane < nw) ? warp_buf[lane] : -3.4028235e38f;
+        for (int off = 16; off > 0; off >>= 1) {
+            my_max = fmaxf(my_max, __shfl_xor_sync(0xffffffff, my_max, off));
+        }
+        if (lane == 0) s_max_st = my_max;
+    }
+    __syncthreads();
+    float my_sum = 0.0f;
+    for (int v = tid; v < V; v += blockDim.x) {
+        my_sum += __expf(logits[pos * V + v] - s_max_st);
+    }
+    my_sum = warp_reduce_sum(my_sum);
+    if (lane == 0) warp_buf[warp] = my_sum;
+    __syncthreads();
+    if (warp == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        my_sum = (lane < nw) ? warp_buf[lane] : 0.0f;
+        my_sum = warp_reduce_sum(my_sum);
+        if (lane == 0) s_sum_st = my_sum;
+    }
+    __syncthreads();
+
+    // ===== teacher softmax with T scaling =====
+    float my_max_t = -3.4028235e38f;
+    for (int v = tid; v < V; v += blockDim.x) {
+        my_max_t = fmaxf(my_max_t, teacher_logits[s * V + v] * inv_T);
+    }
+    for (int off = 16; off > 0; off >>= 1) {
+        my_max_t = fmaxf(my_max_t, __shfl_xor_sync(0xffffffff, my_max_t, off));
+    }
+    if (lane == 0) warp_buf[warp] = my_max_t;
+    __syncthreads();
+    if (warp == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        my_max_t = (lane < nw) ? warp_buf[lane] : -3.4028235e38f;
+        for (int off = 16; off > 0; off >>= 1) {
+            my_max_t = fmaxf(my_max_t, __shfl_xor_sync(0xffffffff, my_max_t, off));
+        }
+        if (lane == 0) s_max_te = my_max_t;
+    }
+    __syncthreads();
+    float my_sum_t = 0.0f;
+    for (int v = tid; v < V; v += blockDim.x) {
+        my_sum_t += __expf(teacher_logits[s * V + v] * inv_T - s_max_te);
+    }
+    my_sum_t = warp_reduce_sum(my_sum_t);
+    if (lane == 0) warp_buf[warp] = my_sum_t;
+    __syncthreads();
+    if (warp == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        my_sum_t = (lane < nw) ? warp_buf[lane] : 0.0f;
+        my_sum_t = warp_reduce_sum(my_sum_t);
+        if (lane == 0) s_sum_te = my_sum_t;
+    }
+    __syncthreads();
+
+    // ===== blend d_logits[pos, :] =====
+    float inv_sum_st = 1.0f / s_sum_st;
+    float inv_sum_te = 1.0f / s_sum_te;
+    for (int v = tid; v < V; v += blockDim.x) {
+        float ps = __expf(logits[pos * V + v] - s_max_st) * inv_sum_st;
+        float pt = __expf(teacher_logits[s * V + v] * inv_T - s_max_te) * inv_sum_te;
+        float kd_grad = inv_T * (ps - pt) * n_active_inv;
+        float ce_grad = d_logits[pos * V + v];
+        d_logits[pos * V + v] = (1.0f - kd_weight) * ce_grad + kd_weight * kd_grad;
+    }
+}
+
 // ---------- ssm_scan_cached ------------------------------------------------
 // Same forward math as ssm_scan_sequential, but ALSO writes the full state
 // sequence to `states[(t+1)*H*hd*ds + h*hd*ds + p*ds + n]`.  states[0] is

@@ -329,14 +329,13 @@ impl JobRunner {
             }
         }
 
-        // Loss-variant warning. The CE kernel is the only one that exists;
-        // Phase 4 lands CeKd. Falling back without crashing keeps the GA's
-        // mutation surface alive.
+        // Loss-variant warning. CE and CeKd are implemented (kd_apply
+        // kernel runs after cross_entropy_fwd_bwd at supervised positions
+        // when teacher_logits are present in the batch). Focal /
+        // LabelSmooth still need their own kernels — Phase 4+ work — and
+        // fall back to CE with a warning.
         match &job.loss {
-            Loss::Ce => {}
-            Loss::CeKd { kd_weight, temperature } => {
-                eprintln!("[ptxd] {} loss=ce_kd kd_weight={} temperature={} — kernel not yet implemented; training as plain CE", job.id, kd_weight, temperature);
-            }
+            Loss::Ce | Loss::CeKd { .. } => {}
             Loss::Focal { gamma } => {
                 eprintln!("[ptxd] {} loss=focal gamma={} — kernel not yet implemented; training as plain CE", job.id, gamma);
             }
@@ -395,15 +394,41 @@ impl JobRunner {
         if self.batches.is_some() {
             // Pull batch_size examples by index so we can iterate without
             // holding a mutable borrow of self.batches across accumulate_gradients.
-            let mut take = Vec::with_capacity(self.job.batch_size);
+            // Snapshot teacher_logits too — KD path uses them.
+            let mut take: Vec<(Vec<u32>, Vec<u32>, Option<Vec<crate::batch_format::TeacherSlot>>)>
+                = Vec::with_capacity(self.job.batch_size);
             {
                 let r = self.batches.as_mut().unwrap();
                 for _ in 0..self.job.batch_size {
                     let ex = r.next_example();
-                    take.push((ex.tokens.clone(), ex.targets.clone()));
+                    take.push((ex.tokens.clone(), ex.targets.clone(), ex.teacher_logits.clone()));
                 }
             }
-            for (tokens, targets) in &take {
+            // Determine whether to do KD blend. Loss::CeKd + the example
+            // having teacher_logits both required.
+            let kd_cfg: Option<(f32, f32)> = match &self.job.loss {
+                Loss::CeKd { kd_weight, temperature } => Some((*kd_weight, *temperature)),
+                _ => None,
+            };
+            for (tokens, targets, teacher) in &take {
+                if let (Some((kd_w, temp)), Some(slots)) = (kd_cfg, teacher.as_ref()) {
+                    if !slots.is_empty() {
+                        // Flatten teacher_logits into a single (n_sup, V) row-major buf.
+                        let v = self.trainer.model.vocab_size;
+                        let mut flat: Vec<f32> = Vec::with_capacity(slots.len() * v);
+                        let mut sup_pos: Vec<u32> = Vec::with_capacity(slots.len());
+                        for s in slots {
+                            debug_assert_eq!(s.logits.len(), v,
+                                "KD teacher slot logits len {} ≠ V {}", s.logits.len(), v);
+                            flat.extend_from_slice(&s.logits);
+                            sup_pos.push(s.pos);
+                        }
+                        let _ = self.trainer.accumulate_gradients_with_kd(
+                            tokens, targets, &flat, &sup_pos, kd_w, temp,
+                        )?;
+                        continue;
+                    }
+                }
                 let _ = self.trainer.accumulate_gradients(tokens, targets)?;
             }
             return Ok(());

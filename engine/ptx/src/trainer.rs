@@ -11,6 +11,17 @@ use crate::model::PtxModel;
 use crate::runtime::PtxContext;
 use crate::train_scratch::TrainScratch;
 
+/// KD inputs for `accumulate_gradients_with_kd`. Borrowed; the caller owns
+/// the buffers. `teacher_logits` is laid out as `(n_supervised, vocab_size)`
+/// row-major. `sup_positions` lists the timestep indices in `tokens` to
+/// blend the teacher distribution into.
+pub struct KdInputs<'a> {
+    pub teacher_logits: &'a [f32],
+    pub sup_positions: &'a [u32],
+    pub kd_weight: f32,
+    pub temperature: f32,
+}
+
 pub struct PtxTrainer {
     pub model: PtxModel,
     pub train_scratch: TrainScratch,
@@ -184,7 +195,26 @@ impl PtxTrainer {
     /// sees the average gradient across the batch — matching PyTorch
     /// semantics).
     pub fn accumulate_gradients(&mut self, tokens: &[u32], targets: &[u32]) -> Result<f32, Box<dyn Error>> {
-        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/false)
+        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/false, /*kd=*/None)
+    }
+
+    /// Like accumulate_gradients but blends KD (teacher distribution) into
+    /// d_logits at supervised positions. `teacher_logits` is laid out as
+    /// (n_supervised, vocab_size). `sup_positions` is the list of timestep
+    /// indices in `tokens` where each teacher row applies. The kd_apply
+    /// kernel runs immediately after cross_entropy_fwd_bwd, before the
+    /// rest of the backward pass consumes d_logits.
+    pub fn accumulate_gradients_with_kd(
+        &mut self,
+        tokens: &[u32],
+        targets: &[u32],
+        teacher_logits: &[f32],
+        sup_positions: &[u32],
+        kd_weight: f32,
+        temperature: f32,
+    ) -> Result<f32, Box<dyn Error>> {
+        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/false,
+            Some(KdInputs { teacher_logits, sup_positions, kd_weight, temperature }))
     }
 
     pub fn zero_gradients_only(&mut self) -> Result<(), Box<dyn Error>> {
@@ -214,7 +244,7 @@ impl PtxTrainer {
         tokens: &[u32],
         targets: &[u32],
     ) -> Result<f32, Box<dyn Error>> {
-        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/true)
+        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/true, /*kd=*/None)
     }
 
     fn compute_gradients_with_zero(
@@ -222,6 +252,7 @@ impl PtxTrainer {
         tokens: &[u32],
         targets: &[u32],
         do_zero: bool,
+        kd: Option<KdInputs<'_>>,
     ) -> Result<f32, Box<dyn Error>> {
         // self.step counts AdamW steps, NOT compute_gradients calls — moved
         // into apply_optimizer_step so accumulation across a mini-batch counts
@@ -281,6 +312,43 @@ impl PtxTrainer {
                 shared_mem_bytes: 0,
             };
             unsafe { lb.launch(cfg)? };
+
+            // KD blend: optionally overwrite d_logits at supervised positions
+            // with the (1-α)CE + α·KD blended gradient. Runs immediately after
+            // CE so the rest of the backward pass consumes the blended values.
+            if let Some(kd) = kd.as_ref() {
+                if kd.kd_weight > 0.0 && !kd.sup_positions.is_empty() {
+                    let n_sup = kd.sup_positions.len();
+                    debug_assert_eq!(
+                        kd.teacher_logits.len(), n_sup * v,
+                        "KD: teacher_logits len {} ≠ n_supervised {} × V {}",
+                        kd.teacher_logits.len(), n_sup, v,
+                    );
+                    let teacher_dev: CudaSlice<f32> = stream.memcpy_stod(kd.teacher_logits)?;
+                    let sup_dev: CudaSlice<u32> = stream.memcpy_stod(kd.sup_positions)?;
+                    let v_i = v as i32;
+                    let n_sup_i = n_sup as i32;
+                    let kd_w = kd.kd_weight;
+                    let temp = kd.temperature.max(1e-6);
+                    let logits_src: &CudaSlice<f32> = &self.model.scratch.borrow().logits;
+                    let mut lb = stream.launch_builder(&ptx.k.kd_apply);
+                    lb.arg(&mut self.train_scratch.d_logits);
+                    lb.arg(logits_src);
+                    lb.arg(&teacher_dev);
+                    lb.arg(&sup_dev);
+                    lb.arg(&v_i);
+                    lb.arg(&n_sup_i);
+                    lb.arg(&kd_w);
+                    lb.arg(&temp);
+                    lb.arg(&n_active_inv);
+                    let cfg = LaunchConfig {
+                        grid_dim: (n_sup as u32, 1, 1),
+                        block_dim: (256, 1, 1),
+                        shared_mem_bytes: 0,
+                    };
+                    unsafe { lb.launch(cfg)? };
+                }
+            }
         }
 
         // --- BACKWARD CHAIN ---
