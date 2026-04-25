@@ -3446,3 +3446,87 @@ The scheduler **doesn't make jobs faster than serial**, but it **doesn't make th
 
 The benchmark gives a number that says "the scheduler is fair". That's the answer the user actually asked for. Pushing further requires either CUDA Graphs (real engineering) or kernel rewrites (very real engineering); the marginal value vs current state isn't worth that scope right now. The integration shim, the telemetry, the visualization, the four correctness gates, the parity-replay equivalence — all of those are durable wins that are now done.
 
+
+
+---
+
+## Entry 47 — The "keep evolving" gap: production parity audit
+
+User pointed out: the goal of the PTX engine isn't a benchmark, it's to be the actual training engine. Before this PTX detour the system worked — workers redeployed often, checkpoints accumulated, the GA evolved specialists across many rounds. We built a fast engine but lost some of that production glue. Audit:
+
+### What specialist_trainer.py does that ptxd_specialist.py doesn't
+
+| Capability | specialist_trainer.py | ptxd_specialist.py | Severity |
+|---|---|---|---|
+| Save checkpoint at end of training | `torch.save({"model": state_dict, "optimizer": opt.state_dict, "task", "config", "accuracy", "cycles"})` to `checkpoints/specialists/{task}.pt` | not yet | **blocking** |
+| Resume from existing checkpoint | `torch.load(...)` + `model.load_state_dict()` if `task.pt` exists | not yet | **blocking** |
+| Load existing 82 `.pt` checkpoints from prior PyTorch runs | yes — same format | not yet | **blocking** |
+| Tasks beyond parity | all `problems/` registry | parity only | high |
+| Distillation from teacher | yes (`teacher_model_for_distill`, KL loss term) | no | medium |
+| Diagnostic signals (`update_task_status diagnostic_signals`) | yes — feeds `Diagnostician` | no | medium |
+| Register inspection + Firebase push | `register_inspector.inspect_model` + `save_and_push` | no | low (post-hoc) |
+| Confidence-based mastery (mean − k·std) | yes — uses `cycle_history` | YES (we wired this in Entry 36) | matched |
+| MetricsWriter + StateDB rows | yes | YES (Entry 42) | matched |
+
+### What deployment looked like, that we want to keep
+
+User: "*The architecture had workers that were getting to deploy often, and those would pick up the new changes. That was making it easy to deploy.*"
+
+Looking at the orchestration:
+- `coordinator.py` spawns `worker.py` per training run (separate from `three_populations.py`'s `specialist_trainer.py` path — there are two parallel orchestrators)
+- Workers are subprocess.Popen'd, exit when done, get respawned. Each respawn picks up the latest code on disk → effectively "rolling deploy" via process churn.
+- ptxd_specialist.py preserves this by being a drop-in script. When the user `cargo build --release --bin ptxd` and then a worker is respawned, the next ptxd-specialist invocation runs the new binary. **The deploy pattern still works.**
+
+What we'd lose if we made ptxd a long-running daemon: the easy hot-deploy. Right now spawning per-job is *slower* (kernel JIT each time, ~1.7s) but *trivially* hot-deployable. Worth keeping the spawn-per-job pattern unless the kernel JIT becomes a real bottleneck.
+
+### Existing checkpoint format
+
+Sample inspection of `cumulative_sum.pt`:
+
+```
+keys: ['model', 'optimizer', 'task', 'config', 'accuracy', 'cycles', 'n_params']
+config: {'d_model': 64, 'd_state': 16, 'headdim': 16, 'n_kernel_layers': 3,
+         'lr': 0.001, 'weight_decay': 0.1, 'batch_size': 256, ...}
+accuracy: 0.92  (mastered, since target is 0.95 — close)
+cycles: 60      (60 training rounds invested)
+task: cumulative_sum
+
+state_dict (39 tensors):
+  embed.weight                                 [260, 64]
+  embed_norm.weight, embed_norm.bias           [64], [64]
+  final_norm.weight, final_norm.bias           [64], [64]
+  head.weight                                  [260, 64]   (== embed.weight via tying)
+  kernel_layers.{i}.block.dt_bias              [8]
+  kernel_layers.{i}.block.D                    [8]
+  kernel_layers.{i}.block.in_proj.weight       [320, 64]
+  kernel_layers.{i}.block.out_proj.weight      [64, 128]
+  kernel_layers.{i}.block.B_norm.weight/bias   [16] each
+  kernel_layers.{i}.block.C_norm.weight/bias   [16] each
+  kernel_layers.{i}.norm.weight/bias           [64] each
+  kernel_layers.{i}.scale.0                    []
+  ...repeat per kernel layer...
+```
+
+These are PyTorch state_dict keys from `progressive_model.ProgressiveModel`. The shapes match what our `Mamba3Model` (CPU ref) and `PtxModel` use, just under different field names. The mapping is mechanical.
+
+### The critical missing piece: checkpoint compat
+
+The 82 existing checkpoints represent real training time the user doesn't want to lose. To "continue evolving" the GA against the PTX engine, we need:
+
+1. **Load**: `.pt` → `Mamba3Model` (CPU ref) → `PtxModel::from_cpu` → train
+2. **Save**: end-of-training → grab `Mamba3Model` weights from `PtxModel` device buffers → assemble into PyTorch state_dict format → `torch.save(...)` to `checkpoints/specialists/{task}.pt`
+
+Both directions need a name mapping table. Let me build it.
+
+### What I'm going to do, in order
+
+1. **Add checkpoint load to ptxd_specialist.py** — read existing `.pt`, build `Mamba3Model` from its state_dict, pass to ptxd via a `--init-from PATH` flag. ptxd already supports loading from a binary blob (the `from_bin` format used by `forward-parity` etc.); we just need `.pt → bin` glue. (~1 hour)
+
+2. **Add checkpoint save to ptxd_specialist.py** — at end of training, sync model weights back from GPU, repack into PyTorch state_dict format, `torch.save(...)`. (~1 hour)
+
+3. **Verify with one existing checkpoint** — load `cumulative_sum.pt`, run a forward in ptxd, compare outputs to PyTorch's forward on the same input. If logits match, compat is real. (~30 min)
+
+4. **Document remaining gaps** (tasks beyond parity, distillation, register_inspector) as Phase 3 work. NOT blocking the "continue evolving" loop, just reduces what the GA can train.
+
+The hot-deploy pattern stays as-is: ptxd is a binary, ptxd_specialist.py is a script, both get picked up on the next worker spawn. No daemon, no hot-reload protocol, just standard process churn.
+
