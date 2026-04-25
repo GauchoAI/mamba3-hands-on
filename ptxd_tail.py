@@ -49,22 +49,22 @@ def main():
     push_tick = None
     if not args.no_firebase:
         try:
-            from firebase_push import _put
+            from firebase_push import _post
             def push_tick(gen, ticks):
-                """Batch push: write a multi-key fanout to scheduler_history.
-                ticks is a list of dicts with keys t, mem_pct, sm_pct, running, queue."""
-                fanout = {}
+                """Append-style: each tick becomes a POST to Firebase RTDB.
+                POST auto-generates a sortable child key, giving us a
+                time series under mamba3/scheduler_history/{gen}/.
+                For batching we'd switch to PATCH, but at our cadence
+                (~1Hz) the request rate is fine.
+                """
                 for tk in ticks:
-                    # Each tick goes to a child keyed by its timestamp (ms).
-                    key = f"{int(tk['t'] * 1000)}"
-                    fanout[key] = {
-                        "t":       tk["t"],
-                        "mem":     tk["mem_pct"],
-                        "sm":      tk["sm_pct"],
+                    _post(f"mamba3/scheduler_history/{gen}", {
+                        "t":       round(tk["t"], 2),
+                        "mem":     round(tk["mem_pct"], 1),
+                        "sm":      round(tk["sm_pct"], 1),
                         "running": tk["running"],
                         "queue":   tk["queue"],
-                    }
-                _put(f"mamba3/scheduler_history/{gen}", fanout)
+                    })
         except Exception as e:
             sys.stderr.write(f"[ptxd_tail] Firebase disabled: {e}\n")
             push_tick = None
