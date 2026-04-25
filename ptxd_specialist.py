@@ -132,18 +132,31 @@ def main():
     from task_runner import write_task_batches
     train_path = f"/tmp/ptxd_train_{args.task}.bin"
     eval_path  = f"/tmp/ptxd_eval_{args.task}.bin"
-    # stage=0 means "use the generator's default params" — for parity that's
-    # min_len=3, max_len=8. specialist_trainer.py advances through stages
-    # via StateDB (`get_current_stage`), but Phase 1 keeps it simple with
-    # a single fixed distribution. Phase 2 will do per-cycle stage advance.
+    # Curriculum: read the task's current stage from StateDB. This is the
+    # ratchet specialist_trainer used (state_db.get_current_stage) — only
+    # advances upward, never goes back. Each ptxd_specialist invocation
+    # covers ONE stage; advancement happens at the end based on best_acc.
+    # three_populations.py respawns the worker per round, so the next
+    # round picks up the new stage automatically (matches the hot-deploy
+    # pattern that already works).
+    sys.path.insert(0, str(REPO_ROOT))
+    from state_db import StateDB as _StageDB
+    try:
+        _stage_db = _StageDB(args.db_path or "three_pop/training.db")
+        current_stage = _stage_db.get_current_stage(args.task)
+        _stage_db.close()
+    except Exception as e:
+        sys.stderr.write(f"[ptxd_specialist] stage lookup failed ({e}); using stage=0\n")
+        current_stage = 0
     try:
         from task_runner import make_examples_for_task
         from batch_writer import write_examples
         n_train = max(20000, args.batch_size * 64)
         train_examples = make_examples_for_task(args.task, n_train,
-                                                stage=0, seed=args.seed)
+                                                stage=current_stage, seed=args.seed)
         eval_examples  = make_examples_for_task(args.task, 200,
-                                                stage=0, seed=args.seed + 1)
+                                                stage=current_stage, seed=args.seed + 1)
+        sys.stderr.write(f"[ptxd_specialist] curriculum stage={current_stage}\n")
     except Exception as e:
         sys.stderr.write(f"[ptxd_specialist] batch generation FAILED: {e}\n")
         sys.exit(4)
@@ -413,6 +426,29 @@ def main():
                                    confidence_score=conf_score,
                                    confidence_mean=conf_mean,
                                    confidence_std=conf_std)
+
+        # Curriculum advancement. Look up the current task's spec to find
+        # this stage's advance_at threshold; if best_acc cleared it,
+        # ratchet to the next stage. State is stored in StateDB so the
+        # next ptxd_specialist invocation (next GA round) picks up the
+        # new stage automatically. Mirrors specialist_trainer's behaviour.
+        try:
+            from registry.problem_registry import ProblemRegistry
+            _reg = ProblemRegistry()
+            _reg.discover([str(REPO_ROOT / "problems")])
+            spec = _reg.problems.get(args.task)
+            if spec and spec.curriculum:
+                # Stages are 1-indexed in YAML; current_stage from StateDB
+                # is 1-indexed too (default 1). curriculum is a list, so
+                # the entry for stage N is curriculum[N-1].
+                stage_idx = max(0, current_stage - 1)
+                if stage_idx < len(spec.curriculum):
+                    threshold = spec.curriculum[stage_idx].advance_at
+                    if best_acc >= threshold and current_stage < len(spec.curriculum):
+                        sdb.advance_stage(args.task, current_stage + 1)
+        except Exception as e:
+            sys.stderr.write(f"[ptxd_specialist] stage advancement check failed: {e}\n")
+
         try:
             sdb.clear_active_run(args.task)
         except Exception:
