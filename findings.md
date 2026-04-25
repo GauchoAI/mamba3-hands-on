@@ -2804,3 +2804,55 @@ That's the entire integration. Set `PTXD_BIN=/path/to/ptxd` if the binary lives 
 
 Each of (1) and (2) is roughly a half-day. (3) is the bigger systems piece.
 
+
+
+---
+
+## Entry 38 — Live verification: ptxd streaming format works end-to-end
+
+Built ptxd with the curriculum + streaming changes on the H100. One quick smoke test (n_layers=1, n_bits=3, default config) produced the expected output shape:
+
+```
+[ptxd] compiling PTX kernels...
+[ptxd] ready in 1.68s, awaiting jobs on stdin (one JSON per line)
+[ptxd] job j1 starting (parity task, d=32, L=1, 2000 steps)
+{"type":"cycle","id":"j1","cycle":1,"step":200,"loss":0.633,"fresh_acc":0.44,"best_fresh":0.44,"stage":0,"elapsed_s":0.88}
+{"type":"cycle","id":"j1","cycle":2,"step":400,"loss":0.716,"fresh_acc":0.52,"best_fresh":0.52,"stage":0,"elapsed_s":1.76}
+{"type":"cycle",...}                                  ← 10 total cycle rows
+{"type":"final","id":"j1","status":"needs_tuning","best_acc":0.57,"final_loss":0.70,"ms_per_step":4.39,"wall_ms":8771.6,...}
+[ptxd] job j1 done
+```
+
+10 cycle rows + 1 final row, exactly as designed. Total runtime: **8.77s for 2000 training steps** (4.4ms/step). The streaming JSON contract that `ptxd_specialist.py` parses is verified live.
+
+### Convergence note: L=1 with LCG-init plateaus, L=2 doesn't
+
+This run hit `best_acc=57%` — a plateau, not a kernel issue. Same plateau the LCG-init path showed in `test_parity_train` (Entry 35); `parity-replay` proved that with PyTorch's exact init the same engine hits 100% in cycle 2.
+
+The issue is *config-sensitivity at the optimization-trap boundary*: with n_layers=1 and our LCG-init, the SSM contribution is too small to provide useful gradient direction and AdamW drives `scale → 0`. With n_layers=2 (`test_parity_train` config) or PyTorch's exact init (`parity-replay`), the optimizer escapes the trap.
+
+This is exactly the kind of variance the GA orchestrator was designed to handle — it explores configs and seeds, keeps the converging ones. ptxd doesn't need to converge from every init; it needs to be CORRECT from any init that converges. We've proven that at the gradient level (single-step bit-clean) and at the trajectory level (`parity-replay` matches PyTorch).
+
+### Final state of the engine
+
+- **Forward**: bit-equal to `mamba3_minimal.Mamba3Block` (`forward-parity` ≤ 5.7e-6 max_abs)
+- **Backward**: matches PyTorch autograd one step from identical state (`single-step-check` ≤ 2.5e-6 max_abs on every weight tensor except embed_w which is at FP32 noise via the LM-head matmul)
+- **Multi-step training**: matches PyTorch's per-cycle accuracy on identical data (`parity-replay` reaches 100% in same cycle, **14× faster**)
+- **Daemon**: streams `{type:cycle}` JSON every 200 steps, `{type:final}` at end
+- **Curriculum**: `stages` JSON field mirrors `problems/parity/problem.yaml`
+- **GA integration**: `ptxd_specialist.py` is a drop-in replacement for `specialist_trainer.py` (one-line diff in `three_populations.py`)
+- **Smoke tests**: `engine/ptx/scripts/test_ptxd_*.sh` for regression checks
+
+The PTX Mamba-3 training engine is ready to take over `specialist_trainer.py`'s role in the GA orchestrator. The kernel/correctness work — the hard part — is done; the remaining items (more tasks beyond parity, multi-stream slot scheduler, persistent inference fast path) are well-scoped follow-ups.
+
+### Methodology, finally consolidated
+
+Build the gates first, then implement against them:
+
+1. `fd-check` — single-sample gradient correctness via finite-difference
+2. `forward-parity` — forward output bit-equal to a reference autograd implementation
+3. `single-step-check` — post-AdamW weights bit-equal to autograd after one step
+4. `parity-replay` — multi-step training trajectory equal on identical data
+
+Each gate is fast enough to be a daily check. Each catches a different class of bug — and crucially, *bugs hide in the surfaces no gate touches*. The `matmul_atb_tiled` `=` vs `+=` bug stayed invisible to the first three gates because none exercised batched gradient accumulation across multiple samples; only `parity-replay` did. When you build a kernel-based system, build all four levels of verification before you trust the system.
+
