@@ -160,11 +160,15 @@ impl PtxTrainer {
         })
     }
 
-    /// Run one training step. Returns loss.
+    /// Run one training step. Returns loss.  Syncs the stream to read the
+    /// loss back — for batched / scheduler-driven training prefer
+    /// accumulate_gradients + apply_optimizer_step_scaled, which avoid the
+    /// per-step sync (call read_last_loss_blocking() only at eval
+    /// boundaries).
     pub fn train_step(&mut self, tokens: &[u32], targets: &[u32]) -> Result<f32, Box<dyn Error>> {
-        let loss = self.compute_gradients_only(tokens, targets)?;
+        self.compute_gradients_only(tokens, targets)?;
         self.apply_optimizer_step()?;
-        Ok(loss)
+        self.read_last_loss_blocking()
     }
 
     /// Accumulating variant: forward + backward like compute_gradients_only,
@@ -377,11 +381,29 @@ impl PtxTrainer {
             unsafe { lb.launch(cfg)? };
         }
 
-        // Read back loss (single float) — gradients are now in train_scratch.d_*.
-        stream.synchronize()?;
-        let loss_host = stream.memcpy_dtov(&self.train_scratch.loss)?;
+        // No sync here — the loss read used to be `stream.synchronize()` +
+        // `memcpy_dtov`, which serialized one runner's work behind itself
+        // before another runner could even start launching kernels (the
+        // scheduler-benchmark proved this: 2 jobs took 2× wall time, 4
+        // jobs took 4×). Now compute_gradients just queues kernels on the
+        // stream and returns immediately. Callers that want the actual loss
+        // value must call `read_last_loss_blocking()` explicitly. This is
+        // safe because the loss accumulator buffer lives in train_scratch
+        // and won't be overwritten until the next zero_gradients_only().
         let _ = (l, d, di, ds, hd, nh, dip);
-        Ok(loss_host[0])
+        Ok(0.0)
+    }
+
+    /// Sync the model's stream and read the cumulative cross-entropy loss
+    /// accumulator back to the host. This BLOCKS until all pending kernels
+    /// on the stream have finished. Use sparingly — the scheduler only
+    /// calls this at eval boundaries (every 200 steps) so multiple jobs
+    /// can co-execute their forward+backward passes between syncs.
+    pub fn read_last_loss_blocking(&self) -> Result<f32, Box<dyn Error>> {
+        let stream = self.model.stream.clone();
+        stream.synchronize()?;
+        let v = stream.memcpy_dtov(&self.train_scratch.loss)?;
+        Ok(v[0])
     }
 
     /// Apply one AdamW step using whatever gradients are currently in

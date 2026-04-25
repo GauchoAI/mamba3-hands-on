@@ -195,15 +195,22 @@ impl JobRunner {
             let answer_pos = tokens.len() - 3;
             targets[answer_pos] = answer;
 
-            last_loss = self.trainer.accumulate_gradients(&tokens, &targets)?;
+            // accumulate_gradients now returns 0.0 (no per-call sync). Loss
+            // is only read at eval boundaries below.
+            let _ = self.trainer.accumulate_gradients(&tokens, &targets)?;
         }
         self.trainer.apply_optimizer_step_scaled(1.0 / self.job.batch_size as f32)?;
-        self.last_loss = last_loss / self.job.batch_size as f32;
         self.step += 1;
+        let _ = last_loss;
 
         // Eval every 200 steps. Returns Some(CycleEvent) at boundary,
-        // Some(FinalEvent) on completion / convergence.
+        // Some(FinalEvent) on completion / convergence. The eval call also
+        // reads the loss accumulator (forces a stream sync), so this is the
+        // ONLY sync point per 200-step window — multiple JobRunners can run
+        // their forward+backward passes concurrently between syncs.
         if self.step % 200 == 0 {
+            self.last_loss = self.trainer.read_last_loss_blocking()?
+                / self.job.batch_size as f32;
             let acc = self.eval(200)?;
             if acc > self.best_acc { self.best_acc = acc; }
             let stage = &self.stages[self.stage_idx];
