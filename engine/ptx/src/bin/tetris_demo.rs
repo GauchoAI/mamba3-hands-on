@@ -66,6 +66,8 @@ fn build_queue() -> Vec<Job> {
             n_bits: 3, target_acc: 0.95,
             seed,
             stages: None,
+            init_from_bin: None, save_bin: None,
+            batches_path: None, eval_batches_path: None,
         });
     }
     jobs

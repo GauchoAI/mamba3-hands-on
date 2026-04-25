@@ -25,6 +25,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         n_bits: 3, target_acc: 0.95,
         seed: 7,
         stages: None,
+        init_from_bin: None, save_bin: None,
+        batches_path: None, eval_batches_path: None,
     });
     sched.submit(Job {
         id: "beta".into(),
@@ -35,6 +37,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         n_bits: 3, target_acc: 0.95,
         seed: 12345,
         stages: None,
+        init_from_bin: None, save_bin: None,
+        batches_path: None, eval_batches_path: None,
     });
 
     let t0 = Instant::now();
@@ -54,6 +58,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     f.id, f.status, f.best_acc * 100.0, f.final_loss,
                     f.ms_per_step, f.wall_ms / 1000.0, f.steps_executed,
                 ),
+                SchedulerEvent::Tick(_) => {} // ignore
             }
         }
     }

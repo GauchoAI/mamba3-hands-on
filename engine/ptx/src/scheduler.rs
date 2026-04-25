@@ -21,6 +21,7 @@
 //! The skeleton only does serial execution today (Steps 3–4 add the
 //! concurrent-step semantics described in Entry 40).
 
+use crate::batch_format::BatchReader;
 use crate::runtime::PtxContext;
 use crate::trainer::PtxTrainer;
 use crate::model::PtxModel;
@@ -66,6 +67,24 @@ pub struct Job {
     /// training. `ptxd_specialist.py` reads this after the job finishes
     /// and converts it back into a PyTorch `.pt` checkpoint.
     #[serde(default)] pub save_bin: Option<String>,
+
+    /// Optional path to a binary batch file produced by Python. When
+    /// set, `prepare_one_batch` reads training examples from this file
+    /// instead of synthesising them in Rust. This is the seam that lets
+    /// ptxd be task-agnostic — every task in `generators/` writes through
+    /// the same protocol. See `batch_format` module below for the wire
+    /// layout. When None, falls back to the legacy parity-hardcoded path
+    /// (kept so `test_scheduler` and the original ptxd jobs still work).
+    #[serde(default)] pub batches_path: Option<String>,
+
+    /// Optional path to a binary batch file used for evaluation. Same
+    /// format as `batches_path`. When set, the runner evaluates by
+    /// running each example through `model.forward` and checking that
+    /// the argmax matches the supervised target. When None, falls back
+    /// to the legacy parity-hardcoded eval. Loaded once at runner
+    /// construction; evaluation iterates over the file repeatedly so a
+    /// few hundred examples suffice for many cycles.
+    #[serde(default)] pub eval_batches_path: Option<String>,
 }
 
 fn d_default_d_model() -> usize { 32 }
@@ -147,6 +166,12 @@ pub struct JobRunner {
     pub last_loss: f32,
     pub rng_state: u64,
     pub done: Option<FinalEvent>,
+    /// Streaming training-batch reader. None means use the legacy parity-
+    /// hardcoded synthesis. Set by `Job.batches_path`.
+    pub batches: Option<BatchReader>,
+    /// Streaming eval-batch reader. None means use the legacy parity-
+    /// hardcoded eval. Set by `Job.eval_batches_path`.
+    pub eval_batches: Option<BatchReader>,
 }
 
 impl JobRunner {
@@ -176,7 +201,33 @@ impl JobRunner {
             _ => vec![Stage { min_len: job.n_bits, max_len: job.n_bits, advance_at: 2.0 }],
         };
         let max_n_bits = stages.iter().map(|s| s.max_len).max().unwrap_or(job.n_bits);
-        let max_seq = (1 + (2 * max_n_bits - 1).max(1) + 3).max(16);
+        // max_seq must accommodate (a) the legacy parity tokenisation (BOS +
+        // 2N-1 input + SEP + answer + EOS, length 2N+3 for N input bits), and
+        // (b) any example in the supplied batch files. We scan both files
+        // when present and take the max.
+        let mut max_seq = (1 + (2 * max_n_bits - 1).max(1) + 3).max(16);
+
+        let batches = if let Some(ref p) = job.batches_path {
+            let r = BatchReader::open(std::path::Path::new(p))
+                .map_err(|e| format!("open batches_path={}: {}", p, e))?;
+            for i in 0..r.n_examples().min(r.n_examples()) {
+                // Single pass to find the longest example without disturbing
+                // the cursor for training. We index directly via a peek API.
+                let len = r.peek_example(i).tokens.len();
+                if len > max_seq { max_seq = len; }
+            }
+            Some(r)
+        } else { None };
+
+        let eval_batches = if let Some(ref p) = job.eval_batches_path {
+            let r = BatchReader::open(std::path::Path::new(p))
+                .map_err(|e| format!("open eval_batches_path={}: {}", p, e))?;
+            for i in 0..r.n_examples() {
+                let len = r.peek_example(i).tokens.len();
+                if len > max_seq { max_seq = len; }
+            }
+            Some(r)
+        } else { None };
 
         let gpu_model = PtxModel::from_cpu_on_stream(&cpu_model, ctx.clone(), stream.clone(), max_seq)?;
         let mut trainer = PtxTrainer::new(gpu_model, job.lr, job.weight_decay, max_seq)?;
@@ -205,6 +256,8 @@ impl JobRunner {
             done: None,
             trainer,
             job,
+            batches,
+            eval_batches,
         })
     }
 
@@ -224,8 +277,32 @@ impl JobRunner {
     /// streams are running in parallel by the time anyone syncs.
     pub fn prepare_one_batch(&mut self) -> Result<(), Box<dyn Error>> {
         if self.done.is_some() { return Ok(()); }
-        let stage = self.stages[self.stage_idx].clone();
         self.trainer.zero_gradients_only()?;
+
+        // Streaming path: read `batch_size` examples from the supplied
+        // batch file. Python owns the data generator + curriculum +
+        // tokenisation; ptxd just trains on whatever (tokens, targets) it
+        // gets. Wrap-around in BatchReader handles short files gracefully.
+        if self.batches.is_some() {
+            // Pull batch_size examples by index so we can iterate without
+            // holding a mutable borrow of self.batches across accumulate_gradients.
+            let mut take = Vec::with_capacity(self.job.batch_size);
+            {
+                let r = self.batches.as_mut().unwrap();
+                for _ in 0..self.job.batch_size {
+                    let ex = r.next_example();
+                    take.push((ex.tokens.clone(), ex.targets.clone()));
+                }
+            }
+            for (tokens, targets) in &take {
+                let _ = self.trainer.accumulate_gradients(tokens, targets)?;
+            }
+            return Ok(());
+        }
+
+        // Legacy parity-hardcoded path. Used by `test_scheduler` and any
+        // job that doesn't supply `batches_path`. Phase 2 will delete this.
+        let stage = self.stages[self.stage_idx].clone();
         for _ in 0..self.job.batch_size {
             let span = stage.max_len - stage.min_len + 1;
             self.rng_state = self.rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -337,6 +414,56 @@ impl JobRunner {
     }
 
     fn eval(&mut self, n_eval: usize) -> Result<f32, Box<dyn Error>> {
+        // Streaming eval: per-example exact-match. For each eval example we
+        // do ONE forward pass over the full token sequence, then read the
+        // model's argmax at every supervised position and require ALL of
+        // them to match for the example to count as correct. Matches what
+        // specialist_trainer.py does (whole-answer accuracy, not per-byte).
+        // Single-byte answers (parity) collapse to the prior behaviour;
+        // multi-byte answers (cumulative_sum's "160") need every byte right.
+        if self.eval_batches.is_some() {
+            let mut correct = 0usize;
+            let n = n_eval.min(self.eval_batches.as_ref().unwrap().n_examples());
+            // Snapshot examples; we'll borrow self.trainer.model immutably below.
+            let mut take: Vec<(Vec<u32>, Vec<u32>)> = Vec::with_capacity(n);
+            {
+                let r = self.eval_batches.as_mut().unwrap();
+                r.rewind();
+                for _ in 0..n {
+                    let ex = r.next_example();
+                    take.push((ex.tokens.clone(), ex.targets.clone()));
+                }
+            }
+            let v = self.trainer.model.vocab_size;
+            for (tokens, targets) in &take {
+                let logits = self.trainer.model.forward(tokens)?;
+                // Walk every supervised position. The model is teacher-forced
+                // by tokens (full sequence) so each position's prediction is
+                // independent — same convention specialist_trainer uses.
+                let mut all_match = true;
+                let mut any_supervised = false;
+                for (pos, &tgt) in targets.iter().enumerate() {
+                    if tgt == u32::MAX { continue; }
+                    any_supervised = true;
+                    let mut best_idx = 0usize;
+                    let mut best_v = f32::NEG_INFINITY;
+                    for i in 0..v {
+                        let l = logits[pos * v + i];
+                        if l > best_v { best_v = l; best_idx = i; }
+                    }
+                    if best_idx as u32 != tgt {
+                        all_match = false;
+                        break;
+                    }
+                }
+                if any_supervised && all_match { correct += 1; }
+            }
+            let denom = take.len().max(1);
+            return Ok(correct as f32 / denom as f32);
+        }
+
+        // Legacy parity-hardcoded eval. Used when no eval_batches_path was
+        // supplied. Phase 2 will delete this.
         let stage = self.stages[self.stage_idx].clone();
         let mut correct = 0usize;
         for _ in 0..n_eval {

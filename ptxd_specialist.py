@@ -62,16 +62,12 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.task != "parity":
-        # ptxd only knows parity for now. Fall back to PyTorch trainer for
-        # other tasks so the orchestrator keeps working.
-        sys.stderr.write(
-            f"[ptxd_specialist] task={args.task} not supported by ptxd, "
-            f"falling back to specialist_trainer.py\n"
-        )
-        os.execvp(sys.executable, [sys.executable,
-            str(REPO_ROOT / "specialist_trainer.py"), *sys.argv[1:]])
-
+    # ptxd is now task-agnostic. Any task in `problems/` works through the
+    # streaming protocol: Python generates batches via the existing
+    # generators (registry → encode_curriculum → batch_writer), Rust trains
+    # on whatever (tokens, targets) lands in the batch file. If the task is
+    # unknown to the registry, task_runner raises and we surface a clear
+    # error rather than silently falling back to PyTorch.
     ptxd_bin = os.environ.get("PTXD_BIN", str(DEFAULT_PTXD))
     if not Path(ptxd_bin).exists():
         sys.stderr.write(
@@ -114,9 +110,29 @@ def main():
     # convert it back to .pt and overwrite the canonical checkpoint.
     save_bin_path = f"/tmp/ptxd_save_{args.task}.bin"
 
+    # Generate training and eval batches in Python via the existing task
+    # generators (Phase 1 streaming protocol — see batch_writer.py and
+    # task_runner.py). ptxd reads them through batch_format::BatchReader.
+    # This is the seam that lets ptxd stay task-agnostic: any task in
+    # `generators/` works without Rust changes.
+    sys.path.insert(0, str(REPO_ROOT))
+    from task_runner import write_task_batches
+    train_path = f"/tmp/ptxd_train_{args.task}.bin"
+    eval_path  = f"/tmp/ptxd_eval_{args.task}.bin"
+    # stage=0 means "use the generator's default params" — for parity that's
+    # min_len=3, max_len=8. specialist_trainer.py advances through stages
+    # via StateDB (`get_current_stage`), but Phase 1 keeps it simple with
+    # a single fixed distribution. Phase 2 will do per-cycle stage advance.
+    try:
+        write_task_batches(train_path, args.task, n_examples=max(20000, args.batch_size * 64), stage=0, seed=args.seed)
+        write_task_batches(eval_path,  args.task, n_examples=200,                                stage=0, seed=args.seed + 1)
+    except Exception as e:
+        sys.stderr.write(f"[ptxd_specialist] batch generation FAILED: {e}\n")
+        sys.exit(4)
+
     job = {
         "id": str(uuid.uuid4())[:8],
-        "task": "parity",
+        "task": args.task,
         "n_bits": args.n_bits,
         "d_model": args.d_model,
         "d_state": args.d_state,
@@ -130,6 +146,8 @@ def main():
         "target_acc": args.target_acc,
         "seed": args.seed,
         "save_bin": save_bin_path,
+        "batches_path": train_path,
+        "eval_batches_path": eval_path,
     }
     if init_from_bin:
         job["init_from_bin"] = init_from_bin

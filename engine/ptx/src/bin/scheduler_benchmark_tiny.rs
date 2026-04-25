@@ -21,6 +21,8 @@ fn job_template(id: &str, seed: u64) -> Job {
         n_bits: 3, target_acc: 0.99,   // unreachable so all run full budget
         seed,
         stages: None,
+        init_from_bin: None, save_bin: None,
+        batches_path: None, eval_batches_path: None,
     }
 }
 
