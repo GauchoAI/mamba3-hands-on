@@ -291,33 +291,207 @@ impl JobRunner {
     pub fn take_final(&mut self) -> Option<FinalEvent> { self.done.take() }
 }
 
-/// Slot scheduler — drives a fixed-capacity pool of JobRunners. Currently
-/// serial (Step 3 of Entry 40 plan); Step 4 will make `pump_one_step`
-/// advance every runner concurrently on its own stream.
+// ---- Resource estimation --------------------------------------------------
+//
+// The H100 has two main resources we budget against:
+//   * memory (HBM)   — 80 GB; we reserve ~64 GB to leave room for system
+//   * compute (SMs)  — 132 SMs
+//
+// Per-job estimates are deterministic from the Job config: we know the model
+// shape, so we know weights, Adam moments, gradient buffers, and activation
+// cache exactly. SM consumption is harder to model precisely (depends on
+// kernel mix and how the GPU scheduler co-issues blocks), so we use a coarse
+// "bytes-of-work-per-step" proxy.
+
+const H100_MEM_BUDGET: usize = 64 * 1024 * 1024 * 1024;  // 64 GB usable
+const H100_SM_BUDGET:  usize = 132;                        // hardware
+
+/// Bytes of GPU memory a job will consume once a JobRunner is built.
+/// Includes weights, AdamW moment estimates, gradient buffers, and the
+/// per-layer activation cache used by the cached forward + full backward.
+pub fn estimate_job_memory_bytes(job: &Job) -> usize {
+    let d = job.d_model;
+    let ds = job.d_state;
+    let nh = (2 * d) / job.headdim;             // d_inner / headdim
+    let di = 2 * d;                              // d_inner
+    let dip = 2 * di + 2 * ds + 3 * nh + ds / 2; // matches model.rs layout
+    let v = job.vocab_size;
+    let l_max = match &job.stages {
+        Some(s) if !s.is_empty() => s.iter().map(|st| st.max_len).max().unwrap_or(job.n_bits),
+        _ => job.n_bits,
+    };
+    let max_seq = (1 + (2 * l_max - 1).max(1) + 3).max(16);
+
+    // Weights (rough; doesn't double-count the per-layer concat copies).
+    let weights = v * d                                                  // embed
+                + 4 * d                                                  // embed_norm + final_norm w/b
+                + job.n_layers * (dip * d                                // in_proj_w
+                                + d * di                                 // out_proj_w
+                                + 4 * nh                                 // dt_bias + d_param + 2 unused
+                                + 4 * ds                                 // b/c norm w/b
+                                + 2 * d);                                // layer_norm w/b
+    // AdamW: m + v moments are 2× weights.
+    let adam_mv = 2 * weights;
+    // Activation cache for the full backward (per-layer x_normed, projs, y_inners,
+    // bps, cps, decays, dts, traps, states):
+    let activations = job.n_layers * (
+        max_seq * d                            // layer_inputs
+      + max_seq * d                            // layer_x_normed
+      + max_seq * dip                          // layer_projs
+      + max_seq * di                           // layer_y_inners
+      + max_seq * d                            // layer_y_post
+      + max_seq * ds * 2                       // layer_bps + layer_cps
+      + max_seq * nh * 3                       // layer_decays + layer_dts + layer_traps
+      + (max_seq + 1) * nh * job.headdim * ds  // layer_states (the big one)
+    );
+    // Gradient buffers ≈ weights (we keep a d_* for everything that learns).
+    let grads = weights;
+    (weights + adam_mv + activations + grads) * 4   // f32 = 4 bytes
+}
+
+/// Coarse SM-blocks estimate: a Mamba-3 backward step launches matmul tiles
+/// at (dip/16 × max_seq/16), an SSM scan at (n_heads, hd*ds), and various
+/// LN/scatter passes. We use the matmul tile count as the dominant term —
+/// the SSM scan blocks are tiny (≤ n_heads). For our specialists this is
+/// 30-100 blocks per job, well under the H100's 132-SM budget.
+pub fn estimate_job_sm_blocks(job: &Job) -> usize {
+    let d = job.d_model;
+    let nh = (2 * d) / job.headdim;
+    let di = 2 * d;
+    let dip = 2 * di + 2 * job.d_state + 3 * nh + job.d_state / 2;
+    let l_max = match &job.stages {
+        Some(s) if !s.is_empty() => s.iter().map(|st| st.max_len).max().unwrap_or(job.n_bits),
+        _ => job.n_bits,
+    };
+    let max_seq = (1 + (2 * l_max - 1).max(1) + 3).max(16);
+    let matmul_blocks = ((dip + 15) / 16) * ((max_seq + 15) / 16);
+    matmul_blocks + nh
+}
+
+/// Snapshot of a runner suitable for the visualization renderer.
+#[derive(Clone, Debug)]
+pub struct SlotView {
+    pub id: String,
+    pub mem_bytes: usize,
+    pub sm_blocks: usize,
+    pub step: usize,
+    pub max_steps: usize,
+    pub best_acc: f32,
+    pub last_loss: f32,
+    pub elapsed_s: f64,
+}
+
+/// Slot scheduler — drives a fixed-capacity pool of JobRunners with
+/// memory + SM budget tracking and a renderable resource view.
 pub struct Scheduler {
     pub ctx: Arc<PtxContext>,
     pub max_concurrent: usize,
+    pub mem_budget: usize,
+    pub sm_budget: usize,
     pub queue: VecDeque<Job>,
     pub running: Vec<JobRunner>,
+    pub used_mem: usize,
+    pub used_sm: usize,
 }
 
 impl Scheduler {
     pub fn new(ctx: Arc<PtxContext>, max_concurrent: usize) -> Self {
-        Self { ctx, max_concurrent, queue: VecDeque::new(), running: Vec::new() }
+        Self {
+            ctx, max_concurrent,
+            mem_budget: H100_MEM_BUDGET,
+            sm_budget: H100_SM_BUDGET,
+            queue: VecDeque::new(),
+            running: Vec::new(),
+            used_mem: 0,
+            used_sm: 0,
+        }
+    }
+
+    /// Override the memory/SM budgets (e.g. for a smaller GPU or a test).
+    pub fn with_budget(mut self, mem_bytes: usize, sm_blocks: usize) -> Self {
+        self.mem_budget = mem_bytes;
+        self.sm_budget = sm_blocks;
+        self
     }
 
     pub fn submit(&mut self, job: Job) {
         self.queue.push_back(job);
     }
 
-    /// Admit jobs from the queue while we have spare slots.
+    /// Admit jobs from the queue while we have spare slots AND the next
+    /// job's resource estimate fits in the remaining budget. If a job is
+    /// too big to ever fit (estimate > total budget) it stays at the head
+    /// of the queue and we don't deadlock — caller's responsibility.
     fn admit(&mut self) -> Result<(), Box<dyn Error>> {
         while self.running.len() < self.max_concurrent {
-            let Some(job) = self.queue.pop_front() else { break; };
+            let Some(peek) = self.queue.front() else { break; };
+            let need_mem = estimate_job_memory_bytes(peek);
+            let need_sm  = estimate_job_sm_blocks(peek);
+            if self.used_mem + need_mem > self.mem_budget { break; }
+            if self.used_sm  + need_sm  > self.sm_budget  { break; }
+            let job = self.queue.pop_front().unwrap();
             let runner = JobRunner::new(self.ctx.clone(), job)?;
+            self.used_mem += need_mem;
+            self.used_sm  += need_sm;
             self.running.push(runner);
         }
         Ok(())
+    }
+
+    /// Snapshot the live runners + queue for the renderer. Cheap (just
+    /// borrows fields), so the caller can print a frame after every event.
+    pub fn slot_views(&self) -> Vec<SlotView> {
+        self.running.iter().map(|r| SlotView {
+            id: r.job.id.clone(),
+            mem_bytes: estimate_job_memory_bytes(&r.job),
+            sm_blocks: estimate_job_sm_blocks(&r.job),
+            step: r.step,
+            max_steps: r.job.steps,
+            best_acc: r.best_acc,
+            last_loss: r.last_loss,
+            elapsed_s: r.start.elapsed().as_secs_f64(),
+        }).collect()
+    }
+
+    /// Render a Tetris-style frame: GPU bars, slot list, queue.  ANSI-clean
+    /// (no escape codes) so the output is greppable; callers that want a
+    /// live in-place display can prepend `\x1b[2J\x1b[H` themselves.
+    pub fn render(&self) -> String {
+        use std::fmt::Write;
+        let mut s = String::new();
+        let mem_pct = (self.used_mem as f64 / self.mem_budget as f64 * 100.0).min(100.0);
+        let sm_pct  = (self.used_sm  as f64 / self.sm_budget  as f64 * 100.0).min(100.0);
+        writeln!(s, "GPU H100   mem [{:30}] {:5.1}%  ({} / {})",
+                 bar(mem_pct, 30), mem_pct,
+                 fmt_bytes(self.used_mem), fmt_bytes(self.mem_budget)).unwrap();
+        writeln!(s, "           sm  [{:30}] {:5.1}%  ({} / {} blocks)",
+                 bar(sm_pct, 30), sm_pct,
+                 self.used_sm, self.sm_budget).unwrap();
+        writeln!(s).unwrap();
+        for (i, sv) in self.slot_views().iter().enumerate() {
+            let progress = (sv.step as f64 / sv.max_steps as f64 * 100.0).min(100.0);
+            writeln!(s, "  slot {}: {:>10} step {:>5}/{:<5} [{:20}] {:5.1}%   acc={:5.1}%  loss={:8.4}  mem={}  sm={}",
+                     i + 1, sv.id, sv.step, sv.max_steps,
+                     bar(progress, 20), progress,
+                     sv.best_acc * 100.0, sv.last_loss,
+                     fmt_bytes(sv.mem_bytes), sv.sm_blocks).unwrap();
+        }
+        for i in self.running.len()..self.max_concurrent {
+            writeln!(s, "  slot {}: (free)", i + 1).unwrap();
+        }
+        writeln!(s).unwrap();
+        if self.queue.is_empty() {
+            writeln!(s, "  queue: (empty)").unwrap();
+        } else {
+            let preview: Vec<String> = self.queue.iter().take(8)
+                .map(|j| j.id.clone()).collect();
+            let more = if self.queue.len() > 8 {
+                format!(" +{} more", self.queue.len() - 8)
+            } else { String::new() };
+            writeln!(s, "  queue: {} waiting [{}{}]", self.queue.len(),
+                     preview.join(" "), more).unwrap();
+        }
+        s
     }
 
     /// Pump ONE batch on each running job. Returns all events produced
@@ -331,6 +505,11 @@ impl Scheduler {
                 events.push(ev);
             }
             if self.running[i].is_done() {
+                // Release this job's reserved budget back into the pool so the
+                // next admit() can pick up from the queue.
+                let job = &self.running[i].job;
+                self.used_mem = self.used_mem.saturating_sub(estimate_job_memory_bytes(job));
+                self.used_sm  = self.used_sm.saturating_sub(estimate_job_sm_blocks(job));
                 let mut runner = self.running.remove(i);
                 if let Some(f) = runner.take_final() {
                     events.push(SchedulerEvent::Final(f));
@@ -345,6 +524,26 @@ impl Scheduler {
     }
 
     pub fn is_idle(&self) -> bool { self.running.is_empty() && self.queue.is_empty() }
+}
+
+// ---- ASCII helpers --------------------------------------------------------
+
+fn bar(pct: f64, width: usize) -> String {
+    let filled = ((pct.clamp(0.0, 100.0) / 100.0) * width as f64).round() as usize;
+    let mut s = String::with_capacity(width * 3);
+    for _ in 0..filled { s.push('█'); }
+    for _ in filled..width { s.push('░'); }
+    s
+}
+
+fn fmt_bytes(n: usize) -> String {
+    const KB: usize = 1024;
+    const MB: usize = 1024 * KB;
+    const GB: usize = 1024 * MB;
+    if n >= GB { format!("{:.1}GB", n as f64 / GB as f64) }
+    else if n >= MB { format!("{:.0}MB", n as f64 / MB as f64) }
+    else if n >= KB { format!("{:.0}KB", n as f64 / KB as f64) }
+    else { format!("{}B", n) }
 }
 
 /// PyTorch-matching init recipe (mirrors ptxd::apply_pytorch_init).
