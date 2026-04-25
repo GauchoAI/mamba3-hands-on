@@ -160,15 +160,24 @@ impl JobRunner {
         })
     }
 
-    /// Train one mini-batch (`batch_size` accumulated samples + one AdamW
-    /// step). Updates last_loss and step. Returns Some(CycleEvent) if this
-    /// step landed on an eval boundary; Some(Final) if the job finished.
+    /// Single-shot batch (kept for backwards compatibility / test_scheduler).
+    /// Internally just calls prepare + finalize back-to-back, so it has
+    /// the same behaviour but is NOT the path the slot scheduler uses for
+    /// concurrent execution. Use `prepare_one_batch` + `finalize_one_batch`
+    /// directly when you want N runners to overlap on the GPU.
     pub fn advance_one_batch(&mut self) -> Result<Option<SchedulerEvent>, Box<dyn Error>> {
-        if self.done.is_some() { return Ok(None); }
-        let stage = self.stages[self.stage_idx].clone();
+        self.prepare_one_batch()?;
+        self.finalize_one_batch()
+    }
 
+    /// Phase 1: launch the batch's forward+backward kernels onto this
+    /// runner's stream. NO syncs. Returns immediately after queueing.
+    /// The scheduler calls this on every runner BEFORE finalize, so all
+    /// streams are running in parallel by the time anyone syncs.
+    pub fn prepare_one_batch(&mut self) -> Result<(), Box<dyn Error>> {
+        if self.done.is_some() { return Ok(()); }
+        let stage = self.stages[self.stage_idx].clone();
         self.trainer.zero_gradients_only()?;
-        let mut last_loss = 0.0f32;
         for _ in 0..self.job.batch_size {
             let span = stage.max_len - stage.min_len + 1;
             self.rng_state = self.rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -190,24 +199,24 @@ impl JobRunner {
             let answer = if parity == 0 { 83 } else { 68 };
             tokens.push(answer);
             tokens.push(257);
-
             let mut targets: Vec<u32> = vec![u32::MAX; tokens.len()];
             let answer_pos = tokens.len() - 3;
             targets[answer_pos] = answer;
-
-            // accumulate_gradients now returns 0.0 (no per-call sync). Loss
-            // is only read at eval boundaries below.
             let _ = self.trainer.accumulate_gradients(&tokens, &targets)?;
         }
+        Ok(())
+    }
+
+    /// Phase 2: AdamW + step bookkeeping + (at eval boundary) read loss
+    /// and run eval. Apply_optimizer_step_scaled has internal syncs for the
+    /// global-norm clip and per-layer d_scale read — those block ONLY on
+    /// this runner's stream, so concurrent runners are unaffected (their
+    /// kernels keep running on their own streams during this sync).
+    pub fn finalize_one_batch(&mut self) -> Result<Option<SchedulerEvent>, Box<dyn Error>> {
+        if self.done.is_some() { return Ok(None); }
         self.trainer.apply_optimizer_step_scaled(1.0 / self.job.batch_size as f32)?;
         self.step += 1;
-        let _ = last_loss;
 
-        // Eval every 200 steps. Returns Some(CycleEvent) at boundary,
-        // Some(FinalEvent) on completion / convergence. The eval call also
-        // reads the loss accumulator (forces a stream sync), so this is the
-        // ONLY sync point per 200-step window — multiple JobRunners can run
-        // their forward+backward passes concurrently between syncs.
         if self.step % 200 == 0 {
             self.last_loss = self.trainer.read_last_loss_blocking()?
                 / self.job.batch_size as f32;
@@ -226,17 +235,14 @@ impl JobRunner {
                 stage: self.stage_idx,
                 elapsed_s: self.start.elapsed().as_secs_f64(),
             };
-            // Curriculum advance.
             if acc >= stage.advance_at && self.stage_idx + 1 < self.stages.len() {
                 self.stage_idx += 1;
             }
-            // Convergence check.
             if self.best_acc >= self.job.target_acc && self.stage_idx + 1 == self.stages.len() {
                 self.done = Some(self.make_final("converged"));
             }
             return Ok(Some(SchedulerEvent::Cycle(event)));
         }
-        // Step budget exhausted.
         if self.step >= self.job.steps {
             self.done = Some(self.make_final(
                 if self.best_acc >= 0.7 { "learning" } else { "needs_tuning" }
@@ -501,19 +507,31 @@ impl Scheduler {
         s
     }
 
-    /// Pump ONE batch on each running job. Returns all events produced
-    /// (cycle and final) in submission order.
+    /// Pump ONE batch on each running job, in TWO PHASES:
+    ///   1. prepare:  every runner queues its forward+backward kernels onto
+    ///      its own stream (no syncs). Fast — just kernel-launch overhead.
+    ///      By the time we exit this loop, ALL streams are running in
+    ///      parallel on the GPU.
+    ///   2. finalize: every runner runs its AdamW step (which has internal
+    ///      stream-syncs) + eval-at-boundary. Each runner's syncs only
+    ///      block on its own stream, so other runners' kernel execution
+    ///      continues during the wait — that's the whole point.
+    /// Returns all events produced this step (cycle + final) in
+    /// submission order.
     pub fn pump_one_step(&mut self) -> Result<Vec<SchedulerEvent>, Box<dyn Error>> {
         self.admit()?;
+        // Phase 1: launch.
+        for runner in self.running.iter_mut() {
+            runner.prepare_one_batch()?;
+        }
+        // Phase 2: finalize.
         let mut events = Vec::new();
         let mut i = 0;
         while i < self.running.len() {
-            if let Some(ev) = self.running[i].advance_one_batch()? {
+            if let Some(ev) = self.running[i].finalize_one_batch()? {
                 events.push(ev);
             }
             if self.running[i].is_done() {
-                // Release this job's reserved budget back into the pool so the
-                // next admit() can pick up from the queue.
                 let job = &self.running[i].job;
                 self.used_mem = self.used_mem.saturating_sub(estimate_job_memory_bytes(job));
                 self.used_sm  = self.used_sm.saturating_sub(estimate_job_sm_blocks(job));
@@ -525,7 +543,6 @@ impl Scheduler {
             }
             i += 1;
         }
-        // Top up new jobs as slots free.
         self.admit()?;
         Ok(events)
     }
