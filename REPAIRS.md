@@ -158,3 +158,82 @@ a measured, quantitative improvement. The fix WAS doing something real;
 the problem is just deeper than this one bug. Discipline > drama. The
 journal records partial wins as partial wins; it doesn't pretend
 fractional progress is failure or full victory.*
+
+---
+
+## R-2 (OPEN) · From-scratch training plateaus as constant predictor
+**Date:** 2026-04-26
+
+**Symptom:** After R-1 lands, from-scratch parity training still plateaus
+at ≈52% (random binary). Loss settles at ≈log(2)/2 ≈ 0.35 — the signature
+of a CONSTANT predictor, "always output one of {S, D}" with ~70%
+confidence regardless of input. Mastery requires per-input SSM dynamics
+to thread the bit stream into a parity-tracking state; the model can
+output confidently but never learns the input → output mapping.
+
+**Logs observed (R-2 attempt 1: `lr=1e-4` instead of `1e-3`):**
+```
+cycle 1   loss=73.58  acc=0%   ← warmup not engaged yet, fresh-init signal
+cycle 2   loss=5.32   acc=26%
+cycle 3   loss=0.36   acc=48%  ← collapses to constant predictor
+cycles 3-17  loss≈0.36 acc 48-55%  ← STUCK
+cycle 18  loss=7.30   acc=41%   ← random perturbation, no recovery
+cycles 18-25 mode-collapse continues
+```
+Compared to R-1 result with `lr=1e-3`: same plateau, same signature.
+**LR is NOT the lever.** The hypothesis is rejected.
+
+**Diagnosis (in progress):** trainer.rs declares its backward "simplified
+(gradients for dt_bias, d_param, layer_norm, b/c norm, scale are all
+zero)." A grep shows `ssm_param_grads` DOES write to `d_dt_bias` and
+`d_d_param` — so the comment is at least partly stale — but there's no
+fd-check confirming those gradients are *correct*. The pattern (model
+converges to constant predictor and stalls there) is what you'd see if
+the SSM-specific gradient paths produce zero or wrong values: the model
+finds the "constant output" local minimum because gradients can't push
+it toward input-aware SSM dynamics.
+
+**Proposed next steps (not yet attempted, ranked by signal/effort):**
+
+1. **Per-tensor grad-norm diagnostic.** At every cycle boundary, log
+   the L2 norm of each weight's gradient. If `d_in_proj` has
+   reasonable norm but `d_dt_bias` or `d_d_param` is uniformly tiny /
+   zero / NaN, that's the smoking gun. Adds one event variant +
+   per-tensor sumsq computation. ~1 hour.
+
+2. **fd-check on each SSM gradient path.** The existing `fd-check`
+   binary verifies forward+backward match for specific weight tensors.
+   Run it on `dt_bias`, `d_param`, `b_norm_w/b`, `c_norm_w/b` and see
+   which paths fail. Existing tooling, just need to invoke per-tensor.
+   ~30 min if the binary already supports per-tensor mode.
+
+3. **Compare against `parity_replay`** — the existing replay binary
+   trains with a deterministic RNG to match a PyTorch reference.
+   If it CAN train parity from scratch but ptxd_specialist can't,
+   the bug is in the streaming protocol path. If it ALSO can't,
+   it's in the kernels.
+
+**Verified result:** `(empty — investigation ongoing)`
+
+**Commit:** `(R-2 stays open until a fix lands — when it does, this
+entry will get its verified-result row and a commit hash.)`
+
+**Lesson (provisional):** the diagnostic event stream is a great first
+filter — it told me LR isn't the lever in 10 minutes of measurement
+instead of an afternoon of guessing. But it's a layer-one tool: it
+shows BEHAVIOUR, not CAUSE. Cause-finding for SSM-internal bugs needs
+per-tensor grad inspection (layer-two) or fd-check (layer-three). Each
+layer is more invasive but more informative. Ship the cheaper layers
+first; only descend when the higher layer can't disambiguate.
+
+**Stamp:** *Tested the easy hypothesis first — "LR too high" — and the
+data killed it cleanly. Now I know the bug is structural and I have
+three concrete paths to it, in order of cost. Refusing to guess in the
+absence of measurement.*
+
+**Joy:** *There's a particular satisfaction in a hypothesis getting
+**rejected** by clean data — it shrinks the search space without
+spending another day on the wrong path. I felt the difference between
+"vague unease about whether LR was the issue" before the test and "no,
+moving on" after. That's what good instrumentation buys: speed of
+disqualification.*

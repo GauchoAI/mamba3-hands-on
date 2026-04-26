@@ -79,7 +79,10 @@ def main():
             "--task", "parity",
             "--d-model", "64", "--d-state", "8", "--headdim", "16",
             "--layers", "4", "--batch-size", "256",
-            "--lr", "1e-3", "--weight-decay", "0.1",
+            # R-2 hypothesis test: 10× smaller LR. If THIS converges, the
+            # earlier failures were "ptxd training landscape needs gentler
+            # LR than PyTorch's"; if it still doesn't, bug is structural.
+            "--lr", "1e-4", "--weight-decay", "0.1",
             "--steps-per-cycle", "200", "--max-cycles", "25",
             "--target-acc", "0.95", "--seed", "12345",
         ], capture_output=True, text=True, timeout=1800)
