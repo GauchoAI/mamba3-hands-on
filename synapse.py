@@ -28,20 +28,31 @@ from progressive_model import ProgressiveModel, VOCAB_SIZE
 class Bridge(nn.Module):
     """One synapse: router register state ↔ specialist register state."""
 
-    def __init__(self, d_router: int, d_specialist: int):
+    def __init__(self, d_router: int, d_specialist: int, init_open: bool = True):
         super().__init__()
         self.send = nn.Linear(d_router, d_specialist)
         self.recv = nn.Linear(d_specialist, d_router)
         self.gate = nn.Linear(d_router, 1)
-        # Init the recv path near zero so the synapse starts as a no-op
-        # and the router has to LEARN to use the specialist (the gate
-        # opens only if it helps the loss). This avoids the synapse
-        # initially injecting noise that destabilizes the router.
-        nn.init.zeros_(self.recv.weight)
-        nn.init.zeros_(self.recv.bias)
-        # Negative gate bias so the initial gate is ≈ 0 (closed synapse).
-        nn.init.zeros_(self.gate.weight)
-        nn.init.constant_(self.gate.bias, -3.0)  # σ(-3) ≈ 0.047
+        if init_open:
+            # Open gate at initialization (σ(0) = 0.5) — the synapse
+            # contributes from step 1 and the router has to learn to
+            # USE it well or close it. Recv init small-random so the
+            # specialist's signal actually reaches the router. This is
+            # the design that gives the synapse a fair shot when the
+            # router-alone path is also non-trivial.
+            nn.init.normal_(self.recv.weight, mean=0.0, std=0.02)
+            nn.init.zeros_(self.recv.bias)
+            nn.init.zeros_(self.gate.weight)
+            nn.init.zeros_(self.gate.bias)
+        else:
+            # Closed gate at initialization (σ(-3) ≈ 0.05) — synapse
+            # is a no-op and the router has to LEARN to open it. Useful
+            # when the router-alone path is strong and we want to see
+            # whether the synapse pulls extra signal.
+            nn.init.zeros_(self.recv.weight)
+            nn.init.zeros_(self.recv.bias)
+            nn.init.zeros_(self.gate.weight)
+            nn.init.constant_(self.gate.bias, -3.0)
 
     def forward(self, x_router, specialist):
         """Run one synaptic invocation.
@@ -98,7 +109,8 @@ class RouterModel(nn.Module):
             sp.eval()
 
         self.bridges = nn.ModuleList([
-            Bridge(d_router=router_d_model, d_specialist=sp.d_model)
+            Bridge(d_router=router_d_model, d_specialist=sp.d_model,
+                   init_open=True)
             for sp in self.specialists
         ])
 

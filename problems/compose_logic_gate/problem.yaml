@@ -1,0 +1,8 @@
+name: compose_logic_gate
+type: generator
+generator: compose_logic_gate:gen_compose_logic_gate
+target_accuracy: 0.95
+tags: [reasoning, composition, synapse-test]
+description: "Two-step logic-gate composition: r2 = op2(op1(a, b), c). Falsification target for the synapse mechanism — the router must invoke the logic_gate specialist twice with different intermediate states."
+curriculum:
+  - {stage: 1, dummy: 0, advance_at: 0.95}

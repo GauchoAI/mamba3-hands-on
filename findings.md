@@ -9,6 +9,71 @@ Silicon MPS. Each entry corresponds to a commit.
 > Mac-only branch keeps the historical findings text intact for context but
 > the production daily-driver path is PyTorch + MPS (`specialist_trainer.py`).
 
+---
+
+## Entry — Memorization vs computation: the Tower-of-Hanoi cliff (2026-04-26)
+
+**Setup.** `tower_of_hanoi` task: input `HANOI n` → output `2^n − 1` as bytes.
+Curriculum trained the model on `n ∈ [1, 8]` with `d_model=64, L=2, 74,658
+params`. Final training accuracy: 100%.
+
+**Question.** Did it learn the recurrence `2^n − 1`, or did it memorize the
+eight input-output pairs?
+
+**Test.** Held the .pt file fixed (no retraining, no resizing — *zero* model
+modification). Evaluated on `n ∈ [1, 25]`, 100 trials per value of n. Script:
+`length_gen_hanoi.py`.
+
+**Result.** A perfect cliff at the curriculum boundary:
+
+```
+ n   target    pred   acc
+ 1   1         1      100%   ┐
+ 2   3         3      100%   │
+ 3   7         7      100%   │  in distribution
+ ...                         │  (curriculum: n ≤ 8)
+ 8   255       255    100%   ┘
+ 9   511       1        0%   ┐
+10   1023      1        0%   │
+11   2047      1        0%   │
+12   4095      3        0%   │
+13   8191      7        0%   │
+14   16383     15       0%   │  out of distribution
+15   32767     31       0%   │
+16   65535     63       0%   │
+17   131071    127      0%   │
+18   262143    255      0%   ┘
+19   524287    1        0%
+22   4194303   3        0%
+25   33554431  31       0%
+```
+
+100% accuracy inside `[1, 8]`, **0% everywhere outside**, with zero ambiguity.
+But the *wrong predictions* tell the actual story.
+
+**The trick the model found.** Look at n=12 → predicts 3. n=13 → 7. n=14 → 15.
+n=18 → 255. The model is reading the **last digit** of n and outputting
+`2^(last_digit) − 1`. Because every training input was a single digit, "last
+digit" and "n" were the same thing in the training distribution. The model
+optimized for the laziest pattern that fit the data.
+
+This is exactly the signature of memorization-via-shortcut: it didn't learn
+to compute `2^n`, it learned to *attend to a single byte position* and use
+that as a lookup index. Inside the trained range the shortcut is correct;
+outside, it surfaces.
+
+**Why this matters.** The Mamba-3 SSM has 2,048 register slots per layer
+(8 heads × 16 hd × 16 d_state). That's *plenty* of capacity to encode the
+recurrence `2^n − 1`. The model didn't fail because of capacity — it
+succeeded at the wrong objective because the training distribution let
+it. The same architecture, same registers, would learn the algorithm if
+the curriculum forced it.
+
+**Next.** Same model size, extended curriculum past where the digit-shortcut
+breaks (multi-digit n). If the same `d=64, L=2` reaches n=20 accuracy with
+no architectural change, that's the recurrence learned — proof that "small
+fixed-capacity, growing data" is enough to push from memory to computation.
+
 Paper: https://arxiv.org/abs/2603.15569
 Official repo: https://github.com/state-spaces/mamba (CUDA-only)
 
