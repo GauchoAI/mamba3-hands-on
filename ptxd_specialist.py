@@ -74,7 +74,9 @@ def parse_args():
 
 
 def run_curriculum_mode(args, ptxd_bin, ckpt_dir, ckpt_path, opt_state_path,
-                        save_bin_path, sdb, exp_id, config):
+                        save_bin_path, sdb, exp_id, config,
+                        teacher_model=None, t_device="cpu",
+                        kd_weight=0.0, kd_temperature=3.0):
     """From-scratch training via curriculum advancement. Submits one ptxd job
     per stage; chains weights via /tmp/ptxd_curriculum_chain_{task}.{bin,opt.bin}.
 
@@ -148,9 +150,39 @@ def run_curriculum_mode(args, ptxd_bin, ckpt_dir, ckpt_path, opt_state_path,
 
         train_path = f"/tmp/ptxd_curr_train_{args.task}_s{stage_num}.bin"
         eval_path  = f"/tmp/ptxd_curr_eval_{args.task}_s{stage_num}.bin"
+
+        # Per-stage teacher logits when distillation is requested. The
+        # teacher_model has weights tuned for the FULL task distribution
+        # so it can score each curriculum stage's examples coherently.
+        # Without this, distillation in curriculum mode would silently
+        # fall back to plain CE (the bug R-4 didn't catch).
+        per_stage_teacher_train = None
+        per_stage_teacher_eval = None
+        if teacher_model is not None and kd_weight > 0:
+            try:
+                from teacher import compute_teacher_logits_for_examples
+                per_stage_teacher_train = compute_teacher_logits_for_examples(
+                    teacher_model, train_examples, args.vocab_size,
+                    batch_size=64, device=t_device,
+                )
+                per_stage_teacher_eval = compute_teacher_logits_for_examples(
+                    teacher_model, eval_examples, args.vocab_size,
+                    batch_size=64, device=t_device,
+                )
+                sys.stderr.write(f"[ptxd_specialist] stage{stage_num} teacher logits computed\n")
+            except Exception as e:
+                sys.stderr.write(f"[ptxd_specialist] stage{stage_num} teacher logits FAILED ({e}); falling back to CE for this stage\n")
+                per_stage_teacher_train = None
+                per_stage_teacher_eval = None
+
         try:
-            write_examples(train_path, train_examples)
-            write_examples(eval_path,  eval_examples)
+            has_teacher = per_stage_teacher_train is not None
+            write_examples(train_path, train_examples,
+                           teacher_logits=per_stage_teacher_train,
+                           vocab_size=args.vocab_size if has_teacher else None)
+            write_examples(eval_path, eval_examples,
+                           teacher_logits=per_stage_teacher_eval,
+                           vocab_size=args.vocab_size if has_teacher else None)
         except Exception as e:
             sys.stderr.write(f"[ptxd_specialist] stage {stage_num} batch write FAILED: {e}\n")
             break
@@ -159,6 +191,16 @@ def run_curriculum_mode(args, ptxd_bin, ckpt_dir, ckpt_path, opt_state_path,
         # ptxd early-exits on convergence. Init from chain.bin if it
         # exists (i.e., not the first stage). Save back to chain.bin
         # so the next stage picks up our weights.
+        # Loss config: ce_kd when teacher logits were successfully
+        # computed for THIS stage (per-stage; if teacher forward failed
+        # for some stages but not others, those stages run plain CE).
+        if has_teacher:
+            stage_loss = {"type": "ce_kd",
+                          "kd_weight": kd_weight,
+                          "temperature": kd_temperature}
+        else:
+            stage_loss = {"type": "ce"}
+
         job = {
             "id": f"{exp_id}_s{stage_num}",
             "task": args.task,
@@ -175,6 +217,7 @@ def run_curriculum_mode(args, ptxd_bin, ckpt_dir, ckpt_path, opt_state_path,
             "optimizer_state_out": chain_opt,
             "batches_path": train_path,
             "eval_batches_path": eval_path,
+            "loss": stage_loss,
             # The auto-tuner's stagnation rule (8 cycles flat → bail)
             # fires too early for fresh-init parity, where the model
             # plateaus at ~50% for ~27 cycles before the breakthrough.
@@ -380,9 +423,13 @@ def main():
     # Distillation: load teacher and run forward to get per-example logits
     # at supervised positions. If the task has no teacher in ModelRegistry,
     # `find_teacher_for_task` returns None and we silently fall back to CE.
+    # teacher_model + t_device are kept in scope so run_curriculum_mode can
+    # recompute teacher logits per stage (R-4 fix).
     teacher_train_logits = None
     teacher_eval_logits  = None
     teacher_loaded = False
+    teacher_model = None
+    t_device = "cpu"
     if args.kd_weight > 0.0:
         try:
             from teacher import (find_teacher_for_task, load_teacher_model,
@@ -541,9 +588,18 @@ def main():
             _spec = _r.problems.get(args.task)
             if _spec and _spec.curriculum:
                 t0 = time.time()
+                # Pass the teacher model (if loaded) so curriculum mode can
+                # recompute teacher logits per-stage. Without this, the
+                # single-stage teacher_train_logits computed on the
+                # ORIGINAL batches would be discarded — and ptxd would
+                # silently fall back to plain CE for the curriculum run.
+                _t_model = teacher_model if teacher_loaded else None
+                _t_dev = t_device if teacher_loaded else "cpu"
                 cur_final, cur_cycles, cur_status = run_curriculum_mode(
                     args, ptxd_bin, ckpt_dir, ckpt_path, opt_state_path,
                     save_bin_path, sdb, exp_id, config,
+                    teacher_model=_t_model, t_device=_t_dev,
+                    kd_weight=args.kd_weight, kd_temperature=args.kd_temperature,
                 )
                 if cur_final is not None:
                     final_result = cur_final

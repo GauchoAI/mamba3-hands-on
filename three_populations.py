@@ -84,16 +84,24 @@ def _acquire_lock():
 def spawn_worker(task, config, mode="champion", cycles=10, target_acc=0.95):
     """Spawn a specialist_trainer subprocess. Returns Popen.
 
-    Set MAMBA_ENGINE=ptxd to spawn the PTX-engine shim instead of the
-    PyTorch trainer. The shim accepts the same CLI surface and writes the
-    same StateDB / MetricsWriter rows, so this is a transparent swap. See
-    findings.md Entry 41 for the four-gate verification of the engine.
+    LOCKED to ptxd_specialist.py as of REPAIRS R-4. The PyTorch path
+    (specialist_trainer.py) used a different scheduler model that would
+    contend with ptxd's slot scheduler if both ran on the same GPU; the
+    GA never had a clean way to express "use this engine but coexist
+    with that one." Locking to one engine eliminates that risk and
+    means the regression guard, StateDB integration, hot-plug daemon,
+    diagnostic event stream, curriculum mode, and 82 existing
+    checkpoints all flow through one consistent path.
+
+    Override with MAMBA_ENGINE=pytorch (explicit opt-in) for the legacy
+    path, e.g. when comparing against a known-good PyTorch baseline.
+    Default behaviour is ptxd.
     """
     cfg = config if isinstance(config, dict) else {}
     worker_script = (
-        "ptxd_specialist.py"
-        if os.environ.get("MAMBA_ENGINE", "").lower() == "ptxd"
-        else "specialist_trainer.py"
+        "specialist_trainer.py"
+        if os.environ.get("MAMBA_ENGINE", "").lower() == "pytorch"
+        else "ptxd_specialist.py"
     )
     cmd = [sys.executable, "-u", worker_script,
          "--task", task,
