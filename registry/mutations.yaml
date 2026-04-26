@@ -4,30 +4,12 @@
 # Probabilities are capped at their max_probability value.
 
 mutations:
-  # NOTE — ptxd lock (REPAIRS R-4): `scan_backend` and `device` mutations
-  # are commented out. ptxd has ONE SSM scan kernel (its own PTX
-  # implementation), and ptxd is CUDA-only on the H100. Mutating these
-  # was a no-op in ptxd anyway — the GA was burning rolls on knobs that
-  # didn't exist. With the engine locked, the mutation surface is
-  # honest: every variant the GA picks does something distinct.
-  # - name: scan_backend
-  #   key: scan_backend
-  #   type: categorical
-  #   probability: 0.3
-  #   max_probability: 1.0
-  #   values: [native, compiled, jit, triton]
-  #   default: native
-  #
-  # - name: device
-  #   key: device
-  #   type: categorical
-  #   probability: 0.15
-  #   max_probability: 1.0
-  #   values: [cuda, cpu, mps]
-  #   default: cuda
-  #   implies:
-  #     cpu: {scan_backend: jit}
-  #     mps: {scan_backend: jit}
+  # Mac branch: `scan_backend` and `device` mutations are intentionally
+  # absent. specialist_trainer runs one PyTorch path with MPS as the
+  # default backend on Apple Silicon (CPU as fallback). Adding more
+  # backend choices here would make the GA burn rolls on no-ops.
+  # If you want the CUDA/triton/PTX backend matrix back, switch to the
+  # pod-archive branch.
 
   - name: lr
     key: lr
@@ -85,20 +67,8 @@ mutations:
     max_probability: 0.7
     values: [8, 16, 32]
 
-  # `backend` mutation removed (REPAIRS R-4). The GA is locked to ptxd:
-  # the slot scheduler in ptxd owns the GPU and would contend with any
-  # other backend running concurrently on the same node. Choosing
-  # backends per-experiment is incompatible with the scheduler model.
-  # If we ever need to re-enable a multi-backend GA, that's a scheduling
-  # design problem, not a "flip a config flag" change. Until then the
-  # mutation surface stays honest: every variant the GA picks runs
-  # through one engine.
-  # - name: backend
-  #   key: backend
-  #   type: toggle
-  #   probability: 0.1
-  #   max_probability: 0.5
-  #   values: [pytorch, tinygrad]
+  # Mac branch runs one engine (PyTorch + MPS via specialist_trainer).
+  # Backend mutation isn't useful here — there's only one path.
 
   - name: loss_fn
     key: loss_fn

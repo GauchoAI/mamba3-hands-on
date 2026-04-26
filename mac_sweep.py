@@ -1,6 +1,5 @@
 """mac_sweep — sequential MPS-backend sweep harness for specialist_trainer.
 
-Sister of test_parallel_sweep.py (which targets ptxd on a NVIDIA host).
 Runs one task at a time on M-series GPUs; specialist_trainer's
 regression guard keeps a bad-seed re-train from clobbering a good ckpt.
 

@@ -4,6 +4,11 @@ A running lab notebook as we explore the Mamba-3 paper (Lahoti et al., ICLR 2026
 by implementing a minimal version from scratch and running experiments on Apple
 Silicon MPS. Each entry corresponds to a commit.
 
+> **Note (2026-04-26):** The CUDA/PTX engine and ptxd-related entries below were
+> the H100/vast.ai era. That work has moved to the `pod-archive` branch. This
+> Mac-only branch keeps the historical findings text intact for context but
+> the production daily-driver path is PyTorch + MPS (`specialist_trainer.py`).
+
 Paper: https://arxiv.org/abs/2603.15569
 Official repo: https://github.com/state-spaces/mamba (CUDA-only)
 

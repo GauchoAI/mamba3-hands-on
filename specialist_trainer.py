@@ -713,11 +713,11 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     except Exception:
         pass
 
-    # Save specialist — with regression guard. The ptxd path in
-    # engine/ptx/src/scheduler.rs has had this for a while; vanilla
-    # specialist_trainer didn't, which let a 0% run clobber a prior
-    # 100% checkpoint and then poison subsequent re-trains via the load
-    # path. Refuse to overwrite unless we'd be saving a NON-WORSE acc.
+    # Save specialist — with regression guard. Refuse to overwrite a
+    # prior good checkpoint with a worse run. Without this, a 0% run
+    # could clobber a 100% checkpoint and then poison subsequent
+    # re-trains via the load path (which loads the existing .pt as
+    # initial weights when present).
     ckpt_dir = Path("checkpoints/specialists")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / f"{task}.pt"
