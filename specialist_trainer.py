@@ -743,6 +743,22 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         }, ckpt_path)
         print(f"  Saved specialist → {ckpt_path} ({best_acc:.0%})", flush=True)
 
+        # Push the teacher blob to Firebase so peer nodes can pull it
+        # without any SSH dependency. Only worth doing when the run
+        # produced a non-trivial teacher; the regression guard already
+        # rejected worse-than-prior, so anything that lands here is
+        # at-or-better. Skip on accuracy=0 to avoid uploading garbage.
+        if best_acc > 0:
+            try:
+                from firebase_push import upload_teacher_blob
+                if upload_teacher_blob(task, ckpt_path):
+                    sz_kb = ckpt_path.stat().st_size // 1024
+                    print(f"  Uploaded teacher blob to Firebase "
+                          f"({task}, {sz_kb}KB, acc={best_acc:.0%})",
+                          flush=True)
+            except Exception as e:
+                print(f"  Firebase blob upload failed: {e}", flush=True)
+
     # Run register inspection and push to Firebase
     try:
         from register_inspector import inspect_model, save_and_push

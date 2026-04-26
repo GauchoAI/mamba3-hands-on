@@ -38,6 +38,83 @@ def _post(path, data):
         return False
 
 
+# ── Teacher blob transport (Firebase as the only data plane) ─────────
+#
+# Drops the peer-to-peer SSH/rsync path entirely. When a node masters a
+# task, it uploads the .pt as base64 under `mamba3/teacher_blobs/<task>`.
+# Other nodes download via plain HTTPS GET. No SSH server required on
+# any node — the asymmetric-mesh problem disappears.
+#
+# Sizes: a default specialist .pt is ~900KB → ~1.2MB base64. Realtime DB
+# accepts writes up to 16MB so this is fine. Total cluster footprint at
+# 37 tasks ≈ 45MB, well inside Firebase's 1GB free tier.
+
+import base64 as _b64
+import hashlib as _hashlib
+from pathlib import Path as _Path
+
+
+def upload_teacher_blob(task: str, pt_path) -> bool:
+    """Upload a teacher .pt to Firebase as base64 under
+    mamba3/teacher_blobs/<task>. Returns True on success.
+
+    Stores alongside a small manifest (size, sha256, uploaded_at) at
+    mamba3/teacher_blobs_meta/<task> so model_registry can sanity-check
+    a download without re-pulling the blob.
+    """
+    pt_path = _Path(pt_path)
+    if not pt_path.exists():
+        return False
+    raw = pt_path.read_bytes()
+    sha = _hashlib.sha256(raw).hexdigest()
+    encoded = _b64.b64encode(raw).decode("ascii")
+    # PUT the blob (overwrite the prior teacher for this task)
+    ok_blob = _put(f"mamba3/teacher_blobs/{task}", encoded)
+    ok_meta = _put(f"mamba3/teacher_blobs_meta/{task}", {
+        "size": len(raw),
+        "sha256": sha,
+        "uploaded_at": time.time(),
+    })
+    return ok_blob and ok_meta
+
+
+def download_teacher_blob(task: str, dest_path) -> bool:
+    """Download a teacher .pt from Firebase to dest_path. Verifies sha256
+    against the manifest. Returns True on success.
+    """
+    dest_path = _Path(dest_path)
+    # Fetch manifest first so we can validate
+    meta_url = f"{FIREBASE_URL}/mamba3/teacher_blobs_meta/{task}.json"
+    try:
+        with urllib.request.urlopen(meta_url, timeout=10) as r:
+            meta = json.loads(r.read().decode("utf-8"))
+        if not isinstance(meta, dict):
+            return False
+    except Exception:
+        return False
+    expected_sha = meta.get("sha256")
+    expected_size = meta.get("size")
+    blob_url = f"{FIREBASE_URL}/mamba3/teacher_blobs/{task}.json"
+    try:
+        with urllib.request.urlopen(blob_url, timeout=60) as r:
+            encoded = json.loads(r.read().decode("utf-8"))
+        if not isinstance(encoded, str):
+            return False
+    except Exception:
+        return False
+    try:
+        raw = _b64.b64decode(encoded)
+    except Exception:
+        return False
+    if expected_size and len(raw) != expected_size:
+        return False
+    if expected_sha and _hashlib.sha256(raw).hexdigest() != expected_sha:
+        return False
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    dest_path.write_bytes(raw)
+    return True
+
+
 # ── Snapshot (every generation) ─────────────────────────────────────
 
 def push_snapshot(results, generation, gpu_pct, mem_pct, evo_state=None):

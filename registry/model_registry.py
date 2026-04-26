@@ -105,16 +105,28 @@ class ModelRegistry:
 
     def ensure_local(self, task: str) -> Path | None:
         """Ensure the teacher checkpoint is available locally.
-        Fetches from the remote node if needed. Returns local path.
 
-        Mac branch: when no peer is reachable, the local .pt IS the
-        teacher — same-task distillation uses the previously-mastered
-        checkpoint as a teacher for the new student, which is the
-        whole point of the resume-from-master pattern.
+        Order of fallback:
+          1. Local .pt — already on disk, nothing to do.
+          2. Firebase teacher blob — base64 .pt stored at
+             mamba3/teacher_blobs/<task>. Plain HTTPS GET, no SSH server
+             needed on any node.
+          3. Peer-to-peer SSH/rsync (legacy) — requires SSH server on
+             the source node; kept for nodes that pre-date the blob path.
         """
         local_path = self.local_dir / f"{task}.pt"
         if local_path.exists():
             return local_path
+
+        # Try Firebase blob first — works through any NAT, no peer SSH.
+        try:
+            from firebase_push import download_teacher_blob
+            if download_teacher_blob(task, local_path):
+                print(f"  Fetched {task} teacher from Firebase blob "
+                      f"({local_path.stat().st_size // 1024}KB)", flush=True)
+                return local_path
+        except Exception as e:
+            print(f"  Firebase blob fetch failed for {task}: {e}", flush=True)
 
         # Find which node has it
         index = self._refresh_index()
@@ -122,20 +134,49 @@ class ModelRegistry:
         if not teacher_info:
             return None
 
-        # Find the node's SSH info
+        # Find the node's SSH info — prefer the FRESHEST heartbeat so we
+        # don't try to rsync from a node that's offline. The teacher index
+        # records `node` (hostname) but we look up SSH coords by scanning
+        # `mamba3/nodes/*`; if multiple nodes are registered with SSH info
+        # we pick the one with the most recent heartbeat (within the last
+        # 5 minutes), falling back to any reachable node if none are fresh.
+        import time as _time
+        import socket as _socket
         nodes = _firebase_get("mamba3/nodes") or {}
-        # Try to find the node that trained this teacher
-        source_node = None
+        # Identify self so we don't try to rsync a file from ourselves
+        # (which would silently fail when the file isn't local). We match
+        # on hostname AND on lower-cased hostname-derived node_id, since
+        # node_agent munges hostname to a slug.
+        self_hostname = _socket.gethostname()
+        self_hostname_l = self_hostname.lower()
+        candidates = []
+        now = _time.time()
         for nid, node_info in nodes.items():
             if not isinstance(node_info, dict):
                 continue
             ssh = node_info.get("ssh")
-            if ssh:
-                source_node = node_info
-                source_node["node_id"] = nid
-                break  # use first available node with SSH
+            if not ssh:
+                continue
+            # Skip self
+            if (node_info.get("hostname", "").lower() == self_hostname_l
+                or self_hostname_l.startswith(nid.split("-")[0].lower())):
+                continue
+            hb_age = now - float(node_info.get("last_heartbeat", 0))
+            candidates.append((hb_age, nid, node_info))
+        # Sort by heartbeat age ascending (freshest first)
+        candidates.sort(key=lambda c: c[0])
+        # Skip nodes that haven't heartbeat-ed in the last 5 minutes —
+        # they're considered offline and rsync will likely time out.
+        FRESH_S = 300
+        fresh = [c for c in candidates if c[0] <= FRESH_S]
+        chosen = fresh[0] if fresh else (candidates[0] if candidates else None)
+        if not chosen:
+            return None
+        _, nid, source_node = chosen
+        source_node = dict(source_node)
+        source_node["node_id"] = nid
 
-        if not source_node or not source_node.get("ssh"):
+        if not source_node.get("ssh"):
             return None
 
         # Fetch via rsync
