@@ -57,6 +57,9 @@ def main():
     ap.add_argument("--specialist-pt", default=None,
                     help="Path to a frozen specialist .pt (defaults to "
                          "checkpoints/specialists/{task}.pt)")
+    ap.add_argument("--specialists", nargs="+", default=None,
+                    help="Multiple specialist .pt paths — one synapse per "
+                         "specialist. Overrides --specialist-pt.")
     ap.add_argument("--no-synapse", action="store_true",
                     help="Control: router alone, no specialist invocation")
     ap.add_argument("--bridge-kind", choices=["attend", "project"], default="attend",
@@ -83,13 +86,14 @@ def main():
 
     specialists = []
     if not args.no_synapse:
-        pt = args.specialist_pt or f"checkpoints/specialists/{args.task}.pt"
-        if not Path(pt).exists():
-            raise SystemExit(f"specialist not found: {pt} — run "
-                             f"specialist_trainer first to produce one")
-        sp = load_specialist(pt, device=args.device)
-        specialists.append(sp)
-        print(f"Specialist:     {pt} (d={sp.d_model}, frozen)")
+        pt_paths = (args.specialists if args.specialists
+                    else [args.specialist_pt or f"checkpoints/specialists/{args.task}.pt"])
+        for pt in pt_paths:
+            if not Path(pt).exists():
+                raise SystemExit(f"specialist not found: {pt}")
+            sp = load_specialist(pt, device=args.device)
+            specialists.append(sp)
+            print(f"Specialist:     {pt} (d={sp.d_model}, frozen)")
 
     router = RouterModel(
         router_d_model=args.router_d_model,

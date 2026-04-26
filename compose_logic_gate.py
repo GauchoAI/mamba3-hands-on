@@ -52,6 +52,23 @@ def gen_compose_logic_gate():
     }
 
 
+def gen_compose_logic_gate_3():
+    """Three-deep chain — tests how the synapse scales with chain depth.
+
+        r3 = op3(op2(op1(a, b), c), d)
+    """
+    op1, op2, op3 = (random.choice(GATES) for _ in range(3))
+    a, b, c, d = (random.randint(0, 1) for _ in range(4))
+    r1 = _apply(op1, a, b)
+    r2 = _apply(op2, r1, c)
+    r3 = _apply(op3, r2, d)
+    return {
+        "type": "compose_logic_gate_3",
+        "input": f"COMPOSE3 {op1} {a} {b} {op2} {c} {op3} {d}",
+        "output": str(r3),
+    }
+
+
 if __name__ == "__main__":
     # Sanity sample
     for _ in range(8):

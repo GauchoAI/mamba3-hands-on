@@ -1,0 +1,8 @@
+name: dual_task
+type: generator
+generator: dual_task:gen_dual_task
+target_accuracy: 0.95
+tags: [reasoning, composition, synapse-test, multi-specialist]
+description: "Two independent sub-questions: a logic-gate problem and a count-above-threshold problem. Router must use TWO different specialists at the right positions."
+curriculum:
+  - {stage: 1, dummy: 0, advance_at: 0.95}

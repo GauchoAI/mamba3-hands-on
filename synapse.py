@@ -63,6 +63,12 @@ class AttendBridge(nn.Module):
         super().__init__()
         self.recv = nn.Linear(d_specialist, d_router)
         self.gate = nn.Linear(d_router, 1)
+        # Learnable per-bridge scale, init small so a new synapse starts
+        # near-identity (it doesn't try to compete with the router base
+        # at step 1). Mirrors the `scale` parameter on each kernel layer
+        # (init 0.01) — gives the optimizer the same "open it up gradually"
+        # dynamics. Critical for stability when stacking multiple synapses.
+        self.scale = nn.Parameter(torch.tensor(0.1))
         if init_open:
             nn.init.normal_(self.recv.weight, mean=0.0, std=0.02)
             nn.init.zeros_(self.recv.bias)
@@ -78,7 +84,7 @@ class AttendBridge(nn.Module):
         """spec_hidden: (B, L, d_spec) — pre-computed once outside this fn."""
         gate = torch.sigmoid(self.gate(x_router))   # (B, L, 1)
         y = self.recv(spec_hidden)                  # (B, L, d_router)
-        return gate * y
+        return self.scale * gate * y
 
 
 class Bridge(nn.Module):
@@ -185,12 +191,22 @@ class RouterModel(nn.Module):
     def _specialist_hiddens(self, tokens):
         """Run each frozen specialist on the original tokens once, in
         no_grad. Returns a list of (B, L, d_spec) tensors, one per
-        specialist. Used by the AttendBridge path."""
+        specialist. Used by the AttendBridge path.
+
+        Specialists trained on a narrow input distribution can NaN
+        when fed unfamiliar prefixes (e.g. count_above_threshold
+        destabilizes on the `DUAL OR 0 1 ;` prefix from `dual_task`).
+        We zero out NaNs so the bridge sees "specialist had nothing
+        useful at these positions" rather than poisoning the router
+        with NaN. The gate is free to close at those positions if the
+        signal is consistently zero.
+        """
         outs = []
         for sp in self.specialists:
             with torch.no_grad():
                 x_sp = sp.embed_norm(sp.embed(tokens))
-                x_sp = sp.forward_from_hidden(x_sp)   # post-final-norm
+                x_sp = sp.forward_from_hidden(x_sp)
+                x_sp = torch.nan_to_num(x_sp, nan=0.0, posinf=0.0, neginf=0.0)
             outs.append(x_sp)
         return outs
 

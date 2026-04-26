@@ -1,0 +1,8 @@
+name: compose_logic_gate_3
+type: generator
+generator: compose_logic_gate:gen_compose_logic_gate_3
+target_accuracy: 0.95
+tags: [reasoning, composition, synapse-test, depth-3]
+description: "Three-deep gate chain — tests synapse scaling with chain depth."
+curriculum:
+  - {stage: 1, dummy: 0, advance_at: 0.95}
