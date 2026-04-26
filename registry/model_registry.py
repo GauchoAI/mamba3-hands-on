@@ -81,7 +81,22 @@ class ModelRegistry:
         return sorted(self._refresh_index().keys())
 
     def has_teacher(self, task: str) -> bool:
-        """Check if a teacher exists for this task (on any node)."""
+        """Check if a teacher exists for this task (on any node).
+
+        Order of checks:
+          1. Local .pt with non-zero accuracy — most authoritative on the
+             Mac branch where Firebase may be offline.
+          2. Firebase teacher index — for the cluster setup where peer
+             Macs publish their mastered checkpoints.
+        """
+        local_path = self.local_dir / f"{task}.pt"
+        if local_path.exists() and torch is not None:
+            try:
+                ck = torch.load(str(local_path), map_location="cpu", weights_only=False)
+                if float(ck.get("accuracy", 0.0)) > 0.0:
+                    return True
+            except Exception:
+                pass
         return task in self._refresh_index()
 
     def is_local(self, task: str) -> bool:
@@ -90,7 +105,13 @@ class ModelRegistry:
 
     def ensure_local(self, task: str) -> Path | None:
         """Ensure the teacher checkpoint is available locally.
-        Fetches from the remote node if needed. Returns local path."""
+        Fetches from the remote node if needed. Returns local path.
+
+        Mac branch: when no peer is reachable, the local .pt IS the
+        teacher — same-task distillation uses the previously-mastered
+        checkpoint as a teacher for the new student, which is the
+        whole point of the resume-from-master pattern.
+        """
         local_path = self.local_dir / f"{task}.pt"
         if local_path.exists():
             return local_path
