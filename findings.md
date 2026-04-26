@@ -127,6 +127,64 @@ tracking the curriculum boundary into 50+ disks — same model size — that's
 strong evidence the architecture supports general computation and the only
 gating factor is the data.
 
+---
+
+## Entry — Neural composition works (synapse v2, AttendBridge) (2026-04-26)
+
+**Setup.** A tiny router (d=16, L=1, 7,654 trainable params) trained on
+`compose_logic_gate` — a two-step gate chain `op2(op1(a,b), c)` — with a
+frozen `logic_gate` specialist (d=64, mastered) plugged in via a single
+synapse. Falsification: same router with no synapse should plateau lower
+than the synapse-on version. If it doesn't, the bridge is doing nothing.
+
+**The two bridge designs.**
+
+- **ProjectedBridge (v1):** router projects its own state via `W_send` into
+  the specialist's d=64 space, specialist runs `forward_from_hidden` on that
+  projection, output goes back through `W_recv` and a gate.
+- **AttendBridge (v2):** specialist runs on the *original input bytes* (its
+  native diet), produces a hidden state `(B, L, 64)` once, the router learns
+  `W_recv` and a per-timestep gate to read that state. No `W_send`.
+
+**Result.**
+
+| Variant | Final acc | Gate at end | Trainable params |
+|---|---|---|---|
+| Control (no synapse) | 63.3% | — | 6,597 |
+| ProjectedBridge (open gate init) | 67.2% | 0.531 | 8,742 |
+| **AttendBridge (open gate init)** | **97.3%** | 0.521 | **7,654** |
+
+The AttendBridge is **+30 points** over both control and the projecting
+bridge, with *fewer* trainable parameters than the projecting variant.
+
+**What this confirms.**
+
+- The synapse mechanism works *when the specialist is fed its native input
+  distribution.* Its frozen dynamics encode "what's the answer if these
+  bytes were a logic-gate question?" and that answer-shaped hidden state is
+  what the router learns to read.
+- The projection bridge fails because it asks the specialist to operate on
+  a learned continuous code that doesn't look like anything the specialist
+  was trained on. The output is mostly noise.
+- The router doesn't need to be big. 7.6k trainable params is enough to
+  learn "when is the specialist's expertise relevant" + "how to translate
+  its 64-d output into my 16-d state". Most of the *capability* lives in
+  the frozen 75k-param specialist; the router is the synapse, not the
+  competence.
+
+**Plant/fungus framing, made concrete.** The router didn't grow new
+capacity. It sprouted a connection — `W_recv` + `W_g`, ~1.1k params — into
+an existing competence and harvested it. With more specialists available,
+adding each one costs the same ~1.1k params per synapse: linear in
+specialists, not multiplicative. A larger cluster of mastered specialists
+gives the same router a bigger reachable phenotype without any base
+expansion.
+
+**Next.** Multi-specialist composition — e.g. an `addition` synapse + a
+`multiplication` synapse + a tiny router solving `a × b + c`. The router
+should learn distinct gate trajectories for the two specialists at the
+right sub-positions in the input.
+
 Paper: https://arxiv.org/abs/2603.15569
 Official repo: https://github.com/state-spaces/mamba (CUDA-only)
 

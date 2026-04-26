@@ -1,21 +1,32 @@
 """synapse — register-space invocation of frozen specialist models.
 
-The router learns to project its own SSM state into a specialist's
-register space, run the specialist with that projected state as input,
-and read the result back into its own state via a learned linear bridge.
+Two designs in one file:
 
-No tokens transit. No vocabulary expansion. The bridge is three small
-matrices per (router, specialist) pair:
+ProjectedBridge (v1) — router's own state is projected into the
+specialist's input space (W_send), specialist runs with that
+projected state via forward_from_hidden, output is mapped back
+through W_recv. Empirically marginal because the specialist's
+frozen dynamics expect token-embedding inputs, not arbitrary
+continuous router projections.
 
-    W_send : (d_router → d_specialist)  what the router asks
-    W_recv : (d_specialist → d_router)  how the router reads back
-    W_g    : (d_router → 1)              when to invoke (soft gate)
+AttendBridge (v2) — specialist runs on the ORIGINAL input bytes
+(its native diet), produces its native hidden state at each
+timestep, and the router learns to ATTEND to that state via a
+learned recv + a per-timestep gate. No projection from router
+into specialist's input space; the specialist sees what it was
+trained on. This is the design that matches the biological
+intuition: a specialist 'cortical area' activates on its native
+input, and a higher-order area reads from it when useful.
 
-The specialist stays frozen; only the bridges and the router's own
-weights are trained. Differentiable end-to-end via the soft gate.
+Both bridges share the same gating + recv arithmetic; the
+difference is whether the router's state is projected into the
+specialist's input space or not.
 
-Mental model: each bridge is a synapse between two register populations.
-With N specialists, the router sprouts N synapses but does not grow.
+The specialist stays frozen; only the bridges and the router's
+own weights are trained. Differentiable end-to-end via the soft
+gate. Mental model: each bridge is a synapse between two
+register populations. With N specialists, the router sprouts N
+synapses but does not grow.
 """
 from __future__ import annotations
 from pathlib import Path
@@ -25,8 +36,53 @@ import torch.nn as nn
 from progressive_model import ProgressiveModel, VOCAB_SIZE
 
 
+class AttendBridge(nn.Module):
+    """v2 synapse: specialist runs on the ORIGINAL input bytes; the
+    router learns when to attend to its hidden state.
+
+    No `W_send`. The specialist is invoked once per forward via the
+    same `tokens` the router got, in eval / no_grad. Its post-final-norm
+    hidden state `(B, L, d_specialist)` is what we read from. The router
+    decides — per timestep — how much of that signal to pull in via:
+
+        gate_t  = σ(W_g · x_router_t)              ∈ [0, 1]
+        contrib = gate_t · (W_recv · spec_hidden_t)
+
+    Both `W_recv` and `W_g` are tiny (`d_spec×d_router` and `d_router×1`).
+
+    Compared to ProjectedBridge: the specialist sees its NATIVE input
+    distribution (token embeddings → its trained dynamics), so its
+    hidden state is meaningful rather than a fragile response to a
+    learned projection. The router's job becomes "where in the
+    sequence is the specialist's expertise relevant?" — which is the
+    biological intuition for higher-order areas reading from primary
+    ones.
+    """
+
+    def __init__(self, d_router: int, d_specialist: int, init_open: bool = True):
+        super().__init__()
+        self.recv = nn.Linear(d_specialist, d_router)
+        self.gate = nn.Linear(d_router, 1)
+        if init_open:
+            nn.init.normal_(self.recv.weight, mean=0.0, std=0.02)
+            nn.init.zeros_(self.recv.bias)
+            nn.init.zeros_(self.gate.weight)
+            nn.init.zeros_(self.gate.bias)
+        else:
+            nn.init.zeros_(self.recv.weight)
+            nn.init.zeros_(self.recv.bias)
+            nn.init.zeros_(self.gate.weight)
+            nn.init.constant_(self.gate.bias, -3.0)
+
+    def forward(self, x_router, spec_hidden):
+        """spec_hidden: (B, L, d_spec) — pre-computed once outside this fn."""
+        gate = torch.sigmoid(self.gate(x_router))   # (B, L, 1)
+        y = self.recv(spec_hidden)                  # (B, L, d_router)
+        return gate * y
+
+
 class Bridge(nn.Module):
-    """One synapse: router register state ↔ specialist register state."""
+    """v1 synapse: router register state ↔ specialist register state."""
 
     def __init__(self, d_router: int, d_specialist: int, init_open: bool = True):
         super().__init__()
@@ -89,6 +145,7 @@ class RouterModel(nn.Module):
         router_headdim: int = 16,
         router_n_layers: int = 1,
         specialists: list[ProgressiveModel] | None = None,
+        bridge_kind: str = "attend",
     ):
         super().__init__()
         self.base = ProgressiveModel(
@@ -108,9 +165,16 @@ class RouterModel(nn.Module):
                 p.requires_grad = False
             sp.eval()
 
+        self.bridge_kind = bridge_kind
+        if bridge_kind == "attend":
+            BridgeCls = AttendBridge
+        elif bridge_kind == "project":
+            BridgeCls = Bridge
+        else:
+            raise ValueError(f"unknown bridge_kind: {bridge_kind}")
         self.bridges = nn.ModuleList([
-            Bridge(d_router=router_d_model, d_specialist=sp.d_model,
-                   init_open=True)
+            BridgeCls(d_router=router_d_model, d_specialist=sp.d_model,
+                      init_open=True)
             for sp in self.specialists
         ])
 
@@ -118,18 +182,36 @@ class RouterModel(nn.Module):
         # n_layers=1, that's "after layer 0, before final_norm".
         self.synapse_after_layer = max(0, router_n_layers - 1)
 
+    def _specialist_hiddens(self, tokens):
+        """Run each frozen specialist on the original tokens once, in
+        no_grad. Returns a list of (B, L, d_spec) tensors, one per
+        specialist. Used by the AttendBridge path."""
+        outs = []
+        for sp in self.specialists:
+            with torch.no_grad():
+                x_sp = sp.embed_norm(sp.embed(tokens))
+                x_sp = sp.forward_from_hidden(x_sp)   # post-final-norm
+            outs.append(x_sp)
+        return outs
+
     def forward(self, tokens):
+        # Pre-compute specialist hidden states once (attend mode only;
+        # for project mode each Bridge runs its own forward_from_hidden
+        # on a router-projected state).
+        spec_hiddens = (self._specialist_hiddens(tokens)
+                        if self.bridge_kind == "attend" else None)
+
         x = self.base.embed_norm(self.base.embed(tokens))
         kernel = list(self.base.kernel_layers)
-        # Pre-synapse layers
         for i, layer in enumerate(kernel):
             scale = layer["scale"][0]
             x = x + scale * layer["block"](layer["norm"](x))
             if i == self.synapse_after_layer:
-                # Fire all synapses additively (each one already gated)
-                for sp, br in zip(self.specialists, self.bridges):
-                    x = x + br(x, sp)
-        # Cortex (if any) and final norm + head
+                for j, (sp, br) in enumerate(zip(self.specialists, self.bridges)):
+                    if self.bridge_kind == "attend":
+                        x = x + br(x, spec_hiddens[j])
+                    else:
+                        x = x + br(x, sp)
         for layer in self.base.cortex_layers:
             scale = layer["scale"][0]
             x = x + scale * layer["block"](layer["norm"](x))
@@ -137,8 +219,7 @@ class RouterModel(nn.Module):
         return self.base.head(x)
 
     def gate_stats(self, tokens):
-        """Return mean gate value per synapse on a batch — a probe for
-        whether the router is actually using the specialists."""
+        """Mean gate value per synapse on a batch — probe for usage."""
         x = self.base.embed_norm(self.base.embed(tokens))
         for layer in self.base.kernel_layers:
             scale = layer["scale"][0]

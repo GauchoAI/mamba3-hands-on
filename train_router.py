@@ -59,6 +59,11 @@ def main():
                          "checkpoints/specialists/{task}.pt)")
     ap.add_argument("--no-synapse", action="store_true",
                     help="Control: router alone, no specialist invocation")
+    ap.add_argument("--bridge-kind", choices=["attend", "project"], default="attend",
+                    help="attend: specialist runs on original tokens, router "
+                         "attends to its hidden state (v2, recommended). "
+                         "project: router projects own state into specialist "
+                         "via W_send (v1, marginal).")
     ap.add_argument("--router-d-model", type=int, default=32)
     ap.add_argument("--router-layers", type=int, default=1)
     ap.add_argument("--steps", type=int, default=800)
@@ -92,6 +97,7 @@ def main():
         router_headdim=16,
         router_n_layers=args.router_layers,
         specialists=specialists,
+        bridge_kind=args.bridge_kind,
     ).to(args.device)
     n_train = sum(p.numel() for p in router.parameters() if p.requires_grad)
     print(f"Router params:  {n_train:,} trainable")
