@@ -347,7 +347,7 @@ def main():
     final_result = None
     diagnostic_counts = {"loss_jump": 0, "grad_norm_alert": 0,
                          "nan_detected": 0, "mode_collapse_suspected": 0,
-                         "lr_change": 0}
+                         "lr_change": 0, "auto_tune": 0}
     for line in proc.stdout:
         line = line.strip()
         if not line:
@@ -390,6 +390,8 @@ def main():
                 sys.stderr.write(f"[ptxd_specialist]   ⚠ NaN in {row['source']} @ step {row['step']}\n")
             elif rtype == "mode_collapse_suspected":
                 sys.stderr.write(f"[ptxd_specialist]   ⚠ mode-collapse suspected @ cycle {row['cycle']} (flat for {row['flat_for_cycles']} cycles)\n")
+            elif rtype == "auto_tune":
+                sys.stderr.write(f"[ptxd_specialist]   ★ auto_tune {row['action']} (trigger={row['trigger']}, value={row['value']})\n")
         else:
             sys.stderr.write(f"[ptxd_specialist] unknown row type: {rtype}\n")
 

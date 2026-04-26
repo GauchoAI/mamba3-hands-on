@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         batches_path: None, eval_batches_path: None,
         loss: Default::default(), optimizer: Default::default(), schedule: Default::default(),
         optimizer_state_in: None, optimizer_state_out: None,
+        auto_tune: false,
     });
     sched.submit(Job {
         id: "beta".into(),
@@ -43,6 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         batches_path: None, eval_batches_path: None,
         loss: Default::default(), optimizer: Default::default(), schedule: Default::default(),
         optimizer_state_in: None, optimizer_state_out: None,
+        auto_tune: false,
     });
 
     let t0 = Instant::now();

@@ -169,7 +169,19 @@ pub struct Job {
     /// via `mutations.yaml::warm_restarts`. WarmRestarts currently falls
     /// back to WarmupFlat.
     #[serde(default)] pub schedule: Schedule,
+
+    /// In-process auto-tuner. When true (default), the JobRunner reacts
+    /// to its own diagnostic events: clusters of grad_norm_alert halve
+    /// the LR, sustained mode_collapse_suspected bails the run with
+    /// status=degenerate, sustained loss_jump bails with status=diverged.
+    /// Composes with the GA — GA proposes hyperparameters, auto-tuner
+    /// keeps healthy runs alive and stops doomed ones cleanly so no
+    /// compute is wasted. Set false for fd-check / replay where
+    /// deterministic behaviour matters.
+    #[serde(default = "d_default_auto_tune")] pub auto_tune: bool,
 }
+
+fn d_default_auto_tune() -> bool { true }
 
 fn d_default_d_model() -> usize { 32 }
 fn d_default_d_state() -> usize { 16 }
@@ -300,6 +312,28 @@ pub struct ModeCollapseEvent {
     pub flat_for_cycles: usize,
 }
 
+/// Auto-tuner decision — fires when an in-process rule reacted to a
+/// diagnostic pattern by mutating trainer state. Each event carries
+/// `trigger` (which event chain caused this) and `action` (what was
+/// done) so the log captures the full decision chain. The auto-tuner
+/// composes with the GA: GA proposes hyperparameters, auto-tuner keeps
+/// the run alive long enough to evaluate them OR bails it cleanly so
+/// no compute is wasted on a run that's already lost.
+#[derive(Serialize, Debug, Clone)]
+pub struct AutoTuneEvent {
+    #[serde(rename = "type")]
+    pub kind: &'static str,           // "auto_tune"
+    pub id: String,
+    pub step: usize,
+    pub cycle: usize,
+    pub trigger: &'static str,        // e.g. "grad_norm_alert_cluster"
+    pub action: &'static str,         // e.g. "halve_lr", "bail_degenerate"
+    /// Optional numeric companion: new LR after halving, # of cycles
+    /// flat before bailing, etc. Lets the consumer reconstruct what
+    /// happened without parsing the trigger/action strings.
+    pub value: f32,
+}
+
 #[derive(Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum SchedulerEvent {
@@ -311,6 +345,7 @@ pub enum SchedulerEvent {
     LossJump(LossJumpEvent),
     NanDetected(NanDetectedEvent),
     ModeCollapse(ModeCollapseEvent),
+    AutoTune(AutoTuneEvent),
 }
 
 /// One in-flight training job. Owns its model + trainer + dedicated CUDA
@@ -348,6 +383,21 @@ pub struct JobRunner {
     /// True after we've already emitted the warmup_complete LR event so
     /// we don't re-emit on every step past the warmup boundary.
     pub warmup_complete_emitted: bool,
+    // ---- auto-tuner state ----
+    /// Steps at which a grad_norm_alert fired recently. Pruned to a
+    /// rolling window; when ≥3 in 5 *batches* we react.
+    pub recent_grad_alert_steps: std::collections::VecDeque<usize>,
+    /// Cycles at which a loss_jump fired. Pruned to a rolling window
+    /// so consecutive jumps with no recovery → bail.
+    pub recent_loss_jump_cycles: std::collections::VecDeque<usize>,
+    /// LR halving budget: don't ratchet down forever. Each successful
+    /// auto-halve increments this; we stop after `max_halves`.
+    pub auto_halve_count: u32,
+    /// Cycle at which best_acc last improved. Used by the stagnation
+    /// rule to detect "training has plateaued" — more reliable than
+    /// loss-shape heuristics because the constant-predictor minimum
+    /// can land at log(2)/2, not log(2).
+    pub last_best_acc_cycle: usize,
 }
 
 impl JobRunner {
@@ -498,6 +548,10 @@ impl JobRunner {
             last_cycle_loss: None,
             flat_cycles: 0,
             warmup_complete_emitted: false,
+            recent_grad_alert_steps: std::collections::VecDeque::with_capacity(8),
+            recent_loss_jump_cycles: std::collections::VecDeque::with_capacity(4),
+            auto_halve_count: 0,
+            last_best_acc_cycle: 0,
         })
     }
 
@@ -619,6 +673,11 @@ impl JobRunner {
                 kind: "nan_detected", id: self.job.id.clone(),
                 step: self.step, source: "grad_norm",
             }));
+            // Auto-tuner rule: NaN gradient → halve LR immediately. The
+            // existing clip_mul=0 logic prevents the NaN from poisoning
+            // weights for THIS step, but the underlying instability is
+            // still present. Halving LR is a safer recovery point.
+            self.auto_tune_halve_lr(&mut out, "nan_detected");
         } else {
             if self.recent_grad_norms.len() == 32 {
                 self.recent_grad_norms.pop_front();
@@ -634,6 +693,22 @@ impl JobRunner {
                         step: self.step, norm: grad_norm,
                         recent_mean: mean, recent_max: max,
                     }));
+                    // Auto-tuner rule: ≥3 grad_norm_alerts in 5 batches
+                    // → halve LR. Catches the explode-then-clip pattern
+                    // we saw in R-1 / R-2 testing where clipping kept
+                    // weights bounded but training never settled.
+                    if self.recent_grad_alert_steps.len() == 8 {
+                        self.recent_grad_alert_steps.pop_front();
+                    }
+                    self.recent_grad_alert_steps.push_back(self.step);
+                    let recent_count = self.recent_grad_alert_steps.iter()
+                        .filter(|&&s| self.step.saturating_sub(s) <= 5)
+                        .count();
+                    if recent_count >= 3 {
+                        self.auto_tune_halve_lr(&mut out, "grad_norm_alert_cluster");
+                        // Clear the window so we don't re-fire immediately.
+                        self.recent_grad_alert_steps.clear();
+                    }
                 }
             }
         }
@@ -653,7 +728,17 @@ impl JobRunner {
             self.last_loss = self.trainer.read_last_loss_blocking()?
                 / self.job.batch_size as f32;
             let acc = self.eval(200)?;
-            if acc > self.best_acc { self.best_acc = acc; }
+            // Track best_acc improvements for stagnation detection (the
+            // log(2) heuristic was wrong — constant-predictor models can
+            // settle at log(2)/2 if they're overconfident on one class.
+            // Movement in best_acc is the reliable progress signal.)
+            if acc > self.best_acc + 0.001 {
+                self.best_acc = acc;
+                self.last_best_acc_cycle = self.step / 200;
+            } else if acc > self.best_acc {
+                self.best_acc = acc;
+                // Tiny improvement (< 0.001) — don't reset stagnation timer.
+            }
             let stage = &self.stages[self.stage_idx];
             let cycle = self.step / 200;
 
@@ -676,6 +761,31 @@ impl JobRunner {
                             kind: "loss_jump", id: self.job.id.clone(),
                             cycle, prev_loss: prev, new_loss: self.last_loss, ratio,
                         }));
+                        // Auto-tuner rule: persistent loss-jump pattern.
+                        // Three loss_jumps in three consecutive cycles
+                        // (each > ×3) AND no recovery (current loss
+                        // still elevated) means the run is diverging
+                        // and AdamW won't pull it back. Bail.
+                        if self.recent_loss_jump_cycles.len() == 4 {
+                            self.recent_loss_jump_cycles.pop_front();
+                        }
+                        self.recent_loss_jump_cycles.push_back(cycle);
+                        let consec = self.recent_loss_jump_cycles.iter()
+                            .filter(|&&c| cycle.saturating_sub(c) <= 3)
+                            .count();
+                        if consec >= 3 && self.job.auto_tune {
+                            out.push(SchedulerEvent::AutoTune(AutoTuneEvent {
+                                kind: "auto_tune", id: self.job.id.clone(),
+                                step: self.step, cycle,
+                                trigger: "loss_jump_consecutive",
+                                action: "bail_diverged",
+                                value: consec as f32,
+                            }));
+                            self.done = Some(self.make_final("diverged"));
+                            self.try_save_bin();
+                            // Push the cycle event before returning so the
+                            // log captures the moment of decision.
+                        }
                     }
                 }
             }
@@ -699,6 +809,28 @@ impl JobRunner {
                 }
             } else {
                 self.flat_cycles = 0;
+            }
+
+            // Auto-tuner rule: best_acc stagnation. If it hasn't moved
+            // by ≥0.001 in 8 cycles AND remains below 0.6, the run is
+            // stuck in a degenerate minimum (constant predictor or
+            // worse). This is more reliable than the loss-shape heuristic
+            // — the constant-predictor case settles at loss=log(2)/2≈0.35
+            // not log(2), which fooled the first attempt.
+            // 8 cycles × 200 steps × ~150ms = ~4 minutes — modest
+            // investment before bailing, enough to confirm the plateau
+            // isn't just slow learning.
+            let stagnant = cycle.saturating_sub(self.last_best_acc_cycle);
+            if stagnant >= 8 && self.best_acc < 0.6 && self.job.auto_tune {
+                out.push(SchedulerEvent::AutoTune(AutoTuneEvent {
+                    kind: "auto_tune", id: self.job.id.clone(),
+                    step: self.step, cycle,
+                    trigger: "best_acc_stagnant",
+                    action: "bail_degenerate",
+                    value: stagnant as f32,
+                }));
+                self.done = Some(self.make_final("degenerate"));
+                self.try_save_bin();
             }
 
             let event = CycleEvent {
@@ -739,6 +871,28 @@ impl JobRunner {
             self.try_save_bin();
         }
         Ok(out)
+    }
+
+    /// Auto-tuner: halve the trainer's LR in response to a known-bad
+    /// pattern (NaN, grad_norm_alert cluster, etc.). Capped at 4
+    /// halvings (LR factor 1/16) so we don't ratchet down forever.
+    /// Emits an `auto_tune` event so the log records the decision.
+    /// No-op when `Job.auto_tune` is false.
+    fn auto_tune_halve_lr(&mut self, out: &mut Vec<SchedulerEvent>, trigger: &'static str) {
+        if !self.job.auto_tune { return; }
+        const MAX_HALVES: u32 = 4;
+        if self.auto_halve_count >= MAX_HALVES { return; }
+        let new_lr = self.trainer.lr * 0.5;
+        self.trainer.lr = new_lr;
+        self.auto_halve_count += 1;
+        out.push(SchedulerEvent::AutoTune(AutoTuneEvent {
+            kind: "auto_tune", id: self.job.id.clone(),
+            step: self.step,
+            cycle: self.step / 200,
+            trigger,
+            action: "halve_lr",
+            value: new_lr,
+        }));
     }
 
     /// Write final weights to job.save_bin (if set). Best-effort — a write

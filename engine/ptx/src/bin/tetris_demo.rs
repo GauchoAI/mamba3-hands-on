@@ -70,6 +70,7 @@ fn build_queue() -> Vec<Job> {
             batches_path: None, eval_batches_path: None,
             loss: Default::default(), optimizer: Default::default(), schedule: Default::default(),
             optimizer_state_in: None, optimizer_state_out: None,
+            auto_tune: false,
         });
     }
     jobs
