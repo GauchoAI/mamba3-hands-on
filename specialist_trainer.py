@@ -713,20 +713,35 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     except Exception:
         pass
 
-    # Save specialist
+    # Save specialist — with regression guard. The ptxd path in
+    # engine/ptx/src/scheduler.rs has had this for a while; vanilla
+    # specialist_trainer didn't, which let a 0% run clobber a prior
+    # 100% checkpoint and then poison subsequent re-trains via the load
+    # path. Refuse to overwrite unless we'd be saving a NON-WORSE acc.
     ckpt_dir = Path("checkpoints/specialists")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / f"{task}.pt"
-    torch.save({
-        "model": model.state_dict(),
-        "optimizer": opt.state_dict(),
-        "task": task,
-        "config": config,
-        "accuracy": best_acc,
-        "cycles": cycle,
-        "n_params": n_params,
-    }, ckpt_path)
-    print(f"  Saved specialist → {ckpt_path} ({best_acc:.0%})", flush=True)
+    prior_acc = None
+    if ckpt_path.exists():
+        try:
+            prior_ck = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
+            prior_acc = float(prior_ck.get("accuracy", 0.0))
+        except Exception:
+            prior_acc = None
+    if prior_acc is not None and best_acc < prior_acc - 1e-6:
+        print(f"  REGRESSION GUARD: not saving — best_acc={best_acc:.0%} < prior_acc={prior_acc:.0%}; "
+              f"keeping {ckpt_path}", flush=True)
+    else:
+        torch.save({
+            "model": model.state_dict(),
+            "optimizer": opt.state_dict(),
+            "task": task,
+            "config": config,
+            "accuracy": best_acc,
+            "cycles": cycle,
+            "n_params": n_params,
+        }, ckpt_path)
+        print(f"  Saved specialist → {ckpt_path} ({best_acc:.0%})", flush=True)
 
     # Run register inspection and push to Firebase
     try:

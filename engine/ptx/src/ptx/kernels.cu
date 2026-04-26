@@ -2070,6 +2070,54 @@ extern "C" __global__ void embed_scatter_bwd(
 //   p -= lr · (m/bc1) / (sqrt(v/bc2) + eps)
 // bc1_inv, bc2_inv precomputed on host as 1/(1-β^step).
 // Grid: (ceil(n/256),), Block: (256,)
+
+// ---------- lion_step --------------------------------------------------------
+// Lion optimizer (Chen et al. 2023, "Symbolic Discovery of Optimization
+// Algorithms"). Single-moment optimizer with sign-based update direction:
+//
+//   update = sign(β1·m + (1-β1)·g)             ← interpolated direction, signed
+//   p     -= lr · (update + λ·p)              ← decoupled weight decay (AdamW-style)
+//   m      = β2·m + (1-β2)·g                  ← momentum update (β2, NOT β1)
+//
+// Notes:
+//   - Lion uses ONLY one moment buffer (m). The trainer pre-allocates `v`
+//     for AdamW; we reuse the m buffer here and leave v untouched. Cleaner
+//     than allocating per-optimizer state.
+//   - Update magnitude is always lr (because sign() ∈ {-1, 0, 1}). This is
+//     why Lion's recommended LR is ~10× smaller than AdamW's. Caller is
+//     responsible for setting an appropriate learning rate.
+//   - Same NaN safety + per-element clamp + global-norm clip as adamw_step.
+//   - Recommended hyperparameters from the paper: β1=0.9, β2=0.99, lr ~3e-4
+//     (vs AdamW's ~1e-3). Default ptxd_specialist hands AdamW's lr through
+//     unchanged; the GA's lr-mutation should find Lion's preferred range.
+//
+// Grid: (ceil(n/256),), Block: (256,)
+extern "C" __global__ void lion_step(
+    float* __restrict__ params,
+    const float* __restrict__ grads,
+    float* __restrict__ m,
+    float beta1, float beta2, float lr, float wd,
+    float g_mul,    // global gradient-norm clip multiplier (≤1, host-computed)
+    int n
+) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    float g = grads[i];
+    if (!isfinite(g)) g = 0.0f;
+    if (g >  1.0f) g =  1.0f;
+    if (g < -1.0f) g = -1.0f;
+    g *= g_mul;
+    float m_old = m[i];
+    // Update direction = sign(interpolated momentum + gradient).
+    float dir_raw = __fmaf_rn(1.0f - beta1, g, beta1 * m_old);
+    float update = (dir_raw > 0.0f) ? 1.0f : ((dir_raw < 0.0f) ? -1.0f : 0.0f);
+    // Decoupled weight decay (AdamW-style): independent of the gradient.
+    float p = params[i];
+    params[i] = p - lr * (update + wd * p);
+    // Momentum update with β2 (NOT β1 — Lion's β2 is the momentum decay).
+    m[i] = __fmaf_rn(1.0f - beta2, g, beta2 * m_old);
+}
+
 extern "C" __global__ void adamw_step(
     float* __restrict__ params,
     const float* __restrict__ grads,
@@ -2329,6 +2377,138 @@ extern "C" __global__ void kd_apply(
         float ps = __expf(logits[pos * V + v]         * inv_T - s_max_st) * inv_sum_st;
         float pt = __expf(teacher_logits[s * V + v]   * inv_T - s_max_te) * inv_sum_te;
         d_logits[pos * V + v] += coef * (ps - pt);
+    }
+}
+
+// ---------- focal_apply ----------------------------------------------------
+// Post-CE modifier: rescales d_logits at unmasked positions to match the
+// focal-loss gradient (Lin et al. 2017, multi-class form).
+//
+// Math:
+//   L_focal(z, t) = (1 - p_t)^γ · (-log p_t),  where p_t = softmax(z)[t]
+//   dL_CE / dz_v   = s_v - δ_{vt}                         ← what CE wrote
+//   dL_focal / dz_v = factor · (s_v - δ_{vt})
+//   factor = (1-p_t)^γ + γ·(1-p_t)^(γ-1)·log(p_t)·p_t
+//
+// γ = 0 → factor = 1 (plain CE), γ > 0 down-weights easy examples.
+// We need to recompute p_t since cross_entropy_fwd_bwd doesn't save it; this
+// is one extra full softmax pass per supervised row, which is cheap relative
+// to the backward.
+//
+// Grid: (L,), Block: (256,) — one block per timestep
+extern "C" __global__ void focal_apply(
+    float* __restrict__ d_logits,                  // (L, V) modified in place
+    const float* __restrict__ logits,              // (L, V)
+    const unsigned int* __restrict__ targets,      // (L,) — 0xFFFFFFFF = masked
+    int L, int V, float gamma
+) {
+    int t = blockIdx.x;
+    if (t >= L) return;
+    unsigned int target = targets[t];
+    if (target == 0xFFFFFFFFu) return;
+    int tid = threadIdx.x;
+    int warp = tid >> 5;
+    int lane = tid & 31;
+
+    __shared__ float s_max;
+    __shared__ float s_sum;
+    __shared__ float s_factor;
+    __shared__ float warp_buf[8];
+
+    // row max
+    float my_max = -3.4028235e38f;
+    for (int v = tid; v < V; v += blockDim.x) {
+        my_max = fmaxf(my_max, logits[t * V + v]);
+    }
+    for (int off = 16; off > 0; off >>= 1) {
+        my_max = fmaxf(my_max, __shfl_xor_sync(0xffffffff, my_max, off));
+    }
+    if (lane == 0) warp_buf[warp] = my_max;
+    __syncthreads();
+    if (warp == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        my_max = (lane < nw) ? warp_buf[lane] : -3.4028235e38f;
+        for (int off = 16; off > 0; off >>= 1) {
+            my_max = fmaxf(my_max, __shfl_xor_sync(0xffffffff, my_max, off));
+        }
+        if (lane == 0) s_max = my_max;
+    }
+    __syncthreads();
+
+    // row sum
+    float my_sum = 0.0f;
+    for (int v = tid; v < V; v += blockDim.x) {
+        my_sum += __expf(logits[t * V + v] - s_max);
+    }
+    my_sum = warp_reduce_sum(my_sum);
+    if (lane == 0) warp_buf[warp] = my_sum;
+    __syncthreads();
+    if (warp == 0) {
+        int nw = (blockDim.x + 31) >> 5;
+        my_sum = (lane < nw) ? warp_buf[lane] : 0.0f;
+        my_sum = warp_reduce_sum(my_sum);
+        if (lane == 0) s_sum = my_sum;
+    }
+    __syncthreads();
+
+    // factor (compute once per block, broadcast via shared)
+    if (tid == 0) {
+        float p_t = __expf(logits[t * V + target] - s_max) / s_sum;
+        // clamp for numerical safety in log/pow when γ < 1 or p_t ≈ 0/1
+        p_t = fmaxf(p_t, 1e-8f);
+        p_t = fminf(p_t, 1.0f - 1e-8f);
+        float one_m = 1.0f - p_t;
+        // factor = (1-p_t)^γ + γ·(1-p_t)^(γ-1)·log(p_t)·p_t
+        float a = __powf(one_m, gamma);
+        float b = (gamma > 0.0f)
+            ? gamma * __powf(one_m, gamma - 1.0f) * __logf(p_t) * p_t
+            : 0.0f;
+        s_factor = a + b;
+    }
+    __syncthreads();
+    float factor = s_factor;
+
+    // rescale row in-place
+    for (int v = tid; v < V; v += blockDim.x) {
+        d_logits[t * V + v] *= factor;
+    }
+}
+
+// ---------- label_smooth_apply ---------------------------------------------
+// Post-CE modifier: shifts d_logits at unmasked positions to match the
+// label-smoothed CE gradient. PyTorch's CrossEntropyLoss(label_smoothing=ε)
+// uses target distribution { (1-ε) at the true class, ε/(V-1) elsewhere }.
+//
+// Math:
+//   dL_LS / dz_v = (s_v - q_v) / n_active
+//   q_t = 1 - ε,   q_{v ≠ t} = ε / (V-1)
+//   diff from CE: subtract ε/(V-1)·n_active_inv from all v;
+//                 then add (ε + ε/(V-1))·n_active_inv = ε·V/(V-1)·n_active_inv at t.
+//
+// ε = 0 → no-op (matches CE exactly). Caller can skip the launch in that case.
+//
+// Grid: (L,), Block: (256,) — one block per timestep
+extern "C" __global__ void label_smooth_apply(
+    float* __restrict__ d_logits,                  // (L, V) modified in place
+    const unsigned int* __restrict__ targets,      // (L,) — 0xFFFFFFFF = masked
+    int L, int V, float smoothing, float n_active_inv
+) {
+    int t = blockIdx.x;
+    if (t >= L) return;
+    unsigned int target = targets[t];
+    if (target == 0xFFFFFFFFu) return;
+    int tid = threadIdx.x;
+    if (V <= 1) return;
+
+    float off_sub  = smoothing / (float)(V - 1) * n_active_inv;
+    // extra at the target position so it ends up at +ε·n_active_inv vs CE.
+    float tgt_add  = smoothing * (float)V / (float)(V - 1) * n_active_inv;
+
+    for (int v = tid; v < V; v += blockDim.x) {
+        d_logits[t * V + v] -= off_sub;
+    }
+    if (tid == 0) {
+        d_logits[t * V + target] += tgt_add;
     }
 }
 

@@ -53,16 +53,18 @@ pub enum Loss {
     /// (format v2). Match specialist_trainer's hardcoded 30% weight by
     /// passing `kd_weight: 0.3` and `temperature: 1.0`.
     CeKd { kd_weight: f32, temperature: f32 },
-    /// Focal loss (γ-modulated CE). Categorical mutation in mutations.yaml.
-    /// Phase 6+: stub for now, falls back to plain CE until kernel lands.
+    /// Focal loss (γ-modulated CE; Lin et al. 2017). Implemented as a
+    /// post-CE rescale via the `focal_apply` kernel; γ=0 reduces to CE.
     Focal { gamma: f32 },
-    /// Label-smoothed CE. Categorical mutation in mutations.yaml. Stub.
+    /// Label-smoothed CE (PyTorch CrossEntropyLoss(label_smoothing=ε) form).
+    /// Implemented as a post-CE shift via `label_smooth_apply`; ε=0 → CE.
     LabelSmooth { smoothing: f32 },
 }
 impl Default for Loss { fn default() -> Self { Loss::Ce } }
 
-/// Optimizer dispatch. AdamW is the only implemented variant today;
-/// Lion is a categorical mutation in mutations.yaml so it has a stub.
+/// Optimizer dispatch. Both AdamW and Lion are fully implemented in
+/// kernels.cu (`adamw_step` / `lion_step`); JobRunner picks the path
+/// via `trainer.use_lion`.
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Optimizer {
@@ -70,8 +72,8 @@ pub enum Optimizer {
     /// snake-case-of-CamelCase default which would be `adam_w`.
     #[serde(rename = "adamw")]
     AdamW { beta1: f32, beta2: f32, eps: f32 },
-    /// Stub — Lion isn't in the trainer yet. Falls back to AdamW with
-    /// AdamW defaults so the GA's lion mutation doesn't crash.
+    /// Lion (Chen et al. 2023). Sign-based update, single momentum
+    /// buffer; typical recipe is lr/3 vs AdamW with the same wd.
     Lion { beta1: f32, beta2: f32 },
 }
 impl Default for Optimizer {
@@ -458,20 +460,21 @@ impl JobRunner {
         let gpu_model = PtxModel::from_cpu_on_stream(&cpu_model, ctx.clone(), stream.clone(), max_seq)?;
         let mut trainer = PtxTrainer::new(gpu_model, job.lr, job.weight_decay, max_seq)?;
 
-        // Apply Optimizer config. AdamW is the only fully implemented variant;
-        // Lion is a stub that falls back to AdamW with a stderr warning so the
-        // GA's lion mutation doesn't crash a job.
+        // Apply Optimizer config. Both AdamW and Lion are now fully wired
+        // through the launch_optimizer_step dispatcher (kernels.cu has both
+        // `adamw_step` and `lion_step`; trainer.use_lion picks the path).
         match &job.optimizer {
             Optimizer::AdamW { beta1, beta2, eps } => {
                 trainer.beta1 = *beta1;
                 trainer.beta2 = *beta2;
                 trainer.eps   = *eps;
+                trainer.use_lion = false;
             }
             Optimizer::Lion { beta1, beta2 } => {
-                eprintln!("[ptxd] {} optimizer=lion not yet implemented; falling back to AdamW (beta1={}, beta2={}, eps=1e-8)", job.id, beta1, beta2);
                 trainer.beta1 = *beta1;
                 trainer.beta2 = *beta2;
                 trainer.eps   = 1e-8;
+                trainer.use_lion = true;
             }
         }
 
@@ -487,18 +490,18 @@ impl JobRunner {
             }
         }
 
-        // Loss-variant warning. CE and CeKd are implemented (kd_apply
-        // kernel runs after cross_entropy_fwd_bwd at supervised positions
-        // when teacher_logits are present in the batch). Focal /
-        // LabelSmooth still need their own kernels — Phase 4+ work — and
-        // fall back to CE with a warning.
+        // Loss-variant log. All four are wired through end-to-end now:
+        //   Ce          → cross_entropy_fwd_bwd
+        //   CeKd        → CE + kd_apply at supervised positions
+        //   Focal       → CE + focal_apply (per-row gradient rescale)
+        //   LabelSmooth → CE + label_smooth_apply (gradient shift)
         match &job.loss {
             Loss::Ce | Loss::CeKd { .. } => {}
             Loss::Focal { gamma } => {
-                eprintln!("[ptxd] {} loss=focal gamma={} — kernel not yet implemented; training as plain CE", job.id, gamma);
+                eprintln!("[ptxd] {} loss=focal gamma={}", job.id, gamma);
             }
             Loss::LabelSmooth { smoothing } => {
-                eprintln!("[ptxd] {} loss=label_smooth smoothing={} — kernel not yet implemented; training as plain CE", job.id, smoothing);
+                eprintln!("[ptxd] {} loss=label_smooth smoothing={}", job.id, smoothing);
             }
         }
 
@@ -596,6 +599,16 @@ impl JobRunner {
                 Loss::CeKd { kd_weight, temperature } => Some((*kd_weight, *temperature)),
                 _ => None,
             };
+            // Loss-modifier dispatch (focal / label_smooth). Mutually exclusive
+            // with KD per the GA's mutations.yaml; if Loss::CeKd is set, KD wins.
+            let focal_gamma: Option<f32> = match &self.job.loss {
+                Loss::Focal { gamma } => Some(*gamma),
+                _ => None,
+            };
+            let label_smooth_eps: Option<f32> = match &self.job.loss {
+                Loss::LabelSmooth { smoothing } => Some(*smoothing),
+                _ => None,
+            };
             for (tokens, targets, teacher) in &take {
                 if let (Some((kd_w, temp)), Some(slots)) = (kd_cfg, teacher.as_ref()) {
                     if !slots.is_empty() {
@@ -614,6 +627,14 @@ impl JobRunner {
                         )?;
                         continue;
                     }
+                }
+                if let Some(g) = focal_gamma {
+                    let _ = self.trainer.accumulate_gradients_with_focal(tokens, targets, g)?;
+                    continue;
+                }
+                if let Some(eps) = label_smooth_eps {
+                    let _ = self.trainer.accumulate_gradients_with_label_smooth(tokens, targets, eps)?;
+                    continue;
                 }
                 let _ = self.trainer.accumulate_gradients(tokens, targets)?;
             }

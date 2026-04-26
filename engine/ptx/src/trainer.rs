@@ -22,6 +22,20 @@ pub struct KdInputs<'a> {
     pub temperature: f32,
 }
 
+/// Post-CE gradient modifier. CE always runs first to populate `d_logits`
+/// and `loss_out`; the variants below tweak `d_logits` in place before the
+/// backward chain consumes it. KD is a separate path (it composes with the
+/// teacher distribution and is mutually exclusive with these mods in the
+/// GA's mutations.yaml).
+#[derive(Copy, Clone, Debug)]
+pub enum LossModifier {
+    None,
+    /// Focal loss (Lin et al. 2017). γ=0 reduces to plain CE.
+    Focal { gamma: f32 },
+    /// PyTorch-style label smoothing. ε=0 reduces to plain CE.
+    LabelSmooth { smoothing: f32 },
+}
+
 /// Magic + version for the optimizer state file. Separate from the model
 /// weights file so save_bin/from_bin formats stay backwards-compatible.
 const OPT_MAGIC:   u32 = 0x4F505445; // 'OPTE'
@@ -73,6 +87,10 @@ pub struct PtxTrainer {
     pub beta1: f32,
     pub beta2: f32,
     pub eps: f32,
+    /// When true, apply_optimizer_step uses Lion's sign-based update instead
+    /// of AdamW. Lion ignores `v` (the second-moment buffer stays
+    /// allocated but untouched) and `eps`. Set from Job.optimizer.
+    pub use_lion: bool,
 }
 
 impl PtxTrainer {
@@ -173,6 +191,7 @@ impl PtxTrainer {
             beta1: 0.9,
             beta2: 0.999,
             eps: 1e-8,
+            use_lion: false,     // AdamW by default; flipped via Job.optimizer
         })
     }
 
@@ -200,7 +219,29 @@ impl PtxTrainer {
     /// sees the average gradient across the batch — matching PyTorch
     /// semantics).
     pub fn accumulate_gradients(&mut self, tokens: &[u32], targets: &[u32]) -> Result<f32, Box<dyn Error>> {
-        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/false, /*kd=*/None)
+        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/false, /*kd=*/None, LossModifier::None)
+    }
+
+    /// Like accumulate_gradients but applies the focal-loss factor on top of
+    /// the CE gradient. γ=0 is equivalent to plain CE.
+    pub fn accumulate_gradients_with_focal(
+        &mut self,
+        tokens: &[u32],
+        targets: &[u32],
+        gamma: f32,
+    ) -> Result<f32, Box<dyn Error>> {
+        self.compute_gradients_with_zero(tokens, targets, false, None, LossModifier::Focal { gamma })
+    }
+
+    /// Like accumulate_gradients but blends a uniform smoothing distribution
+    /// into the target. ε=0 is equivalent to plain CE.
+    pub fn accumulate_gradients_with_label_smooth(
+        &mut self,
+        tokens: &[u32],
+        targets: &[u32],
+        smoothing: f32,
+    ) -> Result<f32, Box<dyn Error>> {
+        self.compute_gradients_with_zero(tokens, targets, false, None, LossModifier::LabelSmooth { smoothing })
     }
 
     /// Like accumulate_gradients but blends KD (teacher distribution) into
@@ -219,7 +260,8 @@ impl PtxTrainer {
         temperature: f32,
     ) -> Result<f32, Box<dyn Error>> {
         self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/false,
-            Some(KdInputs { teacher_logits, sup_positions, kd_weight, temperature }))
+            Some(KdInputs { teacher_logits, sup_positions, kd_weight, temperature }),
+            LossModifier::None)
     }
 
     /// Save AdamW optimizer state (m, v moments + step counter) to a binary
@@ -427,7 +469,7 @@ impl PtxTrainer {
         tokens: &[u32],
         targets: &[u32],
     ) -> Result<f32, Box<dyn Error>> {
-        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/true, /*kd=*/None)
+        self.compute_gradients_with_zero(tokens, targets, /*do_zero=*/true, /*kd=*/None, LossModifier::None)
     }
 
     fn compute_gradients_with_zero(
@@ -436,6 +478,7 @@ impl PtxTrainer {
         targets: &[u32],
         do_zero: bool,
         kd: Option<KdInputs<'_>>,
+        extra: LossModifier,
     ) -> Result<f32, Box<dyn Error>> {
         // self.step counts AdamW steps, NOT compute_gradients calls — moved
         // into apply_optimizer_step so accumulation across a mini-batch counts
@@ -495,6 +538,45 @@ impl PtxTrainer {
                 shared_mem_bytes: 0,
             };
             unsafe { lb.launch(cfg)? };
+
+            // Loss modifier (focal / label_smooth): rescale or shift d_logits
+            // in place. KD and these modifiers are mutually exclusive in the
+            // GA's mutations.yaml, but if both are configured we apply the
+            // modifier first so the KD additive term layers on top cleanly.
+            match extra {
+                LossModifier::None => {}
+                LossModifier::Focal { gamma } => {
+                    let logits_src: &CudaSlice<f32> = &self.model.scratch.borrow().logits;
+                    let mut lb = stream.launch_builder(&ptx.k.focal_apply);
+                    lb.arg(&mut self.train_scratch.d_logits);
+                    lb.arg(logits_src);
+                    lb.arg(&targets_dev);
+                    lb.arg(&l_i);
+                    lb.arg(&v_i);
+                    lb.arg(&gamma);
+                    let cfg = LaunchConfig {
+                        grid_dim: (l as u32, 1, 1),
+                        block_dim: (256, 1, 1),
+                        shared_mem_bytes: 0,
+                    };
+                    unsafe { lb.launch(cfg)? };
+                }
+                LossModifier::LabelSmooth { smoothing } => {
+                    let mut lb = stream.launch_builder(&ptx.k.label_smooth_apply);
+                    lb.arg(&mut self.train_scratch.d_logits);
+                    lb.arg(&targets_dev);
+                    lb.arg(&l_i);
+                    lb.arg(&v_i);
+                    lb.arg(&smoothing);
+                    lb.arg(&n_active_inv);
+                    let cfg = LaunchConfig {
+                        grid_dim: (l as u32, 1, 1),
+                        block_dim: (256, 1, 1),
+                        shared_mem_bytes: 0,
+                    };
+                    unsafe { lb.launch(cfg)? };
+                }
+            }
 
             // KD blend: optionally overwrite d_logits at supervised positions
             // with the (1-α)CE + α·KD blended gradient. Runs immediately after
@@ -770,7 +852,7 @@ impl PtxTrainer {
         };
         let g_mul = clip_mul * extra_g_mul;
 
-        launch_adamw(&stream, &ptx,
+        launch_optimizer_step(self.use_lion, &stream, &ptx,
             &mut self.model.embed_w, &self.train_scratch.d_embed,
             &mut self.m_embed, &mut self.v_embed,
             lr_eff, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv, g_mul,
@@ -778,110 +860,120 @@ impl PtxTrainer {
         )?;
         for li in 0..self.model.n_layers {
             let layer = &mut self.model.layers[li];
-            launch_adamw(&stream, &ptx,
+            launch_optimizer_step(self.use_lion, &stream, &ptx,
                 &mut layer.in_proj_w, &self.train_scratch.d_in_proj_w[li],
                 &mut self.m_in_proj[li], &mut self.v_in_proj[li],
                 lr_eff, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv, g_mul,
                 dip * d,
             )?;
-            launch_adamw(&stream, &ptx,
+            launch_optimizer_step(self.use_lion, &stream, &ptx,
                 &mut layer.out_proj_w, &self.train_scratch.d_out_proj_w[li],
                 &mut self.m_out_proj[li], &mut self.v_out_proj[li],
                 lr_eff, self.beta1, self.beta2, self.eps, self.weight_decay, bc1_inv, bc2_inv, g_mul,
                 d * di,
             )?;
-            launch_adamw(&stream, &ptx,
+            launch_optimizer_step(self.use_lion, &stream, &ptx,
                 &mut layer.d_param, &self.train_scratch.d_d_param[li],
                 &mut self.m_d_param[li], &mut self.v_d_param[li],
                 lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 nh,
             )?;
-            launch_adamw(&stream, &ptx,
+            launch_optimizer_step(self.use_lion, &stream, &ptx,
                 &mut layer.dt_bias, &self.train_scratch.d_dt_bias[li],
                 &mut self.m_dt_bias[li], &mut self.v_dt_bias[li],
                 lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 nh,
             )?;
-            launch_adamw(&stream, &ptx,
+            launch_optimizer_step(self.use_lion, &stream, &ptx,
                 &mut layer.layer_norm_w, &self.train_scratch.d_layer_norm_w[li],
                 &mut self.m_layer_norm_w[li], &mut self.v_layer_norm_w[li],
                 lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 d,
             )?;
-            launch_adamw(&stream, &ptx,
+            launch_optimizer_step(self.use_lion, &stream, &ptx,
                 &mut layer.layer_norm_b, &self.train_scratch.d_layer_norm_b[li],
                 &mut self.m_layer_norm_b[li], &mut self.v_layer_norm_b[li],
                 lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 d,
             )?;
             let ds = self.model.d_state;
-            launch_adamw(&stream, &ptx,
+            launch_optimizer_step(self.use_lion, &stream, &ptx,
                 &mut layer.b_norm_w, &self.train_scratch.d_b_norm_w[li],
                 &mut self.m_b_norm_w[li], &mut self.v_b_norm_w[li],
                 lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 ds,
             )?;
-            launch_adamw(&stream, &ptx,
+            launch_optimizer_step(self.use_lion, &stream, &ptx,
                 &mut layer.b_norm_b, &self.train_scratch.d_b_norm_b[li],
                 &mut self.m_b_norm_b[li], &mut self.v_b_norm_b[li],
                 lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 ds,
             )?;
-            launch_adamw(&stream, &ptx,
+            launch_optimizer_step(self.use_lion, &stream, &ptx,
                 &mut layer.c_norm_w, &self.train_scratch.d_c_norm_w[li],
                 &mut self.m_c_norm_w[li], &mut self.v_c_norm_w[li],
                 lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 ds,
             )?;
-            launch_adamw(&stream, &ptx,
+            launch_optimizer_step(self.use_lion, &stream, &ptx,
                 &mut layer.c_norm_b, &self.train_scratch.d_c_norm_b[li],
                 &mut self.m_c_norm_b[li], &mut self.v_c_norm_b[li],
                 lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
                 ds,
             )?;
         }
-        launch_adamw(&stream, &ptx,
+        launch_optimizer_step(self.use_lion, &stream, &ptx,
             &mut self.model.final_norm_w, &self.train_scratch.d_fnorm_w,
             &mut self.m_fnorm_w, &mut self.v_fnorm_w,
             lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
             d,
         )?;
-        launch_adamw(&stream, &ptx,
+        launch_optimizer_step(self.use_lion, &stream, &ptx,
             &mut self.model.final_norm_b, &self.train_scratch.d_fnorm_b,
             &mut self.m_fnorm_b, &mut self.v_fnorm_b,
             lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
             d,
         )?;
-        launch_adamw(&stream, &ptx,
+        launch_optimizer_step(self.use_lion, &stream, &ptx,
             &mut self.model.embed_norm_w, &self.train_scratch.d_embed_norm_w,
             &mut self.m_embed_norm_w, &mut self.v_embed_norm_w,
             lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
             d,
         )?;
-        launch_adamw(&stream, &ptx,
+        launch_optimizer_step(self.use_lion, &stream, &ptx,
             &mut self.model.embed_norm_b, &self.train_scratch.d_embed_norm_b,
             &mut self.m_embed_norm_b, &mut self.v_embed_norm_b,
             lr_eff, self.beta1, self.beta2, self.eps, no_decay_wd, bc1_inv, bc2_inv, g_mul,
             d,
         )?;
 
-        // Host-side AdamW for per-layer scale. Read d_scale (single f32) from
-        // device, apply the update in Rust, write back to layer.scale. One
-        // D→H copy per layer per step — cheap (8 bytes × n_layers).
+        // Host-side optimizer for per-layer scale. Read d_scale (single f32)
+        // from device, apply the update in Rust, write back to layer.scale.
+        // One D→H copy per layer per step — cheap (8 bytes × n_layers).
         for li in 0..self.model.n_layers {
             let g = stream.memcpy_dtov(&self.train_scratch.d_scale[li])?[0];
             let g = if g.is_finite() { g.clamp(-1.0, 1.0) * g_mul } else { 0.0 };
             let p = self.model.layers[li].scale;
-            // no_decay for scalar: wd=0 semantically, but match uniform wd for now
-            let p = p * (1.0 - lr_eff * no_decay_wd);
-            let mi = self.beta1 * self.m_scale[li] + (1.0 - self.beta1) * g;
-            let vi = self.beta2 * self.v_scale[li] + (1.0 - self.beta2) * g * g;
-            self.m_scale[li] = mi;
-            self.v_scale[li] = vi;
-            let m_hat = mi * bc1_inv;
-            let v_hat = vi * bc2_inv;
-            let p_new = p - lr_eff * m_hat / (v_hat.sqrt() + self.eps);
-            self.model.layers[li].scale = p_new;
+            if self.use_lion {
+                // Lion: m1 buffer holds momentum; m2/v unused.
+                let m_old = self.m_scale[li];
+                let dir_raw = (1.0 - self.beta1) * g + self.beta1 * m_old;
+                let update = if dir_raw > 0.0 { 1.0 } else if dir_raw < 0.0 { -1.0 } else { 0.0 };
+                let p_new = p - lr_eff * (update + no_decay_wd * p);
+                self.m_scale[li] = self.beta2 * m_old + (1.0 - self.beta2) * g;
+                self.model.layers[li].scale = p_new;
+            } else {
+                // no_decay for scalar: wd=0 semantically, but match uniform wd for now
+                let p = p * (1.0 - lr_eff * no_decay_wd);
+                let mi = self.beta1 * self.m_scale[li] + (1.0 - self.beta1) * g;
+                let vi = self.beta2 * self.v_scale[li] + (1.0 - self.beta2) * g * g;
+                self.m_scale[li] = mi;
+                self.v_scale[li] = vi;
+                let m_hat = mi * bc1_inv;
+                let v_hat = vi * bc2_inv;
+                let p_new = p - lr_eff * m_hat / (v_hat.sqrt() + self.eps);
+                self.model.layers[li].scale = p_new;
+            }
         }
         Ok(total_norm)
     }
@@ -1649,4 +1741,55 @@ fn launch_adamw(
     };
     unsafe { lb.launch(cfg)? };
     Ok(())
+}
+
+fn launch_lion(
+    stream: &Arc<cudarc::driver::CudaStream>,
+    ptx: &Arc<PtxContext>,
+    params: &mut CudaSlice<f32>,
+    grads: &CudaSlice<f32>,
+    m: &mut CudaSlice<f32>,
+    beta1: f32, beta2: f32, lr: f32, wd: f32,
+    g_mul: f32,
+    n: usize,
+) -> Result<(), Box<dyn Error>> {
+    let n_i = n as i32;
+    let mut lb = stream.launch_builder(&ptx.k.lion_step);
+    lb.arg(params);
+    lb.arg(grads);
+    lb.arg(m);
+    lb.arg(&beta1); lb.arg(&beta2); lb.arg(&lr); lb.arg(&wd);
+    lb.arg(&g_mul);
+    lb.arg(&n_i);
+    let cfg = LaunchConfig {
+        grid_dim: ((n as u32 + 255) / 256, 1, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+    unsafe { lb.launch(cfg)? };
+    Ok(())
+}
+
+/// Dispatch wrapper: runs Lion when `use_lion=true`, AdamW otherwise.
+/// Lion ignores v and bc1_inv / bc2_inv / eps; we still take them so
+/// the call sites in apply_optimizer_step_scaled stay uniform.
+fn launch_optimizer_step(
+    use_lion: bool,
+    stream: &Arc<cudarc::driver::CudaStream>,
+    ptx: &Arc<PtxContext>,
+    params: &mut CudaSlice<f32>,
+    grads: &CudaSlice<f32>,
+    m: &mut CudaSlice<f32>,
+    v: &mut CudaSlice<f32>,
+    lr: f32, beta1: f32, beta2: f32, eps: f32, wd: f32,
+    bc1_inv: f32, bc2_inv: f32,
+    g_mul: f32,
+    n: usize,
+) -> Result<(), Box<dyn Error>> {
+    if use_lion {
+        launch_lion(stream, ptx, params, grads, m, beta1, beta2, lr, wd, g_mul, n)
+    } else {
+        launch_adamw(stream, ptx, params, grads, m, v,
+                     lr, beta1, beta2, eps, wd, bc1_inv, bc2_inv, g_mul, n)
+    }
 }

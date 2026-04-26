@@ -482,12 +482,10 @@ def main():
         sys.exit(4)
 
     # Map specialist_trainer's flag names → ptxd's tagged-enum job spec.
-    # Variants ptxd doesn't fully implement yet (lion, focal, label_smooth,
-    # warm_restarts) flow through and trigger a stderr warning + fallback
-    # in scheduler.rs::JobRunner::new — they don't crash the job, just
-    # fall back to the implemented behaviour. This keeps the GA's mutation
-    # surface alive end-to-end so we can audit which knobs actually do
-    # something today.
+    # AdamW + Lion are both wired through (kernels.cu has `adamw_step` and
+    # `lion_step`). Loss = {ce, ce_kd, focal, label_smooth} are all real
+    # paths now (focal_apply / label_smooth_apply land after CE). Schedule
+    # = warm_restarts is still a stub that maps to warmup_flat.
     if args.optimizer == "adamw":
         optimizer_cfg = {"type": "adamw", "beta1": 0.9, "beta2": 0.999, "eps": 1e-8}
     elif args.optimizer == "lion":
