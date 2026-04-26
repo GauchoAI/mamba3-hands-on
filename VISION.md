@@ -55,24 +55,52 @@ the task and the synapse is near-redundant. The right interpretation
 is that **synapses are the cheap way to extend small organisms** —
 not the magic bullet for any size.
 
-## Inference-time extension
+## How the ecology actually grows (the empirical answer)
 
-This is the property the trained-model paradigm cannot offer. In a
-trained-model world, capabilities ship in the weights. To add a
-capability you re-train and re-release. In an ecology:
+The intuitive picture was: a new specialist arrives, an existing
+router learns to attend to it via a brief bridge fine-tune, no
+retraining of the base weights required.
+
+**The empirical answer is no.** Three configurations were tested:
+
+| Setup | Δ acc |
+|---|---|
+| Solo router, post-hoc graft new bridge (frozen base) | 70.7 → 70.3 (no gain) |
+| Solo router, graft + base fine-tune at lr=1e-4 | 67.2 → 69.1 (no gain) |
+| Solo router with reserved placeholder slot, swap placeholder for real specialist (frozen base) | 70.3 → 70.7 (no gain) |
+| Same but with base fine-tune at lr=1e-4 | 67.2 → 68.0 (no gain) |
+
+In every regime the new bridge's gate closes during fine-tuning. The
+base's frozen representation simply doesn't have the structure to be
+*improved* by signal at the synapse layer; it has to learn that
+structure during base training, which means it has to be there from
+step 1.
+
+So the ecology's growth pattern is closer to biological evolution
+than runtime adaptation:
 
 1. A new specialist emerges (someone trained a `XOR` solver, or a
    `chess_endgame` solver, or a `reverse_string` solver).
-2. It registers itself by uploading its weights and capabilities to
-   the shared substrate (here, Firebase).
-3. Existing routers, on next invocation, can discover the new peer
-   and decide — via a learned routing pass — whether to wire a
-   synapse to it. No retraining of the routers' base weights is
-   required for the *act of considering* the new peer; only the
-   routing parameters need to update if the peer turns out to help.
+2. It registers itself by publishing weights to the shared substrate
+   (here, Firebase teacher_blobs).
+3. **Existing routers stay as-is** — they've already shaped their
+   representations around the peers they were born with. Their
+   competence on their original tasks remains.
+4. **New routers** are trained from scratch with the expanded peer
+   set available. Each new task spawns a fresh router that can
+   include any subset of current peers as synapses, including
+   peers added since the last router was built.
 
-The cluster's reachable phenotype grows with every new peer. Unlike
-a monolithic model, no retraining cycle gates the expansion.
+The cluster's reachable phenotype grows by *adding new routers*,
+not by upgrading deployed ones. Old routers persist as legacy
+phenotypes for their tasks; new routers compose new behaviors over
+the union of all current specialists.
+
+This is consistent with how brains develop: connection growth and
+pruning happen during plastic phases, not on frozen circuits. A
+mature region doesn't gain a new input by having one wired to it
+post-hoc; a new region forms with the inputs it needs from the
+start.
 
 ## Hierarchy is emergent, not declared
 

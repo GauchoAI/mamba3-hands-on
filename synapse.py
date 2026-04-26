@@ -287,6 +287,37 @@ class RouterModel(nn.Module):
         return self.base.final_norm(x)
 
 
+class PlaceholderSpecialist(nn.Module):
+    """A no-op specialist that occupies a synapse slot.
+
+    `forward_hidden(tokens)` returns a zero-valued hidden state of shape
+    `(B, L, d_model)`. The router can attach a Bridge to it during base
+    training; the gate will learn to close (zero signal isn't useful)
+    OR stay neutral. The KEY property is that *the base's representation
+    has been shaped while a synapse slot existed at this layer*. Later,
+    swapping in a real specialist (same `d_model`) lets the bridge
+    actually inject useful signal — the base already has "room" for it.
+
+    This addresses the hot-plug-onto-frozen-base failure mode: synapse
+    slots reserved at training time can be filled at runtime; slots
+    grafted onto trained networks cannot.
+
+    Frozen with no trainable parameters. Lives anywhere in the synapse
+    list, can be freely swapped via hot_plug_test.py --swap-slot.
+    """
+
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.d_model = d_model
+        # Tiny stub buffer so PyTorch keeps it on the right device when
+        # we .to(device). Not used in math.
+        self.register_buffer("_dummy", torch.zeros(1))
+
+    def forward_hidden(self, tokens):
+        B, L = tokens.shape
+        return torch.zeros((B, L, self.d_model), device=self._dummy.device)
+
+
 def load_specialist(pt_path: str | Path, device: str = "cpu") -> ProgressiveModel:
     """Load a saved .pt as a frozen ProgressiveModel ready to be
     invoked from a router. Reconstructs the architecture from the

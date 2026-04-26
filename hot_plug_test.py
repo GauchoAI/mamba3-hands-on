@@ -32,7 +32,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, ".")
 from progressive_model import ByteTokenizer, PAD
-from synapse import AttendBridge, RouterModel, load_specialist
+from synapse import AttendBridge, RouterModel, load_specialist, PlaceholderSpecialist
 
 
 def build_batch(gen, tok, batch_size, device):
@@ -102,17 +102,38 @@ def main():
                          "bridges) and fine-tune them at this lr while the "
                          "new bridge trains at --lr. Realistic 'ecology grows' "
                          "regime: peer joins, system briefly re-equilibrates.")
+    ap.add_argument("--swap-slot", type=int, default=None,
+                    help="If set, REPLACE the specialist at this slot index "
+                         "with the new one (instead of appending a new slot). "
+                         "Designed for placeholder→real swaps: the saved "
+                         "router was trained with a reserved synapse slot at "
+                         "this index, and we now fill it with a real "
+                         "specialist. The bridge for this slot is also "
+                         "re-initialized.")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
     if torch.backends.mps.is_available():
         torch.mps.manual_seed(args.seed)
 
-    # 1. Load the saved router (with its existing specialists, if any).
+    # 1. Load the saved router. Use specialist_spec if present (includes
+    # placeholders); fall back to legacy specialist_paths (real only).
     ck = torch.load(args.start_from, map_location=args.device, weights_only=False)
-    inner_specialists = [
-        load_specialist(p, device=args.device) for p in ck.get("specialist_paths", [])
-    ]
+    spec_list = ck.get("specialist_spec")
+    if spec_list:
+        inner_specialists = []
+        for s in spec_list:
+            if s["type"] == "real":
+                inner_specialists.append(load_specialist(s["path"], device=args.device))
+            elif s["type"] == "placeholder":
+                inner_specialists.append(
+                    PlaceholderSpecialist(d_model=s["d_model"]).to(args.device))
+            else:
+                raise ValueError(f"unknown spec type: {s['type']}")
+    else:
+        inner_specialists = [
+            load_specialist(p, device=args.device) for p in ck.get("specialist_paths", [])
+        ]
     router = RouterModel(
         router_d_model=ck["router_d_model"],
         router_d_state=ck["router_d_state"],
@@ -127,13 +148,34 @@ def main():
     for p in router.parameters():
         p.requires_grad = False
 
-    # 3. Add the new specialist + a fresh bridge.
+    # 3. Either SWAP a placeholder slot or APPEND a new slot.
     new_sp = load_specialist(args.new_specialist, device=args.device)
-    router.specialists.append(new_sp)
-    new_bridge = AttendBridge(d_router=router.base.d_model,
-                              d_specialist=new_sp.d_model,
-                              init_open=True).to(args.device)
-    router.bridges.append(new_bridge)
+    if args.swap_slot is not None:
+        if args.swap_slot >= len(router.specialists):
+            raise SystemExit(f"--swap-slot {args.swap_slot} out of range "
+                             f"(router has {len(router.specialists)} slots)")
+        old = router.specialists[args.swap_slot]
+        if new_sp.d_model != router.bridges[args.swap_slot].recv.in_features:
+            raise SystemExit(f"d_specialist mismatch: existing slot expects "
+                             f"d={router.bridges[args.swap_slot].recv.in_features}, "
+                             f"new specialist has d={new_sp.d_model}")
+        router.specialists[args.swap_slot] = new_sp
+        # Re-initialize THIS slot's bridge — the prior bridge was shaped
+        # for placeholder zeros; the new specialist's hidden state has
+        # different statistics. Fresh open-init bridge gives the swap a
+        # clean differentiable foothold.
+        new_bridge = AttendBridge(d_router=router.base.d_model,
+                                  d_specialist=new_sp.d_model,
+                                  init_open=True).to(args.device)
+        router.bridges[args.swap_slot] = new_bridge
+        print(f"SWAP: slot {args.swap_slot}: "
+              f"{type(old).__name__} → {args.new_specialist}")
+    else:
+        router.specialists.append(new_sp)
+        new_bridge = AttendBridge(d_router=router.base.d_model,
+                                  d_specialist=new_sp.d_model,
+                                  init_open=True).to(args.device)
+        router.bridges.append(new_bridge)
     # Only the new bridge trains.
     for p in new_bridge.parameters():
         p.requires_grad = True

@@ -20,7 +20,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 
 from progressive_model import ByteTokenizer, PAD
-from synapse import RouterModel, load_specialist, load_router_as_specialist
+from synapse import RouterModel, load_specialist, load_router_as_specialist, PlaceholderSpecialist
 
 
 def load_generator(task):
@@ -84,6 +84,16 @@ def main():
                     help="Use a previously-saved router (--save-to file) as "
                          "this run's specialist. Recursion: the previously-"
                          "trained router becomes the callee.")
+    ap.add_argument("--n-placeholders", type=int, default=0,
+                    help="Add N placeholder synapse slots (zero-output) "
+                         "alongside the real specialists. The router learns "
+                         "with these slots present; a later hot_plug_test "
+                         "--swap-slot can fill them with real specialists. "
+                         "Slots are appended after real specialists, with "
+                         "d_specialist matched to the first real specialist.")
+    ap.add_argument("--placeholder-d-model", type=int, default=64,
+                    help="d_model for placeholder slots when there is no "
+                         "real specialist to match against. Default 64.")
     args = ap.parse_args()
     if args.seed is not None:
         import random as _r
@@ -101,6 +111,7 @@ def main():
     tok = ByteTokenizer()
 
     specialists = []
+    pt_paths = []
     if not args.no_synapse:
         if args.load_router_as_specialist:
             pt_paths = [args.load_router_as_specialist]
@@ -117,6 +128,18 @@ def main():
                 sp = load_specialist(pt, device=args.device)
                 specialists.append(sp)
                 print(f"Specialist:     {pt} (d={sp.d_model}, frozen)")
+    # Placeholder slots — independent of --no-synapse. With
+    # `--no-synapse --n-placeholders K` we get a router that has K
+    # reserved zero-output slots and no real specialists. Later
+    # hot_plug_test can swap one of them for a real specialist.
+    if args.n_placeholders > 0:
+        d_match = (specialists[0].d_model if specialists
+                   else args.placeholder_d_model)
+        for k in range(args.n_placeholders):
+            ph = PlaceholderSpecialist(d_model=d_match).to(args.device)
+            specialists.append(ph)
+            print(f"Placeholder:    slot {len(specialists)-1} (d={d_match}, "
+                  f"zero-output reserved slot)")
 
     router = RouterModel(
         router_d_model=args.router_d_model,
@@ -205,18 +228,36 @@ def main():
     if args.save_to:
         save_dir = Path(args.save_to).parent
         save_dir.mkdir(parents=True, exist_ok=True)
+        # Build a per-slot spec list. Mirrors how the slots were
+        # constructed: real specialists first, then placeholders.
+        specialist_spec = []
+        if not args.no_synapse:
+            for p in pt_paths:
+                specialist_spec.append({"type": "real", "path": str(p)})
+        if args.n_placeholders > 0:
+            d_match = (specialists[0].d_model if specialists and
+                       not isinstance(specialists[0], PlaceholderSpecialist)
+                       else args.placeholder_d_model)
+            # We added n_placeholders to the router; record one spec
+            # entry per placeholder. Note: with --no-synapse, the only
+            # entries are placeholders; that's the "born with reserved
+            # slots, no real peer yet" configuration we want to swap
+            # into post-hoc.
+            for _ in range(args.n_placeholders):
+                specialist_spec.append({"type": "placeholder", "d_model": d_match})
         torch.save({
             "router_state_dict": router.state_dict(),
             "router_d_model": args.router_d_model,
             "router_d_state": 16,
             "router_headdim": 16,
             "router_n_layers": args.router_layers,
-            "specialist_paths": [str(p) for p in pt_paths] if not args.no_synapse else [],
+            "specialist_paths": [str(p) for p in pt_paths] if not args.no_synapse else [],  # legacy
+            "specialist_spec": specialist_spec,  # new: includes placeholders
             "bridge_kind": args.bridge_kind,
             "task": args.task,
             "final_acc": history[-1]["acc"],
         }, args.save_to)
-        print(f"Saved router → {args.save_to}")
+        print(f"Saved router → {args.save_to} ({len(specialist_spec)} slots)")
 
 
 if __name__ == "__main__":
