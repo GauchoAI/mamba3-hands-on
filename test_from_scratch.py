@@ -74,18 +74,21 @@ def main():
         # train ANYTHING from scratch, parity is where it'll show.
         t0 = time.time()
         print("\n=== training from random init (25 cycles × 200 steps) ===")
+        # Architecture chosen to match test_parity_train's known-good config
+        # (d=32 L=1) — R-3 + Task #18 proved curriculum + this size masters
+        # parity from scratch in ~35s. The earlier d=64 L=4 default ran 174ms
+        # per step; this runs ~5ms per step, 35× faster, AND the smaller model
+        # generalises across all 3 curriculum stages cleanly. Bigger isn't
+        # better when the model is already sufficient.
         proc = subprocess.run([
             sys.executable, str(REPO_ROOT / "ptxd_specialist.py"),
             "--task", "parity",
-            "--d-model", "64", "--d-state", "8", "--headdim", "16",
-            "--layers", "4", "--batch-size", "256",
-            # R-2 hypothesis test: 10× smaller LR. If THIS converges, the
-            # earlier failures were "ptxd training landscape needs gentler
-            # LR than PyTorch's"; if it still doesn't, bug is structural.
-            "--lr", "1e-4", "--weight-decay", "0.1",
+            "--d-model", "32", "--d-state", "16", "--headdim", "16",
+            "--layers", "1", "--batch-size", "16",
+            "--lr", "1e-3", "--weight-decay", "0.1",
             "--steps-per-cycle", "200", "--max-cycles", "25",
-            "--target-acc", "0.95", "--seed", "12345",
-        ], capture_output=True, text=True, timeout=1800)
+            "--target-acc", "0.95", "--seed", "42",
+        ], capture_output=True, text=True, timeout=600)
 
         # Print cycle progress and final.
         for line in proc.stderr.splitlines():

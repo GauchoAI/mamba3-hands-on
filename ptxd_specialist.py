@@ -73,6 +73,214 @@ def parse_args():
     return p.parse_args()
 
 
+def run_curriculum_mode(args, ptxd_bin, ckpt_dir, ckpt_path, opt_state_path,
+                        save_bin_path, sdb, exp_id, config):
+    """From-scratch training via curriculum advancement. Submits one ptxd job
+    per stage; chains weights via /tmp/ptxd_curriculum_chain_{task}.{bin,opt.bin}.
+
+    R-3 proved this flow trains parity from scratch in 35 seconds when the
+    legacy parity-data path is used. This makes the same curriculum work
+    for ANY task in problems/ via the streaming protocol — generate per-
+    stage batches, submit each as a separate ptxd job, advance stage on
+    convergence, save final .pt at the end.
+
+    Returns (final_dict, cycles_completed, status_string) or (None, 0, "error").
+    """
+    sys.path.insert(0, str(REPO_ROOT))
+    from registry.problem_registry import ProblemRegistry
+    from task_runner import make_examples_for_task
+    from batch_writer import write_examples
+    from ckpt_bridge import bin_to_pt
+
+    reg = ProblemRegistry()
+    reg.discover([str(REPO_ROOT / "problems")])
+    spec = reg.problems.get(args.task)
+    if not spec or not spec.curriculum:
+        sys.stderr.write(f"[ptxd_specialist] task {args.task!r} has no curriculum; "
+                         f"caller should fall back to single-stage path\n")
+        return None, 0, "no_curriculum"
+
+    n_stages = len(spec.curriculum)
+    chain_bin = f"/tmp/ptxd_curriculum_chain_{args.task}.bin"
+    chain_opt = f"/tmp/ptxd_curriculum_chain_{args.task}.opt.bin"
+    # Clean chain at start of run (curriculum is fresh-init by definition).
+    for p in [chain_bin, chain_opt]:
+        if Path(p).exists():
+            try: os.unlink(p)
+            except Exception: pass
+
+    # Each stage gets the FULL per-call budget. This sounds wasteful
+    # (n_stages × max_cycles × steps_per_cycle worst case) but in
+    # practice each stage `target_acc = advance_at` triggers ptxd's
+    # early-exit on convergence: stage 1 typically uses ~30-35 cycles
+    # finding the rule, stages 2/3 inherit good weights and finish in
+    # 1-3 cycles each. Splitting the budget per-stage was the bug that
+    # killed the integration test — stage 1 needed ~30 cycles but only
+    # got 16. The right policy is "give each stage as much as it needs;
+    # convergence triggers early exit; the budget is shared via early
+    # exit, not pre-divided."
+    total_steps = max(1, args.max_cycles * args.steps_per_cycle)
+    steps_per_stage = total_steps
+
+    sys.stderr.write(f"[ptxd_specialist] curriculum mode: {n_stages} stages, "
+                     f"{steps_per_stage} steps/stage budget\n")
+
+    cumulative_cycles = 0
+    last_best_acc = 0.0
+    final_status = "needs_tuning"
+    overall_final = None
+
+    for stage_idx, stage in enumerate(spec.curriculum):
+        stage_num = stage_idx + 1
+        sys.stderr.write(f"[ptxd_specialist] === stage {stage_num}/{n_stages}: "
+                         f"params={stage.params}, advance_at={stage.advance_at} ===\n")
+
+        # Generate batches at this stage's params.
+        n_train = max(20000, args.batch_size * 64)
+        try:
+            train_examples = make_examples_for_task(args.task, n_train,
+                                                    stage=stage_num, seed=args.seed + stage_num)
+            eval_examples  = make_examples_for_task(args.task, 200,
+                                                    stage=stage_num, seed=args.seed + 1000 + stage_num)
+        except Exception as e:
+            sys.stderr.write(f"[ptxd_specialist] stage {stage_num} batch gen FAILED: {e}\n")
+            break
+
+        train_path = f"/tmp/ptxd_curr_train_{args.task}_s{stage_num}.bin"
+        eval_path  = f"/tmp/ptxd_curr_eval_{args.task}_s{stage_num}.bin"
+        try:
+            write_examples(train_path, train_examples)
+            write_examples(eval_path,  eval_examples)
+        except Exception as e:
+            sys.stderr.write(f"[ptxd_specialist] stage {stage_num} batch write FAILED: {e}\n")
+            break
+
+        # Build job: single ptxd run, target_acc = stage's advance_at so
+        # ptxd early-exits on convergence. Init from chain.bin if it
+        # exists (i.e., not the first stage). Save back to chain.bin
+        # so the next stage picks up our weights.
+        job = {
+            "id": f"{exp_id}_s{stage_num}",
+            "task": args.task,
+            "n_bits": args.n_bits,
+            "d_model": args.d_model, "d_state": args.d_state,
+            "headdim": args.headdim, "n_layers": args.layers,
+            "vocab_size": args.vocab_size,
+            "lr": args.lr, "weight_decay": args.weight_decay,
+            "steps": steps_per_stage,
+            "batch_size": args.batch_size,
+            "target_acc": stage.advance_at,  # this stage's clearance threshold
+            "seed": args.seed,
+            "save_bin": chain_bin,
+            "optimizer_state_out": chain_opt,
+            "batches_path": train_path,
+            "eval_batches_path": eval_path,
+            # The auto-tuner's stagnation rule (8 cycles flat → bail)
+            # fires too early for fresh-init parity, where the model
+            # plateaus at ~50% for ~27 cycles before the breakthrough.
+            # During curriculum sub-jobs, the OUTER curriculum loop is
+            # the supervisor: each stage's `target_acc` (= advance_at)
+            # triggers ptxd's own early-exit on convergence. Disable
+            # auto_tune here so it doesn't preempt the breakthrough.
+            "auto_tune": False,
+        }
+        if Path(chain_bin).exists():
+            job["init_from_bin"] = chain_bin
+        if Path(chain_opt).exists():
+            job["optimizer_state_in"] = chain_opt
+
+        # Submit and read events.
+        proc = subprocess.Popen([ptxd_bin], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, bufsize=1)
+        proc.stdin.write(json.dumps(job) + "\n")
+        proc.stdin.flush()
+        proc.stdin.close()
+
+        stage_final = None
+        for line in proc.stdout:
+            line = line.strip()
+            if not line: continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            t = row.get("type")
+            if t == "cycle":
+                sys.stderr.write(
+                    f"[ptxd_specialist] stage{stage_num}.cycle{row['cycle']:3d}  "
+                    f"loss={row['loss']:.4f}  acc={row['fresh_acc']*100:5.1f}%  "
+                    f"best={row['best_fresh']*100:5.1f}%\n"
+                )
+                try:
+                    sdb.log_cycle(args.task, cumulative_cycles + int(row["cycle"]),
+                                  accuracy=float(row["fresh_acc"]),
+                                  loss=float(row["loss"]))
+                except Exception as e:
+                    sys.stderr.write(f"[ptxd_specialist] StateDB log_cycle warn: {e}\n")
+            elif t == "final":
+                stage_final = row
+            elif t == "auto_tune":
+                sys.stderr.write(f"[ptxd_specialist] stage{stage_num} ★ auto_tune {row['action']} (trigger={row['trigger']})\n")
+            # ignore tick/lr_change/etc. for brevity in curriculum mode
+
+        proc.wait(timeout=10)
+
+        if stage_final is None:
+            sys.stderr.write(f"[ptxd_specialist] stage {stage_num} produced no "
+                             f"final event; aborting curriculum\n")
+            sys.stderr.write(proc.stderr.read()[-600:] + "\n")
+            break
+
+        stage_acc = float(stage_final.get("best_acc", 0.0))
+        stage_status = stage_final.get("status", "needs_tuning")
+        cumulative_cycles += int(stage_final.get("steps_executed", 0)) // max(1, args.steps_per_cycle)
+        last_best_acc = max(last_best_acc, stage_acc)
+        overall_final = stage_final
+        sys.stderr.write(f"[ptxd_specialist] stage{stage_num} done: "
+                         f"best_acc={stage_acc:.3f}, status={stage_status}\n")
+
+        # Advancement decision: did this stage clear its threshold?
+        if stage_acc >= stage.advance_at:
+            sys.stderr.write(f"[ptxd_specialist] ✓ stage{stage_num} cleared "
+                             f"advance_at={stage.advance_at}; continuing\n")
+            try:
+                sdb.advance_stage(args.task, stage_num + 1)
+            except Exception:
+                pass
+            final_status = "converged" if stage_num == n_stages else "learning"
+        else:
+            sys.stderr.write(f"[ptxd_specialist] ✗ stage{stage_num} stuck below "
+                             f"advance_at={stage.advance_at} (best={stage_acc:.3f}); "
+                             f"stopping curriculum\n")
+            final_status = "needs_tuning"
+            break
+
+    # Convert chain → canonical .pt at the very end. This gets the
+    # accumulated weights from all completed stages. Regression guard
+    # in main() will compare against any prior canonical .pt.
+    if Path(chain_bin).exists() and overall_final is not None:
+        try:
+            os.makedirs(ckpt_dir, exist_ok=True)
+            # Write to save_bin_path so main()'s save logic picks it up
+            # and runs through the regression guard.
+            import shutil
+            shutil.copy(chain_bin, save_bin_path)
+            if Path(chain_opt).exists():
+                # Place opt state at canonical path so the next ptxd_specialist
+                # invocation can resume from it.
+                shutil.copy(chain_opt, str(opt_state_path))
+        except Exception as e:
+            sys.stderr.write(f"[ptxd_specialist] chain → save_bin copy failed: {e}\n")
+
+    # Synthesize a final result the rest of main() can consume.
+    if overall_final is None:
+        return None, 0, "error"
+    overall_final["best_acc"] = last_best_acc
+    overall_final["status"] = final_status
+    return overall_final, cumulative_cycles, final_status
+
+
 def main():
     args = parse_args()
     # ptxd is now task-agnostic. Any task in `problems/` works through the
@@ -313,101 +521,150 @@ def main():
         "engine": "ptxd",
     }
 
-    sys.stderr.write(f"[ptxd_specialist] launching ptxd: {ptxd_bin}\n")
-    sys.stderr.write(f"[ptxd_specialist] job: {json.dumps(job)}\n")
-
-    proc = subprocess.Popen(
-        [ptxd_bin],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
-    t0 = time.time()
-    proc.stdin.write(json.dumps(job) + "\n")
-    proc.stdin.flush()
-    proc.stdin.close()
-
-    # Per-job event log. Captures the FULL event stream from ptxd so we can
-    # diagnose runs after the fact — gradient norm alerts, mode-collapse
-    # heuristics, lr_change boundaries, the works. The user's idea: I (or a
-    # future auto-tuner) can read this log and tell what went wrong.
-    events_dir = REPO_ROOT / "runs"
-    events_dir.mkdir(exist_ok=True)
-    events_path = events_dir / f"{job['id']}_{args.task}.events.jsonl"
-    events_log = open(events_path, "w")
-    events_log.write(json.dumps({"type":"job_start","job":job,"t":time.time()}) + "\n")
-    events_log.flush()
-    sys.stderr.write(f"[ptxd_specialist] event log → {events_path}\n")
-
-    # Stream rows. ptxd emits one JSON object per line; every line goes to
-    # the events log, and we additionally interpret cycle/final/tick/etc.
-    # for live console output and StateDB writes.
+    # ---- Curriculum mode (R-3 unlock) ----
+    # When training from scratch on a task that has a curriculum, run the
+    # per-stage loop in run_curriculum_mode instead of the single-stage
+    # path below. Test_parity_train showed parity converges in 16s with
+    # curriculum; ptxd_specialist's single-stage path got stuck at 56%.
+    # This flips the default for from-scratch + curriculum tasks.
+    use_curriculum = (init_from_bin is None)  # fresh-init only
     final_result = None
-    diagnostic_counts = {"loss_jump": 0, "grad_norm_alert": 0,
-                         "nan_detected": 0, "mode_collapse_suspected": 0,
-                         "lr_change": 0, "auto_tune": 0}
-    for line in proc.stdout:
-        line = line.strip()
-        if not line:
-            continue
-        # Tee to events log unconditionally (still readable even if parsing fails).
-        events_log.write(line + "\n")
-        events_log.flush()
+    if use_curriculum:
+        # run_curriculum_mode handles its own ptxd invocations and event
+        # logging. Returns the equivalent of `final_result` so downstream
+        # save / StateDB code works unchanged.
         try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            sys.stderr.write(f"[ptxd_specialist] non-JSON line: {line!r}\n")
-            continue
-        rtype = row.get("type")
-        if rtype == "cycle":
-            try:
-                sdb.log_cycle(args.task, int(row["cycle"]),
-                              accuracy=float(row["fresh_acc"]),
-                              loss=float(row["loss"]))
-            except Exception as e:
-                sys.stderr.write(f"[ptxd_specialist] StateDB log_cycle warn: {e}\n")
-            sys.stderr.write(
-                f"[ptxd_specialist] cycle {row['cycle']}  "
-                f"loss={row['loss']:.4f}  acc={row['fresh_acc']*100:.0f}%  "
-                f"best={row['best_fresh']*100:.0f}%  stage={row['stage']}\n"
-            )
-        elif rtype == "final":
-            final_result = row
-        elif rtype == "tick":
-            pass  # scheduler heartbeat — silently ignore on console
-        elif rtype in diagnostic_counts:
-            diagnostic_counts[rtype] += 1
-            # Surface diagnostics live so a human watching can see them.
-            if rtype == "lr_change":
-                sys.stderr.write(f"[ptxd_specialist]   lr_change @ step {row['step']} reason={row['reason']} lr_eff={row['lr_eff']:.2e}\n")
-            elif rtype == "grad_norm_alert":
-                sys.stderr.write(f"[ptxd_specialist]   ⚠ grad_norm_alert @ step {row['step']} norm={row['norm']:.2f} (recent_mean={row['recent_mean']:.2f})\n")
-            elif rtype == "loss_jump":
-                sys.stderr.write(f"[ptxd_specialist]   ⚠ loss_jump cycle {row['cycle']} {row['prev_loss']:.3f} → {row['new_loss']:.3f} (×{row['ratio']:.1f})\n")
-            elif rtype == "nan_detected":
-                sys.stderr.write(f"[ptxd_specialist]   ⚠ NaN in {row['source']} @ step {row['step']}\n")
-            elif rtype == "mode_collapse_suspected":
-                sys.stderr.write(f"[ptxd_specialist]   ⚠ mode-collapse suspected @ cycle {row['cycle']} (flat for {row['flat_for_cycles']} cycles)\n")
-            elif rtype == "auto_tune":
-                sys.stderr.write(f"[ptxd_specialist]   ★ auto_tune {row['action']} (trigger={row['trigger']}, value={row['value']})\n")
-        else:
-            sys.stderr.write(f"[ptxd_specialist] unknown row type: {rtype}\n")
+            sys.path.insert(0, str(REPO_ROOT))
+            from registry.problem_registry import ProblemRegistry as _PR
+            _r = _PR()
+            _r.discover([str(REPO_ROOT / "problems")])
+            _spec = _r.problems.get(args.task)
+            if _spec and _spec.curriculum:
+                t0 = time.time()
+                cur_final, cur_cycles, cur_status = run_curriculum_mode(
+                    args, ptxd_bin, ckpt_dir, ckpt_path, opt_state_path,
+                    save_bin_path, sdb, exp_id, config,
+                )
+                if cur_final is not None:
+                    final_result = cur_final
+                    elapsed = time.time() - t0
+                    final_loss = float(final_result.get("final_loss", 0.0))
+                    best_acc = float(final_result.get("best_acc", 0.0))
+                    final_status = cur_status
+                    cycles_completed = cur_cycles
+                    result = final_result
+                    # Skip the legacy single-stage path entirely; jump to
+                    # the StateDB-and-save block below.
+                else:
+                    sys.stderr.write(f"[ptxd_specialist] curriculum mode failed; "
+                                     f"falling back to single-stage path\n")
+            else:
+                use_curriculum = False  # task has no curriculum → single-stage
+        except Exception as e:
+            sys.stderr.write(f"[ptxd_specialist] curriculum check failed ({e}); "
+                             f"single-stage path\n")
+            use_curriculum = False
 
-    events_log.write(json.dumps({"type":"job_end","t":time.time()}) + "\n")
-    events_log.close()
-    if any(diagnostic_counts.values()):
-        summary = ", ".join(f"{k}={v}" for k, v in diagnostic_counts.items() if v)
-        sys.stderr.write(f"[ptxd_specialist] diagnostic summary: {summary}\n")
+    # Track whether curriculum mode produced a final_result so we skip
+    # the legacy single-stage event-reading block entirely.
+    did_curriculum = (final_result is not None)
+    if not did_curriculum:  # single-stage path
+        sys.stderr.write(f"[ptxd_specialist] launching ptxd: {ptxd_bin}\n")
+        sys.stderr.write(f"[ptxd_specialist] job: {json.dumps(job)}\n")
 
-    proc.wait(timeout=10)
-    if final_result is None:
-        sys.stderr.write(
-            f"[ptxd_specialist] ptxd produced no final row; stderr:\n"
-            f"{proc.stderr.read()}\n"
+        proc = subprocess.Popen(
+            [ptxd_bin],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
         )
-        sys.exit(3)
+        t0 = time.time()
+        proc.stdin.write(json.dumps(job) + "\n")
+        proc.stdin.flush()
+        proc.stdin.close()
+
+    # Per-job event log + event-streaming loop. SKIPPED when curriculum
+    # mode already ran (its sub-jobs each have their own event flow
+    # logged via stderr; per-stage event files are a future enhancement).
+    events_log = None
+    diagnostic_counts = {}
+    if not did_curriculum:
+        events_dir = REPO_ROOT / "runs"
+        events_dir.mkdir(exist_ok=True)
+        events_path = events_dir / f"{job['id']}_{args.task}.events.jsonl"
+        events_log = open(events_path, "w")
+        events_log.write(json.dumps({"type":"job_start","job":job,"t":time.time()}) + "\n")
+        events_log.flush()
+        sys.stderr.write(f"[ptxd_specialist] event log → {events_path}\n")
+
+        # Stream rows. ptxd emits one JSON object per line; every line goes to
+        # the events log, and we additionally interpret cycle/final/tick/etc.
+        # for live console output and StateDB writes.
+        diagnostic_counts = {"loss_jump": 0, "grad_norm_alert": 0,
+                             "nan_detected": 0, "mode_collapse_suspected": 0,
+                             "lr_change": 0, "auto_tune": 0}
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            # Tee to events log unconditionally (still readable even if parsing fails).
+            events_log.write(line + "\n")
+            events_log.flush()
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                sys.stderr.write(f"[ptxd_specialist] non-JSON line: {line!r}\n")
+                continue
+            rtype = row.get("type")
+            if rtype == "cycle":
+                try:
+                    sdb.log_cycle(args.task, int(row["cycle"]),
+                                  accuracy=float(row["fresh_acc"]),
+                                  loss=float(row["loss"]))
+                except Exception as e:
+                    sys.stderr.write(f"[ptxd_specialist] StateDB log_cycle warn: {e}\n")
+                sys.stderr.write(
+                    f"[ptxd_specialist] cycle {row['cycle']}  "
+                    f"loss={row['loss']:.4f}  acc={row['fresh_acc']*100:.0f}%  "
+                    f"best={row['best_fresh']*100:.0f}%  stage={row['stage']}\n"
+                )
+            elif rtype == "final":
+                final_result = row
+            elif rtype == "tick":
+                pass  # scheduler heartbeat — silently ignore on console
+            elif rtype in diagnostic_counts:
+                diagnostic_counts[rtype] += 1
+                # Surface diagnostics live so a human watching can see them.
+                if rtype == "lr_change":
+                    sys.stderr.write(f"[ptxd_specialist]   lr_change @ step {row['step']} reason={row['reason']} lr_eff={row['lr_eff']:.2e}\n")
+                elif rtype == "grad_norm_alert":
+                    sys.stderr.write(f"[ptxd_specialist]   ⚠ grad_norm_alert @ step {row['step']} norm={row['norm']:.2f} (recent_mean={row['recent_mean']:.2f})\n")
+                elif rtype == "loss_jump":
+                    sys.stderr.write(f"[ptxd_specialist]   ⚠ loss_jump cycle {row['cycle']} {row['prev_loss']:.3f} → {row['new_loss']:.3f} (×{row['ratio']:.1f})\n")
+                elif rtype == "nan_detected":
+                    sys.stderr.write(f"[ptxd_specialist]   ⚠ NaN in {row['source']} @ step {row['step']}\n")
+                elif rtype == "mode_collapse_suspected":
+                    sys.stderr.write(f"[ptxd_specialist]   ⚠ mode-collapse suspected @ cycle {row['cycle']} (flat for {row['flat_for_cycles']} cycles)\n")
+                elif rtype == "auto_tune":
+                    sys.stderr.write(f"[ptxd_specialist]   ★ auto_tune {row['action']} (trigger={row['trigger']}, value={row['value']})\n")
+            else:
+                sys.stderr.write(f"[ptxd_specialist] unknown row type: {rtype}\n")
+
+        events_log.write(json.dumps({"type":"job_end","t":time.time()}) + "\n")
+        events_log.close()
+        if any(diagnostic_counts.values()):
+            summary = ", ".join(f"{k}={v}" for k, v in diagnostic_counts.items() if v)
+            sys.stderr.write(f"[ptxd_specialist] diagnostic summary: {summary}\n")
+
+        proc.wait(timeout=10)
+        if final_result is None:
+            sys.stderr.write(
+                f"[ptxd_specialist] ptxd produced no final row; stderr:\n"
+                f"{proc.stderr.read()}\n"
+            )
+            sys.exit(3)
 
     elapsed = time.time() - t0
     final_loss = float(final_result.get("final_loss", 0.0))

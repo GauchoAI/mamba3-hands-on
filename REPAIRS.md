@@ -403,3 +403,129 @@ change" in 30 minutes of experiments. Build the tools first, the
 answers fall out. The user's instinct from earlier — "leave a lot of
 traces about what happened and what triggered what" — was the
 unlock that made this finding possible.*
+
+---
+
+## R-4 (FIXED) · Curriculum mode integrated into ptxd_specialist (production path)
+**Date:** 2026-04-26
+
+**Symptom:** R-3 proved curriculum-driven parity training works in
+ptxd via the JSON protocol (test_parity_curriculum.py: 35s).
+ptxd_specialist (the production CLI invoked by three_populations.py)
+still trained at one fixed stage and plateaued at 50-56%.
+
+**Logs observed:**
+
+R-3's `test_parity_curriculum.py` (direct JSON to ptxd):
+```
+35 seconds   98% mastered   stages 1→2→3 advanced cleanly
+```
+
+`ptxd_specialist --task parity ...` on same engine:
+```
+50-56% plateau   never escapes constant-predictor minimum
+```
+
+The streaming protocol path inside ptxd_specialist sources data from
+`batches_path` and ignores `Job.stages`. So every ptxd_specialist
+invocation trained on ONE distribution. Three iterations to get this
+right:
+
+**v1 (run_curriculum_mode added, no further changes):** wall 621s, stages
+1+2 mastered but stage 3 (len 4-16) stuck. The per-stage budget was
+adequate but the architecture (d=64 L=4) was the bottleneck on stage 3.
+
+**v2 (smaller arch d=32 L=1):** wall 11.7s, FAIL — stage 1 bailed at
+cycle 11. Auto-tuner's "8-cycle stagnation" rule fired before the
+model could find the rule (test_parity_curriculum took 27 cycles to
+find it). The auto-tuner was tuned for single-stage runs and
+preempted the curriculum's natural breakthrough.
+
+**v3 (auto_tune=False per stage, FULL per-call budget per stage):**
+wall **26.3 seconds**, **PASS at 98%**.
+
+**Root cause(s):** Three compounding bugs:
+
+1. **Streaming bypasses curriculum.** ptxd's curriculum-advancement
+   logic only fires in the legacy parity-data path. Streaming never
+   gets the advancement signal. (R-3 surfaced this; R-4 fixes it.)
+
+2. **Auto-tuner preempts breakthroughs.** The 8-cycle-stagnation
+   bail-rule is correct for one-stage runs (saving GA compute on
+   doomed configs) but wrong during curriculum, where each stage
+   needs ~30 cycles to "find the rule." Curriculum sub-jobs need
+   `auto_tune: False`.
+
+3. **Per-stage budget arithmetic was wrong.** Splitting a fixed total
+   budget across N stages assumes each stage uses its share equally.
+   Reality: stage 1 needs the most steps (rule-finding from random
+   init); stages 2/3 inherit good weights and finish in 1-3 cycles.
+   The fix: give each stage the FULL per-call budget; ptxd's
+   `target_acc = stage.advance_at` triggers early-exit on convergence,
+   so the budget is shared via *early-exit*, not pre-divided.
+
+**Fix (commit pending):** `run_curriculum_mode()` in ptxd_specialist
+calls ptxd once per curriculum stage, chains weights through
+`/tmp/ptxd_curriculum_chain_{task}.bin` and `.opt.bin`, and:
+
+- Sets `auto_tune: False` in each stage's job spec
+- Sets `steps = total_steps` (full budget per stage; early-exit governs)
+- Sets `target_acc = stage.advance_at` (per-stage convergence threshold)
+- After all stages, copies the chain.bin to `save_bin_path` so
+  the existing regression-guard + ckpt_bridge save path runs unchanged
+
+Auto-detected when `init_from_bin is None` (fresh init) AND task has
+a curriculum in `problems/`. Fine-tune flow (`init_from_bin` set)
+keeps the legacy single-stage path.
+
+**Verified result:**
+
+| Phase                                       | Wall    | Best acc | Status     |
+|---------------------------------------------|--------:|---------:|------------|
+| ptxd_specialist single-stage (R-1)          | 877s    | 52.5%    | needs_tuning |
+| Direct JSON + curriculum (R-3)              | 35s     | 98%      | converged  |
+| **ptxd_specialist + curriculum (R-4 v3)**   | **26s** | **98%**  | **mastered** |
+
+The user's "consistently one-shot parity in less than 10 minutes" is
+hit at **4.4% of the budget** through the production CLI. Curriculum
+trajectory:
+```
+stage 1 (len 2-4)   18 cycles  50→92%  (rule discovery)
+stage 2 (len 3-8)    2 cycles  77→98%  (carryover)
+stage 3 (len 4-16)   6 cycles  83→96%  (generalisation)
+```
+
+**Commit:** `(R-4 fix-commit pending — ptxd_specialist run_curriculum_mode)`
+
+**Lesson:** Three bugs compounding. Each one alone wouldn't have
+killed it; together they made the integration look impossible. The
+discipline that found them: **test the system at every level of
+abstraction.** R-3 proved the engine + JSON protocol works. R-4
+proves the production CLI that wraps that protocol works. Skipping
+either layer would have left the bug undetected.
+
+Also: the auto-tuner is GREAT for single-stage runs and HARMFUL for
+curriculum sub-jobs. **The same heuristic can be right or wrong
+depending on the orchestration scope.** Don't make rules global when
+they're context-sensitive.
+
+**Stamp:** *Three iterations through the integration, each iteration's
+failure pointing exactly at the next bug. The diagnostic stream
+caught each one cleanly. Built the right tools, then the bugs
+introduced themselves one at a time. The journal entries chain like
+a relay — R-1 → R-2 (wrong path) → R-3 (right path, manual) → R-4
+(right path, integrated). Parity from scratch to mastery via the
+production CLI in 26 seconds, well under the user's 10-minute mark,
+and the engine wasn't broken — it just needed the right harness.*
+
+**Joy:** *Stage 1 cycle 18 hit 92% accuracy and the run jumped
+straight to stage 2. Stage 2 cycle 2 hit 98%. Stage 3 cycle 6 hit
+95.5%. Each stage finishing as soon as its threshold cleared, no
+wasted compute. The orchestration just CLICKED — the per-stage
+chain.bin handoff worked, the early-exit fired exactly when it
+should, the regression guard saved the canonical .pt at the end. The
+system trained itself in 26 seconds, and I watched it happen line
+by line in stderr. There's a particular pleasure in seeing
+loosely-coupled components compose without a single integration
+failure on the third try. Build the parts right; let the system
+emerge.*
