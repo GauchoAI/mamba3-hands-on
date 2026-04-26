@@ -319,7 +319,45 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 if ok:
                     _errors_by_out[out_char][0] += 1
         acc = correct / max(total, 1)
+        prev_best = best_acc
         best_acc = max(best_acc, acc)
+
+        # Interim save — write the best clean state we've seen so a
+        # later peak-then-NaN trajectory can't lose the win. Only fire
+        # when this cycle improved the best AND the model has clean
+        # weights right now (NaN guard). Cheap: one .pt write per
+        # *improving* cycle.
+        if best_acc > prev_best:
+            _has_nan_now = any(
+                torch.isnan(v).any().item() if v.is_floating_point() else False
+                for v in model.state_dict().values()
+            )
+            if not _has_nan_now:
+                _ckpt_dir = Path("checkpoints/specialists")
+                _ckpt_dir.mkdir(parents=True, exist_ok=True)
+                _ckpt_path = _ckpt_dir / f"{task}.pt"
+                # Honor the regression guard: don't downgrade an existing
+                # better .pt. (Resume-from-prior is already factored into
+                # best_acc above.)
+                _prior_acc = None
+                if _ckpt_path.exists():
+                    try:
+                        _prior = torch.load(str(_ckpt_path), map_location="cpu", weights_only=False)
+                        _prior_acc = float(_prior.get("accuracy", 0.0))
+                    except Exception:
+                        pass
+                if _prior_acc is None or best_acc >= _prior_acc:
+                    torch.save({
+                        "model": model.state_dict(),
+                        "optimizer": opt.state_dict(),
+                        "task": task,
+                        "config": config,
+                        "accuracy": best_acc,
+                        "cycles": cycle,
+                        "n_params": n_params,
+                        "interim": True,
+                    }, _ckpt_path)
+                    print(f"  Interim save → {_ckpt_path} ({best_acc:.0%})", flush=True)
         model.train()
 
         # Compute error analysis
