@@ -329,16 +329,32 @@ def main():
     proc.stdin.flush()
     proc.stdin.close()
 
-    # Stream rows. ptxd emits one JSON object per line:
-    #   {"type":"cycle", "cycle":N, "step":S, "loss":..., "fresh_acc":..., ...}
-    #     — every 200 steps; orchestrator can monitor in real time.
-    #   {"type":"final", "best_acc":..., "status":..., "wall_ms":..., ...}
-    #     — once at the end.
+    # Per-job event log. Captures the FULL event stream from ptxd so we can
+    # diagnose runs after the fact — gradient norm alerts, mode-collapse
+    # heuristics, lr_change boundaries, the works. The user's idea: I (or a
+    # future auto-tuner) can read this log and tell what went wrong.
+    events_dir = REPO_ROOT / "runs"
+    events_dir.mkdir(exist_ok=True)
+    events_path = events_dir / f"{job['id']}_{args.task}.events.jsonl"
+    events_log = open(events_path, "w")
+    events_log.write(json.dumps({"type":"job_start","job":job,"t":time.time()}) + "\n")
+    events_log.flush()
+    sys.stderr.write(f"[ptxd_specialist] event log → {events_path}\n")
+
+    # Stream rows. ptxd emits one JSON object per line; every line goes to
+    # the events log, and we additionally interpret cycle/final/tick/etc.
+    # for live console output and StateDB writes.
     final_result = None
+    diagnostic_counts = {"loss_jump": 0, "grad_norm_alert": 0,
+                         "nan_detected": 0, "mode_collapse_suspected": 0,
+                         "lr_change": 0}
     for line in proc.stdout:
         line = line.strip()
         if not line:
             continue
+        # Tee to events log unconditionally (still readable even if parsing fails).
+        events_log.write(line + "\n")
+        events_log.flush()
         try:
             row = json.loads(line)
         except json.JSONDecodeError:
@@ -346,8 +362,6 @@ def main():
             continue
         rtype = row.get("type")
         if rtype == "cycle":
-            # StateDB cycle_history is what get_confidence_score queries;
-            # without it confidence is 0 and the task can never be promoted.
             try:
                 sdb.log_cycle(args.task, int(row["cycle"]),
                               accuracy=float(row["fresh_acc"]),
@@ -362,10 +376,28 @@ def main():
         elif rtype == "final":
             final_result = row
         elif rtype == "tick":
-            # Scheduler heartbeat; silently ignore (firebase_push handles it).
-            pass
+            pass  # scheduler heartbeat — silently ignore on console
+        elif rtype in diagnostic_counts:
+            diagnostic_counts[rtype] += 1
+            # Surface diagnostics live so a human watching can see them.
+            if rtype == "lr_change":
+                sys.stderr.write(f"[ptxd_specialist]   lr_change @ step {row['step']} reason={row['reason']} lr_eff={row['lr_eff']:.2e}\n")
+            elif rtype == "grad_norm_alert":
+                sys.stderr.write(f"[ptxd_specialist]   ⚠ grad_norm_alert @ step {row['step']} norm={row['norm']:.2f} (recent_mean={row['recent_mean']:.2f})\n")
+            elif rtype == "loss_jump":
+                sys.stderr.write(f"[ptxd_specialist]   ⚠ loss_jump cycle {row['cycle']} {row['prev_loss']:.3f} → {row['new_loss']:.3f} (×{row['ratio']:.1f})\n")
+            elif rtype == "nan_detected":
+                sys.stderr.write(f"[ptxd_specialist]   ⚠ NaN in {row['source']} @ step {row['step']}\n")
+            elif rtype == "mode_collapse_suspected":
+                sys.stderr.write(f"[ptxd_specialist]   ⚠ mode-collapse suspected @ cycle {row['cycle']} (flat for {row['flat_for_cycles']} cycles)\n")
         else:
             sys.stderr.write(f"[ptxd_specialist] unknown row type: {rtype}\n")
+
+    events_log.write(json.dumps({"type":"job_end","t":time.time()}) + "\n")
+    events_log.close()
+    if any(diagnostic_counts.values()):
+        summary = ", ".join(f"{k}={v}" for k, v in diagnostic_counts.items() if v)
+        sys.stderr.write(f"[ptxd_specialist] diagnostic summary: {summary}\n")
 
     proc.wait(timeout=10)
     if final_result is None:

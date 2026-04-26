@@ -63,6 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     f.ms_per_step, f.wall_ms / 1000.0, f.steps_executed,
                 ),
                 SchedulerEvent::Tick(_) => {} // ignore
+                _ => {} // diagnostic events (lr_change, grad_norm_alert, ...)
             }
         }
     }

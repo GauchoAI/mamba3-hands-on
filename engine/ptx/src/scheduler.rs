@@ -227,12 +227,90 @@ pub struct TickEvent {
     pub queue: usize,
 }
 
+// ---------- Diagnostic events ---------------------------------------------
+//
+// Typed events for observability and (eventually) auto-tuning. Cheap to
+// emit — they ride the existing JSON event stream and only fire on real
+// transitions. Consumers that don't care about them filter on
+// `type` ∈ {"cycle","final"} as before; new consumers can recognise the
+// diagnostic types and react.
+
+/// LR transition — fires when warmup completes or any other schedule edge.
+#[derive(Serialize, Debug, Clone)]
+pub struct LrChangeEvent {
+    #[serde(rename = "type")]
+    pub kind: &'static str,           // "lr_change"
+    pub id: String,
+    pub step: usize,
+    pub lr_eff: f32,
+    pub reason: &'static str,         // "warmup_complete", "schedule_edge"
+}
+
+/// Gradient norm outlier — fires when this batch's pre-clip norm is far
+/// outside the rolling distribution. Useful for catching gradient
+/// explosions before they corrupt training (the existing per-batch clip
+/// caps the *applied* update, but the underlying instability is signal
+/// the auto-tuner can act on).
+#[derive(Serialize, Debug, Clone)]
+pub struct GradNormAlertEvent {
+    #[serde(rename = "type")]
+    pub kind: &'static str,           // "grad_norm_alert"
+    pub id: String,
+    pub step: usize,
+    pub norm: f32,
+    pub recent_mean: f32,
+    pub recent_max: f32,
+}
+
+/// Loss jumped sharply cycle-to-cycle. The threshold (3× ratio) is a
+/// classic divergence signature.
+#[derive(Serialize, Debug, Clone)]
+pub struct LossJumpEvent {
+    #[serde(rename = "type")]
+    pub kind: &'static str,           // "loss_jump"
+    pub id: String,
+    pub cycle: usize,
+    pub prev_loss: f32,
+    pub new_loss: f32,
+    pub ratio: f32,
+}
+
+/// NaN or Inf detected in loss or grad-norm. Fatal-ish — the trainer
+/// already zeroes the update on non-finite norm, but the auto-tuner
+/// should still see the event so it can respond (e.g., halve LR).
+#[derive(Serialize, Debug, Clone)]
+pub struct NanDetectedEvent {
+    #[serde(rename = "type")]
+    pub kind: &'static str,           // "nan_detected"
+    pub id: String,
+    pub step: usize,
+    pub source: &'static str,         // "loss" or "grad_norm"
+}
+
+/// Suspected mode-collapse: loss ≈ log(K) for sustained cycles AND
+/// accuracy stuck near random for an N-position-task. Heuristic.
+#[derive(Serialize, Debug, Clone)]
+pub struct ModeCollapseEvent {
+    #[serde(rename = "type")]
+    pub kind: &'static str,           // "mode_collapse_suspected"
+    pub id: String,
+    pub cycle: usize,
+    pub loss: f32,
+    pub fresh_acc: f32,
+    pub flat_for_cycles: usize,
+}
+
 #[derive(Serialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum SchedulerEvent {
     Cycle(CycleEvent),
     Final(FinalEvent),
     Tick(TickEvent),
+    LrChange(LrChangeEvent),
+    GradNormAlert(GradNormAlertEvent),
+    LossJump(LossJumpEvent),
+    NanDetected(NanDetectedEvent),
+    ModeCollapse(ModeCollapseEvent),
 }
 
 /// One in-flight training job. Owns its model + trainer + dedicated CUDA
@@ -256,6 +334,20 @@ pub struct JobRunner {
     /// Streaming eval-batch reader. None means use the legacy parity-
     /// hardcoded eval. Set by `Job.eval_batches_path`.
     pub eval_batches: Option<BatchReader>,
+    // ---- diagnostic event tracking ----
+    /// Rolling window of recent gradient norms; used to detect outliers.
+    /// Kept short (32 samples ~6.4s of cadence at 200ms/step) — old norms
+    /// stop being meaningful after a regime change.
+    pub recent_grad_norms: std::collections::VecDeque<f32>,
+    /// Loss from the last cycle event we emitted. Used for cycle-over-
+    /// cycle jump detection.
+    pub last_cycle_loss: Option<f32>,
+    /// Track stability (low loss + flat accuracy) so we can detect
+    /// mode-collapse — it's a sustained pattern, not a single-cycle event.
+    pub flat_cycles: usize,
+    /// True after we've already emitted the warmup_complete LR event so
+    /// we don't re-emit on every step past the warmup boundary.
+    pub warmup_complete_emitted: bool,
 }
 
 impl JobRunner {
@@ -402,6 +494,10 @@ impl JobRunner {
             job,
             batches,
             eval_batches,
+            recent_grad_norms: std::collections::VecDeque::with_capacity(32),
+            last_cycle_loss: None,
+            flat_cycles: 0,
+            warmup_complete_emitted: false,
         })
     }
 
@@ -410,7 +506,7 @@ impl JobRunner {
     /// the same behaviour but is NOT the path the slot scheduler uses for
     /// concurrent execution. Use `prepare_one_batch` + `finalize_one_batch`
     /// directly when you want N runners to overlap on the GPU.
-    pub fn advance_one_batch(&mut self) -> Result<Option<SchedulerEvent>, Box<dyn Error>> {
+    pub fn advance_one_batch(&mut self) -> Result<Vec<SchedulerEvent>, Box<dyn Error>> {
         self.prepare_one_batch()?;
         self.finalize_one_batch()
     }
@@ -507,10 +603,51 @@ impl JobRunner {
     /// global-norm clip and per-layer d_scale read — those block ONLY on
     /// this runner's stream, so concurrent runners are unaffected (their
     /// kernels keep running on their own streams during this sync).
-    pub fn finalize_one_batch(&mut self) -> Result<Option<SchedulerEvent>, Box<dyn Error>> {
-        if self.done.is_some() { return Ok(None); }
-        self.trainer.apply_optimizer_step_scaled(1.0 / self.job.batch_size as f32)?;
+    pub fn finalize_one_batch(&mut self) -> Result<Vec<SchedulerEvent>, Box<dyn Error>> {
+        if self.done.is_some() { return Ok(vec![]); }
+        let mut out: Vec<SchedulerEvent> = Vec::new();
+        let grad_norm = self.trainer.apply_optimizer_step_scaled(
+            1.0 / self.job.batch_size as f32,
+        )?;
         self.step += 1;
+
+        // ---- per-batch diagnostics ----
+        // Cheap; only fire on real transitions. Multiple can stack per
+        // batch (e.g., warmup_complete + grad_norm_alert).
+        if !grad_norm.is_finite() {
+            out.push(SchedulerEvent::NanDetected(NanDetectedEvent {
+                kind: "nan_detected", id: self.job.id.clone(),
+                step: self.step, source: "grad_norm",
+            }));
+        } else {
+            if self.recent_grad_norms.len() == 32 {
+                self.recent_grad_norms.pop_front();
+            }
+            self.recent_grad_norms.push_back(grad_norm);
+            if self.recent_grad_norms.len() >= 8 && grad_norm > 2.0 {
+                let mean: f32 = self.recent_grad_norms.iter().sum::<f32>()
+                    / self.recent_grad_norms.len() as f32;
+                let max:  f32 = self.recent_grad_norms.iter().cloned().fold(0.0_f32, f32::max);
+                if grad_norm > 3.0 * mean.max(0.5) {
+                    out.push(SchedulerEvent::GradNormAlert(GradNormAlertEvent {
+                        kind: "grad_norm_alert", id: self.job.id.clone(),
+                        step: self.step, norm: grad_norm,
+                        recent_mean: mean, recent_max: max,
+                    }));
+                }
+            }
+        }
+        if !self.warmup_complete_emitted
+            && self.step as u32 == self.trainer.warmup_steps
+            && self.trainer.warmup_steps > 0
+        {
+            self.warmup_complete_emitted = true;
+            out.push(SchedulerEvent::LrChange(LrChangeEvent {
+                kind: "lr_change", id: self.job.id.clone(),
+                step: self.step, lr_eff: self.trainer.lr,
+                reason: "warmup_complete",
+            }));
+        }
 
         if self.step % 200 == 0 {
             self.last_loss = self.trainer.read_last_loss_blocking()?
@@ -519,6 +656,51 @@ impl JobRunner {
             if acc > self.best_acc { self.best_acc = acc; }
             let stage = &self.stages[self.stage_idx];
             let cycle = self.step / 200;
+
+            // Cycle-over-cycle diagnostics — fire BEFORE pushing the cycle
+            // event so a downstream auto-tuner can see "loss jumped" then
+            // "here are the new numbers" in order.
+            if !self.last_loss.is_finite() {
+                out.push(SchedulerEvent::NanDetected(NanDetectedEvent {
+                    kind: "nan_detected", id: self.job.id.clone(),
+                    step: self.step, source: "loss",
+                }));
+            }
+            if let Some(prev) = self.last_cycle_loss {
+                if prev.is_finite() && self.last_loss.is_finite() && prev > 0.05 {
+                    let ratio = self.last_loss / prev;
+                    // 3× ratio AND absolute jump > 0.5: catches divergences
+                    // without firing on tiny noise around very-low losses.
+                    if ratio > 3.0 && (self.last_loss - prev).abs() > 0.5 {
+                        out.push(SchedulerEvent::LossJump(LossJumpEvent {
+                            kind: "loss_jump", id: self.job.id.clone(),
+                            cycle, prev_loss: prev, new_loss: self.last_loss, ratio,
+                        }));
+                    }
+                }
+            }
+            self.last_cycle_loss = Some(self.last_loss);
+
+            // Mode-collapse heuristic: loss within 10% of log(2) (binary task
+            // floor) AND accuracy near the K-class random baseline (50% for
+            // binary). Sustained across N cycles before we fire so a single
+            // unlucky cycle doesn't trigger.
+            let loss_log2 = (2.0_f32).ln();  // ≈ 0.693
+            let near_log2 = (self.last_loss - loss_log2).abs() < 0.1 * loss_log2;
+            let near_random_acc = (acc - 0.5).abs() < 0.08;
+            if near_log2 && near_random_acc {
+                self.flat_cycles += 1;
+                if self.flat_cycles == 4 {
+                    out.push(SchedulerEvent::ModeCollapse(ModeCollapseEvent {
+                        kind: "mode_collapse_suspected", id: self.job.id.clone(),
+                        cycle, loss: self.last_loss, fresh_acc: acc,
+                        flat_for_cycles: self.flat_cycles,
+                    }));
+                }
+            } else {
+                self.flat_cycles = 0;
+            }
+
             let event = CycleEvent {
                 kind: "cycle",
                 id: self.job.id.clone(),
@@ -537,7 +719,8 @@ impl JobRunner {
                 self.done = Some(self.make_final("converged"));
                 self.try_save_bin();
             }
-            return Ok(Some(SchedulerEvent::Cycle(event)));
+            out.push(SchedulerEvent::Cycle(event));
+            return Ok(out);
         }
         if self.step >= self.job.steps {
             // End-of-budget eval, in case the job ran fewer steps than the
@@ -555,7 +738,7 @@ impl JobRunner {
             ));
             self.try_save_bin();
         }
-        Ok(None)
+        Ok(out)
     }
 
     /// Write final weights to job.save_bin (if set). Best-effort — a write
@@ -958,9 +1141,8 @@ impl Scheduler {
         // Phase 2: finalize.
         let mut i = 0;
         while i < self.running.len() {
-            if let Some(ev) = self.running[i].finalize_one_batch()? {
-                events.push(ev);
-            }
+            let evs = self.running[i].finalize_one_batch()?;
+            events.extend(evs);
             if self.running[i].is_done() {
                 let job = &self.running[i].job;
                 self.used_mem = self.used_mem.saturating_sub(estimate_job_memory_bytes(job));

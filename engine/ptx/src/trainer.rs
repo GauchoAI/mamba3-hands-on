@@ -663,14 +663,17 @@ impl PtxTrainer {
     /// gradients (each call advances moments).  Uses uniform weight decay
     /// across all params (see comment inside).
     pub fn apply_optimizer_step(&mut self) -> Result<(), Box<dyn Error>> {
-        self.apply_optimizer_step_scaled(1.0)
+        self.apply_optimizer_step_scaled(1.0).map(|_| ())
     }
 
     /// AdamW step with an extra gradient multiplier folded into the global-norm
     /// clip factor. Use with gradient accumulation: after summing grads across
     /// B samples, pass `1.0 / B` to average — produces the same effective step
     /// as PyTorch's per-batch backward (one AdamW step per batch, not B).
-    pub fn apply_optimizer_step_scaled(&mut self, extra_g_mul: f32) -> Result<(), Box<dyn Error>> {
+    /// Returns the pre-clip global gradient L2 norm so the caller (JobRunner)
+    /// can emit diagnostic events when training is going wrong (gradient
+    /// explosion, NaN, etc.) without re-computing it.
+    pub fn apply_optimizer_step_scaled(&mut self, extra_g_mul: f32) -> Result<f32, Box<dyn Error>> {
         // step is incremented here (not in compute_gradients_with_zero) so
         // gradient accumulation across a mini-batch counts as ONE step.
         self.step += 1;
@@ -880,7 +883,7 @@ impl PtxTrainer {
             let p_new = p - lr_eff * m_hat / (v_hat.sqrt() + self.eps);
             self.model.layers[li].scale = p_new;
         }
-        Ok(())
+        Ok(total_norm)
     }
 
     fn zero_gradient_buffers(

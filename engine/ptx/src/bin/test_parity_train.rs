@@ -273,7 +273,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             // Single AdamW step for the whole mini-batch. extra_g_mul = 1/B
             // averages the accumulated sum, matching PyTorch batched semantics.
-            trainer.apply_optimizer_step_scaled(1.0 / args.batch_size as f32)?;
+            let _ = trainer.apply_optimizer_step_scaled(1.0 / args.batch_size as f32)?;
             // last_loss is the cumulative sum of n_active_per_sample-normalised
             // losses across the batch. Divide by batch size for mean.
             total_loss += last_loss / args.batch_size as f32;

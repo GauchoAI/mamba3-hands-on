@@ -93,7 +93,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 targets[ap as usize] = ans;
                 last_loss = trainer.accumulate_gradients(&tokens, &targets)?;
             }
-            trainer.apply_optimizer_step_scaled(1.0 / batch as f32)?;
+            let _ = trainer.apply_optimizer_step_scaled(1.0 / batch as f32)?;
             cycle_loss += (last_loss / batch as f32) as f64;
         }
         let avg_loss = cycle_loss / steps_per_cycle as f64;
