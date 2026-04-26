@@ -1,0 +1,8 @@
+name: pair_logic_gate
+type: generator
+generator: compose_logic_gate:gen_pair_logic_gate
+target_accuracy: 0.95
+tags: [reasoning, composition, synapse-test, parallel]
+description: "Two parallel gate sub-questions. Both stay inside the logic_gate specialist's native input distribution; isolates 'router uses specialist twice' from 'specialist destabilizes on alien input'."
+curriculum:
+  - {stage: 1, dummy: 0, advance_at: 0.95}

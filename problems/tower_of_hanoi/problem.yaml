@@ -21,3 +21,9 @@ curriculum:
   # architecture supports the algorithm and only the data was missing.
   - {stage: 7, n_disks: 30, advance_at: 0.90}
   - {stage: 8, n_disks: 50, advance_at: 0.90}
+  # Push to n=100. At n_disks=100 the answer is a 31-digit number.
+  # The cliff at n=40 was "EOS prediction breaks past 12 digits";
+  # this stage forces 31-digit outputs, so the model must learn EOS
+  # at all answer lengths from 1 to 31.
+  - {stage: 9, n_disks: 75, advance_at: 0.90}
+  - {stage: 10, n_disks: 100, advance_at: 0.90}

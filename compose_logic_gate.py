@@ -69,6 +69,26 @@ def gen_compose_logic_gate_3():
     }
 
 
+def gen_pair_logic_gate():
+    """Two PARALLEL gate sub-questions — both stay inside the
+    logic_gate specialist's native input distribution, so its
+    hidden state should be well-defined at every position.
+
+        Input  : PAIR op1 a b op2 c d
+        Output : "<r1> <r2>"
+    """
+    op1 = random.choice(GATES)
+    op2 = random.choice(GATES)
+    a, b, c, d = (random.randint(0, 1) for _ in range(4))
+    r1 = _apply(op1, a, b)
+    r2 = _apply(op2, c, d)
+    return {
+        "type": "pair_logic_gate",
+        "input": f"PAIR {op1} {a} {b} {op2} {c} {d}",
+        "output": f"{r1} {r2}",
+    }
+
+
 if __name__ == "__main__":
     # Sanity sample
     for _ in range(8):
