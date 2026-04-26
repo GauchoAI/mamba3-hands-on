@@ -495,7 +495,7 @@ stage 2 (len 3-8)    2 cycles  77→98%  (carryover)
 stage 3 (len 4-16)   6 cycles  83→96%  (generalisation)
 ```
 
-**Commit:** `(R-4 fix-commit pending — ptxd_specialist run_curriculum_mode)`
+**Commit:** `94c16ee` — *R-4 (FIXED): ptxd_specialist + curriculum mode = parity from scratch in 26s*
 
 **Lesson:** Three bugs compounding. Each one alone wouldn't have
 killed it; together they made the integration look impossible. The
