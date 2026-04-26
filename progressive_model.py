@@ -158,6 +158,25 @@ class ProgressiveModel(nn.Module):
         x = self.final_norm(x)
         return self.head(x)
 
+    def forward_from_hidden(self, x):
+        """Run the SSM stack starting from a continuous hidden state — i.e.
+        skip token embedding and the LM head. Returns the post-final-norm
+        hidden state shape `(B, L, d_model)`.
+
+        Used by the synapse architecture: a router projects its own state
+        into this model's d_model space (via a learned `W_send`), invokes
+        this method, and reads back a continuous representation through
+        `W_recv`. No tokens transit between models — just register-space
+        vectors. The model stays frozen; only the bridges learn.
+        """
+        for layer in self.kernel_layers:
+            scale = layer["scale"][0]
+            x = x + scale * layer["block"](layer["norm"](x))
+        for layer in self.cortex_layers:
+            scale = layer["scale"][0]
+            x = x + scale * layer["block"](layer["norm"](x))
+        return self.final_norm(x)
+
     def total_params(self) -> int:
         return sum(p.numel() for p in self.parameters())
 
