@@ -130,8 +130,7 @@ init scaling does not touch.
 
 R-1 is logged as PARTIAL. R-2 is opened for the residual problem.
 
-**Commit:** see git log; this entry references the apply_pytorch_init
-out_proj/scale fix in scheduler.rs::apply_pytorch_init.
+**Commit:** `75f6c7f` — *R-1 (PARTIAL): apply_pytorch_init out_proj scale × 0.01, layer.scale 0.1 → 0.01*
 
 **Stamp:** *Two off-by-100×s hiding in plain sight inside an init function
 that "matched PyTorch defaults." The event stream dragged them into
