@@ -193,19 +193,24 @@ class RouterModel(nn.Module):
         no_grad. Returns a list of (B, L, d_spec) tensors, one per
         specialist. Used by the AttendBridge path.
 
+        We use `forward_hidden(tokens)` — a unified entry point both
+        ProgressiveModel and RouterModel implement. For a RouterModel
+        specialist this fires its own internal synapses too, so the
+        higher-order router sees the inner router's *composed*
+        representation, not just its base SSM. That's the recursion
+        primitive: a router at level N is just another specialist at
+        level N+1.
+
         Specialists trained on a narrow input distribution can NaN
-        when fed unfamiliar prefixes (e.g. count_above_threshold
-        destabilizes on the `DUAL OR 0 1 ;` prefix from `dual_task`).
-        We zero out NaNs so the bridge sees "specialist had nothing
-        useful at these positions" rather than poisoning the router
-        with NaN. The gate is free to close at those positions if the
-        signal is consistently zero.
+        when fed unfamiliar prefixes. We zero out NaNs so the bridge
+        sees "specialist had nothing useful at these positions"
+        rather than poisoning the router with NaN. The gate is free
+        to close at those positions if the signal is consistently zero.
         """
         outs = []
         for sp in self.specialists:
             with torch.no_grad():
-                x_sp = sp.embed_norm(sp.embed(tokens))
-                x_sp = sp.forward_from_hidden(x_sp)
+                x_sp = sp.forward_hidden(tokens)
                 x_sp = torch.nan_to_num(x_sp, nan=0.0, posinf=0.0, neginf=0.0)
             outs.append(x_sp)
         return outs
@@ -247,6 +252,40 @@ class RouterModel(nn.Module):
                 out.append(float(g.mean()))
         return out
 
+    # ── Recursion: a RouterModel can itself be a specialist for a
+    # higher-order RouterModel. We expose `d_model` and a
+    # `forward_hidden(tokens)` that runs end-to-end with our own
+    # synapses firing — so the outer router sees our COMPOSED
+    # capability, not just our base SSM.
+
+    @property
+    def d_model(self):
+        return self.base.d_model
+
+    def forward_hidden(self, tokens):
+        """Run the full router (base + synapses) and return the
+        post-final-norm hidden state. Skips the LM head. Used when this
+        router is plugged in as a specialist for a higher-order router."""
+        # Pre-compute child specialist hiddens (their own forward_hidden
+        # if they're routers, or plain forward_from_hidden if leaves).
+        spec_hiddens = (self._specialist_hiddens(tokens)
+                        if self.bridge_kind == "attend" else None)
+        x = self.base.embed_norm(self.base.embed(tokens))
+        kernel = list(self.base.kernel_layers)
+        for i, layer in enumerate(kernel):
+            scale = layer["scale"][0]
+            x = x + scale * layer["block"](layer["norm"](x))
+            if i == self.synapse_after_layer:
+                for j, (sp, br) in enumerate(zip(self.specialists, self.bridges)):
+                    if self.bridge_kind == "attend":
+                        x = x + br(x, spec_hiddens[j])
+                    else:
+                        x = x + br(x, sp)
+        for layer in self.base.cortex_layers:
+            scale = layer["scale"][0]
+            x = x + scale * layer["block"](layer["norm"](x))
+        return self.base.final_norm(x)
+
 
 def load_specialist(pt_path: str | Path, device: str = "cpu") -> ProgressiveModel:
     """Load a saved .pt as a frozen ProgressiveModel ready to be
@@ -267,3 +306,31 @@ def load_specialist(pt_path: str | Path, device: str = "cpu") -> ProgressiveMode
     for p in model.parameters():
         p.requires_grad = False
     return model
+
+
+def load_router_as_specialist(pt_path: str | Path, device: str = "cpu") -> "RouterModel":
+    """Load a saved router (trained via `train_router.py --save-to`) and
+    return it as a frozen RouterModel suitable for being used as a
+    specialist by a higher-order router.
+
+    The saved router carries paths to ITS own specialists (the leaf
+    .pt files). We re-instantiate them recursively so the loaded router
+    has the full computational graph live for forward_hidden().
+    """
+    ck = torch.load(str(pt_path), map_location=device, weights_only=False)
+    inner_specialists = [
+        load_specialist(p, device=device) for p in ck.get("specialist_paths", [])
+    ]
+    inner = RouterModel(
+        router_d_model=ck["router_d_model"],
+        router_d_state=ck["router_d_state"],
+        router_headdim=ck["router_headdim"],
+        router_n_layers=ck["router_n_layers"],
+        specialists=inner_specialists,
+        bridge_kind=ck.get("bridge_kind", "attend"),
+    ).to(device)
+    inner.load_state_dict(ck["router_state_dict"])
+    inner.eval()
+    for p in inner.parameters():
+        p.requires_grad = False
+    return inner

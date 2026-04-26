@@ -162,12 +162,6 @@ class ProgressiveModel(nn.Module):
         """Run the SSM stack starting from a continuous hidden state — i.e.
         skip token embedding and the LM head. Returns the post-final-norm
         hidden state shape `(B, L, d_model)`.
-
-        Used by the synapse architecture: a router projects its own state
-        into this model's d_model space (via a learned `W_send`), invokes
-        this method, and reads back a continuous representation through
-        `W_recv`. No tokens transit between models — just register-space
-        vectors. The model stays frozen; only the bridges learn.
         """
         for layer in self.kernel_layers:
             scale = layer["scale"][0]
@@ -176,6 +170,17 @@ class ProgressiveModel(nn.Module):
             scale = layer["scale"][0]
             x = x + scale * layer["block"](layer["norm"](x))
         return self.final_norm(x)
+
+    def forward_hidden(self, tokens):
+        """Run the model end-to-end (token in, hidden state out) without
+        the LM head. Returns the post-final-norm hidden state shape
+        `(B, L, d_model)`. This is the entry point a higher-order router
+        uses when this model is plugged in as a specialist via AttendBridge
+        — it runs on its native input distribution and exposes its
+        representation, not its predicted logits.
+        """
+        x = self.embed_norm(self.embed(tokens))
+        return self.forward_from_hidden(x)
 
     def total_params(self) -> int:
         return sum(p.numel() for p in self.parameters())

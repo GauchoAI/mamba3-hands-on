@@ -20,7 +20,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 
 from progressive_model import ByteTokenizer, PAD
-from synapse import RouterModel, load_specialist
+from synapse import RouterModel, load_specialist, load_router_as_specialist
 
 
 def load_generator(task):
@@ -74,7 +74,23 @@ def main():
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
     ap.add_argument("--eval-every", type=int, default=50)
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Set torch / random seed for reproducibility")
+    ap.add_argument("--save-to", default=None,
+                    help="If set, save the trained router to this .pt path so "
+                         "a higher-order router can use it as a specialist "
+                         "(recursion).")
+    ap.add_argument("--load-router-as-specialist", default=None,
+                    help="Use a previously-saved router (--save-to file) as "
+                         "this run's specialist. Recursion: the previously-"
+                         "trained router becomes the callee.")
     args = ap.parse_args()
+    if args.seed is not None:
+        import random as _r
+        torch.manual_seed(args.seed)
+        _r.seed(args.seed)
+        if torch.backends.mps.is_available():
+            torch.mps.manual_seed(args.seed)
 
     print(f"Task:           {args.task}")
     print(f"Router:         d={args.router_d_model}, L={args.router_layers}")
@@ -86,14 +102,21 @@ def main():
 
     specialists = []
     if not args.no_synapse:
-        pt_paths = (args.specialists if args.specialists
-                    else [args.specialist_pt or f"checkpoints/specialists/{args.task}.pt"])
-        for pt in pt_paths:
-            if not Path(pt).exists():
-                raise SystemExit(f"specialist not found: {pt}")
-            sp = load_specialist(pt, device=args.device)
+        if args.load_router_as_specialist:
+            pt_paths = [args.load_router_as_specialist]
+            sp = load_router_as_specialist(args.load_router_as_specialist, device=args.device)
             specialists.append(sp)
-            print(f"Specialist:     {pt} (d={sp.d_model}, frozen)")
+            print(f"Specialist:     {args.load_router_as_specialist} (RECURSIVE: a "
+                  f"saved router used as the inner specialist; d={sp.d_model})")
+        else:
+            pt_paths = (args.specialists if args.specialists
+                        else [args.specialist_pt or f"checkpoints/specialists/{args.task}.pt"])
+            for pt in pt_paths:
+                if not Path(pt).exists():
+                    raise SystemExit(f"specialist not found: {pt}")
+                sp = load_specialist(pt, device=args.device)
+                specialists.append(sp)
+                print(f"Specialist:     {pt} (d={sp.d_model}, frozen)")
 
     router = RouterModel(
         router_d_model=args.router_d_model,
@@ -174,6 +197,26 @@ def main():
     out_path.write_text(json.dumps(out, indent=2))
     print(f"\nResult: final acc = {history[-1]['acc']:.1%}")
     print(f"Saved {out_path}")
+
+    # Optionally save the trained router so a higher-order router can
+    # plug into it (recursion test). We save a self-contained ckpt:
+    # the router's own state + the paths to its specialists, so the
+    # next layer can re-instantiate the full graph.
+    if args.save_to:
+        save_dir = Path(args.save_to).parent
+        save_dir.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            "router_state_dict": router.state_dict(),
+            "router_d_model": args.router_d_model,
+            "router_d_state": 16,
+            "router_headdim": 16,
+            "router_n_layers": args.router_layers,
+            "specialist_paths": [str(p) for p in pt_paths] if not args.no_synapse else [],
+            "bridge_kind": args.bridge_kind,
+            "task": args.task,
+            "final_acc": history[-1]["acc"],
+        }, args.save_to)
+        print(f"Saved router → {args.save_to}")
 
 
 if __name__ == "__main__":
