@@ -84,8 +84,9 @@ class ModelRegistry:
         """Check if a teacher exists for this task (on any node).
 
         Order of checks:
-          1. Local .pt with non-zero accuracy — most authoritative on the
-             Mac branch where Firebase may be offline.
+          1. Local .pt with non-zero accuracy AND non-NaN weights — the
+             accuracy field can lie if the file was saved during a NaN
+             training run, so we *also* scan state_dict.
           2. Firebase teacher index — for the cluster setup where peer
              Macs publish their mastered checkpoints.
         """
@@ -94,7 +95,13 @@ class ModelRegistry:
             try:
                 ck = torch.load(str(local_path), map_location="cpu", weights_only=False)
                 if float(ck.get("accuracy", 0.0)) > 0.0:
-                    return True
+                    sd = ck.get("model", {})
+                    has_nan = any(
+                        torch.isnan(v).any().item() if v.is_floating_point() else False
+                        for v in sd.values()
+                    )
+                    if not has_nan:
+                        return True
             except Exception:
                 pass
         return task in self._refresh_index()
@@ -217,6 +224,20 @@ class ModelRegistry:
             config = ckpt.get("config", {})
             accuracy = ckpt.get("accuracy", 0)
 
+            # NaN-quarantine: if the saved teacher contains NaN weights,
+            # refuse to use it. Loading a NaN teacher would poison the
+            # student's distillation loss with NaN immediately.
+            sd = ckpt.get("model", {})
+            has_nan = any(
+                torch.isnan(v).any().item() if v.is_floating_point() else False
+                for v in sd.values()
+            )
+            if has_nan:
+                print(f"  TEACHER QUARANTINE: {local_path} contains NaN "
+                      f"weights (reported acc={accuracy:.0%} is stale). "
+                      f"Falling back to no-distillation training.", flush=True)
+                return None
+
             model = ProgressiveModel(
                 d_model=config.get("d_model", 64),
                 d_state=config.get("d_state", 16),
@@ -225,7 +246,7 @@ class ModelRegistry:
             ).to(device)
             for _ in range(config.get("n_kernel_layers", 1)):
                 model.add_kernel_layer()
-            model.load_state_dict(ckpt["model"])
+            model.load_state_dict(sd)
             model.eval()
 
             return model, config, accuracy
