@@ -15,3 +15,9 @@ curriculum:
   - {stage: 4, n_disks: 12, advance_at: 0.90}
   - {stage: 5, n_disks: 16, advance_at: 0.90}
   - {stage: 6, n_disks: 20, advance_at: 0.90}
+  # Push further. At n_disks=50 the answer is a 16-digit number;
+  # memorization costs grow super-linearly while computation is free.
+  # If the cliff keeps tracking the curriculum boundary, the
+  # architecture supports the algorithm and only the data was missing.
+  - {stage: 7, n_disks: 30, advance_at: 0.90}
+  - {stage: 8, n_disks: 50, advance_at: 0.90}

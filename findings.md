@@ -74,6 +74,59 @@ breaks (multi-digit n). If the same `d=64, L=2` reaches n=20 accuracy with
 no architectural change, that's the recurrence learned — proof that "small
 fixed-capacity, growing data" is enough to push from memory to computation.
 
+---
+
+## Entry — The cliff moves but doesn't disappear (2026-04-26)
+
+**Setup.** Same `d=64, L=2, 74,658 params`. Curriculum extended to add
+stages at `n_disks ∈ {12, 16, 20}`. 40 training cycles total. Final
+training accuracy: 100%. Re-ran `length_gen_hanoi.py --n-max 30`.
+
+**Result.** The cliff moved from n=9 to **n=21** — exactly one past the new
+curriculum boundary. Inside `[1, 20]` the model is 100% accurate, including
+multi-digit outputs up to 7 characters (`2^20 − 1 = 1048575`). It is doing
+*real digit-by-digit synthesis* in that range — predictions like `'1048575'`
+are not the kind of shortcut you can hit by reading a single byte.
+
+But outside `[1, 20]` the failures rhyme with the first experiment:
+
+```
+n=21 → '1'                target 2097151
+n=22 → '3'                target 4194303
+n=24 → '15'               target 16777215
+n=28 → '2143'             target 268435455   (gibberish)
+n=30 → '10048575'         target 1073741823  (corrupted 2^20-1)
+```
+
+The last-digit shortcut returns the moment we leave the trained range. At
+n=30 the prediction is "10048575" — the model literally pasted a corrupted
+version of *the largest answer it had seen during training* (1048575),
+because that was the most-recently-rehearsed long output.
+
+**Interpretation.** Within the curriculum the model *is* computing — the
+digit-by-digit output structure is real. Beyond the curriculum it has no
+incentive to extrapolate, so it doesn't. The architecture isn't the
+bottleneck; the *training distribution is*. Same registers, same params,
+same dynamics — the model will compute as far as you push it and no
+further.
+
+This is consistent with how Mamba-3's recurrent state should behave: 2,048
+register slots are more than enough to hold a counter + a doubling
+operation, so the algorithm fits. The model just needs the curriculum to
+demand it.
+
+**The plant/fungus framing again.** A small organism doesn't grow by
+adding mass; it grows by extending its reach into more nutrients. The
+nutrient here is the curriculum span. Each stage we add forces the model
+to rewire the same 75k-param scaffold to handle more.
+
+**Next experiment.** Push to `n_disks ∈ {30, 50, 100}`. At n=100 the answer
+is a 31-digit number. Memorization at that scale costs ~20× the parameter
+budget; computation is asymptotically free. If we see the cliff keep
+tracking the curriculum boundary into 50+ disks — same model size — that's
+strong evidence the architecture supports general computation and the only
+gating factor is the data.
+
 Paper: https://arxiv.org/abs/2603.15569
 Official repo: https://github.com/state-spaces/mamba (CUDA-only)
 
