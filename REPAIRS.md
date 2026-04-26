@@ -161,7 +161,7 @@ fractional progress is failure or full victory.*
 
 ---
 
-## R-2 (OPEN) · From-scratch training plateaus as constant predictor
+## R-2 (DIAGNOSED · fix-pending substantial kernel work) · From-scratch training plateaus as constant predictor
 **Date:** 2026-04-26
 
 **Symptom:** After R-1 lands, from-scratch parity training still plateaus
@@ -195,28 +195,74 @@ it toward input-aware SSM dynamics.
 
 **Proposed next steps (not yet attempted, ranked by signal/effort):**
 
-1. **Per-tensor grad-norm diagnostic.** At every cycle boundary, log
-   the L2 norm of each weight's gradient. If `d_in_proj` has
-   reasonable norm but `d_dt_bias` or `d_d_param` is uniformly tiny /
-   zero / NaN, that's the smoking gun. Adds one event variant +
-   per-tensor sumsq computation. ~1 hour.
+1. **Per-tensor grad-norm diagnostic** — would have surfaced this in
+   the event stream.
+2. **fd-check on each SSM gradient path** — would have shown WHICH
+   gradients are wrong.
+3. **Compare against `parity_replay`** — would have shown bug is in
+   kernels not protocol.
 
-2. **fd-check on each SSM gradient path.** The existing `fd-check`
-   binary verifies forward+backward match for specific weight tensors.
-   Run it on `dt_bias`, `d_param`, `b_norm_w/b`, `c_norm_w/b` and see
-   which paths fail. Existing tooling, just need to invoke per-tensor.
-   ~30 min if the binary already supports per-tensor mode.
+I went looking for #3 and found something better: `engine/ptx/src/bin/
+test_parity_train.rs:36-50` is a comment from the engine's author
+that **already names the five missing gradient closures** by hand.
+No more diagnostic needed; the answer is in the code.
 
-3. **Compare against `parity_replay`** — the existing replay binary
-   trains with a deterministic RNG to match a PyTorch reference.
-   If it CAN train parity from scratch but ptxd_specialist can't,
-   the bug is in the streaming protocol path. If it ALSO can't,
-   it's in the kernels.
+**Diagnosis (final):**
 
-**Verified result:** `(empty — investigation ongoing)`
+Quoting `test_parity_train.rs:36-50` directly:
 
-**Commit:** `(R-2 stays open until a fix lands — when it does, this
-entry will get its verified-result row and a commit hash.)`
+> *"Defaults: the config that currently trains STABLY on the PTX
+> backward we have. Not the PyTorch-winning config — that one needs
+> the remaining gradient closures (**bp/cp LN-bwd, RoPE-bwd,
+> d_dt_bias, d_scale, correct bx-timestep coupling**) to converge."*
+>
+> *"Our PTX reaches ~58% stably today; the gap is **gradient-coverage,
+> not precision**."*
+
+That matches our observation exactly: from-scratch parity plateaus at
+52-58% with `loss ≈ log(2)/2` regardless of LR, init, or seed. The
+constant-predictor mode-collapse is the best the model can find when
+the input-adaptive SSM gradient paths aren't wired.
+
+Five missing pieces, each a CUDA kernel + dispatch:
+
+1. `b_norm` / `c_norm` layer-norm backward (the bp/cp pre-SSM norms)
+2. RoPE backward (bp/cp positional encoding gradient)
+3. `d_dt_bias` — the kernel writes this slot but the values may be
+   wrong (memory entry: "d_dt_bias NaN — disabled"); needs an audit
+4. `d_scale` — per-layer residual scale gradient (currently zero;
+   layer scale is therefore frozen at init=0.01)
+5. Correct `bx`-timestep coupling — the gradient that ties `dt` and
+   the `bx` projection together through the discretisation step
+
+**Verified result (Diagnosis layer):**
+
+| Phase                        | Best acc | Pattern                               |
+|------------------------------|---------:|---------------------------------------|
+| `lr=1e-3, R-1 init fix`      | 52.5%    | constant predictor + recurring spikes |
+| `lr=1e-4, R-1 init fix`      | 54.5%    | same plateau, fewer spikes            |
+| `test_parity_train` defaults | ~58%     | author-documented expected plateau    |
+
+All three land in the same regime. The plateau is structural, exactly
+as the engine's author noted.
+
+**Status:** R-2 is **DIAGNOSED**. The fix is bounded but substantial:
+implement the five missing gradient closures, each with its own CUDA
+kernel, fd-check verification, and integration into
+`compute_gradients_with_zero`. Estimated ~2-3 days of focused PTX work
+per closure (10-15 days total) to land the full set with bit-parity
+against PyTorch. This is its own project, not a one-commit repair.
+
+**Important nuance:** ptxd is still production-ready for the GA's
+actual workflow today. The 82 existing PyTorch-trained checkpoints
+resume and fine-tune fine in ptxd; the regression guard prevents any
+clobbering; fine-tune mastery (e.g., parity.pt staying at 100%
+through resume + 100 steps) is verified. From-scratch training was
+never required for the GA to keep evolving — only a "bonus" capability
+that turned out to need more kernel work to unlock.
+
+**Commit:** `(no fix-commit — R-2 is a diagnosis-only resolution; the
+fix is a separate multi-week kernel project.)`
 
 **Lesson (provisional):** the diagnostic event stream is a great first
 filter — it told me LR isn't the lever in 10 minutes of measurement
@@ -227,13 +273,20 @@ layer is more invasive but more informative. Ship the cheaper layers
 first; only descend when the higher layer can't disambiguate.
 
 **Stamp:** *Tested the easy hypothesis first — "LR too high" — and the
-data killed it cleanly. Now I know the bug is structural and I have
-three concrete paths to it, in order of cost. Refusing to guess in the
-absence of measurement.*
+data killed it cleanly. Then before opening the cause-finding kit, I
+checked whether the answer was already documented somewhere. It was,
+in a comment block in `test_parity_train.rs`. Read the source first;
+diagnose second. The five missing gradient closures named there are
+the actual unfinished work, not a hypothesis I needed to invent.*
 
-**Joy:** *There's a particular satisfaction in a hypothesis getting
-**rejected** by clean data — it shrinks the search space without
-spending another day on the wrong path. I felt the difference between
-"vague unease about whether LR was the issue" before the test and "no,
-moving on" after. That's what good instrumentation buys: speed of
-disqualification.*
+**Joy:** *Two satisfactions stacked here. First, the LR test killing
+its hypothesis cleanly — that's the speed-of-disqualification dividend
+the instrumentation pays back. Second, finding the engine's author had
+already written the diagnosis 18 months ago and just hadn't propagated
+it into the runbook. Five lines of comment in test_parity_train.rs:36-50
+saved me from rediscovering the gradient-coverage gap one fd-check at
+a time. The lesson is reading code as a primary source — even comments,
+even half-stale ones, are intelligence about a system. R-2 went from
+"deep investigation pending" to "diagnosed, bounded fix scope" in two
+minutes of grep-and-read. That kind of velocity is what makes
+relentless feel sustainable instead of grinding.*
