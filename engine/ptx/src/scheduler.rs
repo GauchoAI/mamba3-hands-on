@@ -1208,8 +1208,13 @@ fn apply_pytorch_init(model: &mut Mamba3Model, seed: u64) {
     for w in model.embed_w.iter_mut() {
         *w = next_normal();
     }
+    // Per-layer residual scale. ProgressiveModel._make_layer initializes
+    // `scale = nn.Parameter(torch.tensor(0.01))` so each new SSM layer is
+    // near-identity at init (the residual barely contributes). The earlier
+    // 0.1 here was 10× too large and caused fresh-init gradient explosion
+    // — diagnosed via the new event stream (Entry 55).
     for layer in model.layers.iter_mut() {
-        layer.scale = 0.1;
+        layer.scale = 0.01;
     }
     let d = model.d_model;
     for layer in model.layers.iter_mut() {
@@ -1218,7 +1223,14 @@ fn apply_pytorch_init(model: &mut Mamba3Model, seed: u64) {
         for w in layer.in_proj_w.iter_mut() {
             *w = (lcg() * 2.0 - 1.0) * in_proj_bound;
         }
-        let out_proj_bound = (1.0f32 / di as f32).sqrt();
+        // ProgressiveModel._make_layer does block.out_proj.weight.mul_(0.01)
+        // AFTER the default Kaiming init — we replicate that: standard
+        // uniform init scaled down by 100× so the residual contribution is
+        // tiny at step 0. Without this, the very first forward pass emits
+        // logits with d_inner-times-too-large variance, the CE backward
+        // produces enormous gradients, and training collapses before the
+        // optimizer can recover.
+        let out_proj_bound = (1.0f32 / di as f32).sqrt() * 0.01;
         for w in layer.out_proj_w.iter_mut() {
             *w = (lcg() * 2.0 - 1.0) * out_proj_bound;
         }
