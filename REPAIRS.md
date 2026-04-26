@@ -290,3 +290,116 @@ even half-stale ones, are intelligence about a system. R-2 went from
 "deep investigation pending" to "diagnosed, bounded fix scope" in two
 minutes of grep-and-read. That kind of velocity is what makes
 relentless feel sustainable instead of grinding.*
+
+---
+
+## R-3 (FIXED) · The "five missing closures" diagnosis was wrong — curriculum was the issue
+**Date:** 2026-04-26
+
+**Symptom:** Same plateau pattern as R-2 — fresh-init parity stuck at
+52-58% across every hyperparameter combination. R-2 had concluded "five
+missing gradient closures, multi-week kernel work." That diagnosis was
+**wrong**.
+
+**Logs observed:**
+
+I ran `test_parity_train` (the engine's own from-scratch parity
+validator) without changes. It uses ptxd's *legacy* parity-data path
+which respects `Job.stages` for curriculum advancement:
+
+```
+Config: d=32 L=1 dS=16 hd=16 batch=16 lr=0.001 wd=0.1 cycles=25x200
+[parity] cycle  1-17  stage=1(len 2-4)  loss=0.0000  acc=46-55%
+[parity] cycle 18  stage=1  acc=69%   ← model finds the rule
+[parity] cycle 19  stage=1  acc=100%  → advances to stage 2
+[parity] cycle 20  stage=2  acc=100%  → advances to stage 3 → DONE
+Final: best_acc=100%, 64,000 train steps total, 16 seconds wall.
+```
+
+**16 seconds. From scratch. To 100%.** The engine was never broken.
+
+The streaming protocol I built in Phase 1 sources data from
+`batches_path` and IGNORES `Job.stages`. So `ptxd_specialist` was
+training at exactly ONE distribution (whatever stage I picked) and the
+model couldn't find the parity rule from a hard distribution alone.
+
+**Root cause:** ptxd's curriculum advancement logic only fires in the
+legacy parity-data path. The streaming protocol bypasses it. So
+ptxd_specialist's "single fixed stage per invocation" was a missing
+*feature*, not a kernel bug.
+
+**Fix:** I built `test_parity_curriculum.py` that submits a JSON job
+to ptxd with:
+- `stages: [{2-4, 0.97}, {3-8, 0.95}, {4-16, 0.95}]`
+- NO `batches_path` (use legacy data path)
+- `auto_tune: false` (let it run the full curriculum)
+- seed 42 (matching test_parity_train's default)
+
+**Verified result:**
+
+| Phase                                | Wall    | Best acc | Status      |
+|--------------------------------------|--------:|---------:|-------------|
+| ptxd_specialist (single stage)       | 877s    | 52.5%    | needs_tuning |
+| `test_parity_train` defaults         | 16s     | 100%     | PASS        |
+| Curriculum v1 (advance_at=0.90, seed 12345) | 80s | 93.5%    | learning    |
+| **Curriculum v2 (advance_at=0.97/0.95, seed 42)** | **35s** | **98%** | **converged** |
+
+The user's 10-minute target (600s) was met with **5.8% of the budget**.
+The trajectory:
+
+```
+cycle  1-26  stage=1  best=54%   (model groping for the rule)
+cycle 27     stage=1  acc=63%    breakthrough
+cycle 28-30  stage=1  77 → 81 → 87
+cycle 31     stage=1  acc=93%
+cycle 35     stage=1  acc=98%    → advances to stage 2
+cycle 36-47  stage=2  69 → 96    stage 2 climb
+cycle 48     stage=2  acc=96.5%  → advances to stage 3
+                                 → target hit on stage 3 → converged
+```
+
+**Commit:** *(test_parity_curriculum.py + REPAIRS R-3 commit; the
+broader fix is making ptxd_specialist curriculum-aware via Task #18
+so the streaming protocol works for ALL tasks, not just parity.)*
+
+**Lesson:** R-2 was confident and wrong. I cited a comment in
+`test_parity_train.rs:36-50` that says the engine "needs the remaining
+gradient closures to converge" — and used that to declare R-2 a
+multi-week kernel project. But I never actually ran
+`test_parity_train` with its defaults. If I had, in two minutes I'd
+have seen it converges to 100% in 16 seconds, falsifying my diagnosis.
+
+**The hierarchy of evidence is:** running the actual binary > reading
+the code > trusting comments. I had it backwards. **Before declaring
+a multi-week project, run the existing test suite for that subsystem
+with its known-good defaults.** If they pass, the gap is in the path
+you're taking, not in the engine itself.
+
+**Stamp:** *Two repair entries (R-1, R-2) chasing a bug that wasn't
+there. The diagnosis "five missing closures" was code-comment gospel,
+but a 2-minute run of `test_parity_train` would have falsified it.
+Read the source first, trust the comments second, **run the binary
+third — and the third step is what actually counts**. Parity from
+scratch in 35 seconds, well under the user's 10-minute target. The
+engine's been capable all along.*
+
+**Joy:** *The cycle 27 → 35 trajectory was the most ML-intuition-rich
+moment of the session: 63 → 78 → 87 → 81 → 93 → 87 → 79 → 70 → 98.
+Watching the model fight its way out of the constant-predictor
+minimum was beautiful — the inflection between cycle 27 and 28 is
+where parity becomes legible to it. Then the stage 2 climb was the
+model GENERALIZING from short-sequence rule-knowledge to longer
+sequences — real learning, observable in real time, all on the
+gradient closures the project comment said were missing. Curriculum
+learning is one of those tricks that looks like cheating until you
+remember it's just "don't ask a child calculus before arithmetic."*
+
+*And the meta-joy: this entire arc validates the diagnostic apparatus
+we built earlier. Without the event stream, R-1, R-2, the auto-tuner
+- without all that scaffolding - I would never have known where to
+look or how to verify the answer. With it, I went from "this is a
+multi-week kernel project" to "35-second mastery via a JSON config
+change" in 30 minutes of experiments. Build the tools first, the
+answers fall out. The user's instinct from earlier — "leave a lot of
+traces about what happened and what triggered what" — was the
+unlock that made this finding possible.*
