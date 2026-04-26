@@ -149,15 +149,30 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         try:
             ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
             if ckpt.get("task") == task:
-                model.load_state_dict(ckpt["model"])
-                cycle_start = ckpt.get("cycles", 0)
-                best_acc = ckpt.get("accuracy", 0.0)
-                if "optimizer" in ckpt:
-                    try:
-                        opt.load_state_dict(ckpt["optimizer"])
-                    except Exception:
-                        pass
-                print(f"  Resumed {task} from cycle {cycle_start}, best={best_acc:.0%}", flush=True)
+                # NaN-quarantine: if the saved weights are corrupt, do NOT
+                # load them (they'd poison the new run from step 1).
+                # Treat as "no checkpoint", let training start fresh.
+                sd = ckpt.get("model", {})
+                has_nan = any(
+                    torch.isnan(v).any().item() if v.is_floating_point() else False
+                    for v in sd.values()
+                )
+                if has_nan:
+                    print(f"  NaN QUARANTINE: {ckpt_path} contains NaN weights "
+                          f"(reported acc={ckpt.get('accuracy', 0):.0%} is "
+                          f"stale). Starting fresh — the corrupt file will "
+                          f"be overwritten if this run produces a healthy "
+                          f"model.", flush=True)
+                else:
+                    model.load_state_dict(sd)
+                    cycle_start = ckpt.get("cycles", 0)
+                    best_acc = ckpt.get("accuracy", 0.0)
+                    if "optimizer" in ckpt:
+                        try:
+                            opt.load_state_dict(ckpt["optimizer"])
+                        except Exception:
+                            pass
+                    print(f"  Resumed {task} from cycle {cycle_start}, best={best_acc:.0%}", flush=True)
         except Exception as e:
             print(f"  Checkpoint load failed: {e}", flush=True)
 
@@ -713,14 +728,29 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     except Exception:
         pass
 
-    # Save specialist — with regression guard. Refuse to overwrite a
-    # prior good checkpoint with a worse run. Without this, a 0% run
-    # could clobber a 100% checkpoint and then poison subsequent
-    # re-trains via the load path (which loads the existing .pt as
-    # initial weights when present).
+    # Save specialist — with regression guard + NaN guard.
+    # Two ways a save can corrupt a good checkpoint:
+    #   (1) Worse-acc run overwrites a better one. Catch with prior_acc.
+    #   (2) NaN run overwrites — best_acc may still be the pre-divergence
+    #       value (held by max() over the run), but the model state_dict
+    #       contains NaN weights. The reported accuracy is a LIE about
+    #       the on-disk weights. Catch by scanning state_dict.
     ckpt_dir = Path("checkpoints/specialists")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     ckpt_path = ckpt_dir / f"{task}.pt"
+
+    # NaN guard — refuse to save a corrupted model regardless of accuracy.
+    state_has_nan = any(
+        torch.isnan(v).any().item() if v.is_floating_point() else False
+        for v in model.state_dict().values()
+    )
+    if state_has_nan:
+        print(f"  NaN GUARD: model state_dict contains NaN weights — "
+              f"REFUSING to save (best_acc={best_acc:.0%} is stale; the "
+              f"actual on-device weights are corrupted). Keeping prior "
+              f"{ckpt_path}.", flush=True)
+        return best_acc
+
     prior_acc = None
     if ckpt_path.exists():
         try:
