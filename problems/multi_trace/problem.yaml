@@ -11,3 +11,10 @@ curriculum:
   - {stage: 4, n_disks: 8, max_traces: 4, advance_at: 0.90}
   - {stage: 5, n_disks: 12, max_traces: 4, advance_at: 0.90}
   - {stage: 6, n_disks: 16, max_traces: 6, advance_at: 0.90}
+  # Aggressive expansion — raise the cost of pure memorization by widening
+  # the (K, n_i) sample space far beyond what a memorized template can fit.
+  # Each stage roughly multiplies the # of distinct (K, n-tuples) by 10×.
+  - {stage:  7, n_disks: 20, max_traces:  8, advance_at: 0.90}
+  - {stage:  8, n_disks: 30, max_traces: 12, advance_at: 0.90}
+  - {stage:  9, n_disks: 40, max_traces: 16, advance_at: 0.90}
+  - {stage: 10, n_disks: 50, max_traces: 20, advance_at: 0.90}

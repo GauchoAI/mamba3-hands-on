@@ -1,0 +1,8 @@
+name: bool_expr_depth3
+type: generator
+generator: formal_language:gen_bool_expr_depth3
+target_accuracy: 0.95
+tags: [language, formal, boolean, tier-3, deep-composition]
+description: "Tier-3 formal language: depth-3 boolean expression → 4-bit truth table. The natural target for a router using BOTH the tier-1 and tier-2 specialists as leaves — tier-3 expressions decompose into depth-2 sub-trees that the tier-2 leaf evaluates."
+curriculum:
+  - {stage: 1, advance_at: 0.95}

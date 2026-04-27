@@ -172,6 +172,36 @@ def gen_bool_expr_depth2():
     }
 
 
+def _depth2_expression():
+    """Sample one depth-2 expression as a string (no marker)."""
+    OUTER_OPS = ["AND", "OR", "XOR", "NAND", "NOR", "XNOR"]
+    if random.random() < 0.3:
+        return _depth1_expression()  # sometimes depth-1 to keep it varied
+    op = random.choice(OUTER_OPS)
+    return f"{op} {_depth1_expression()} {_depth1_expression()}"
+
+
+def gen_bool_expr_depth3():
+    """Depth-3: outer op over two depth-2 sub-expressions.
+
+    The natural tier-3 task: a router solving this should use the
+    bool_expr_depth2 specialist on each inner sub-expression and
+    combine via the outer op. Tests whether the synapse architecture
+    composes through one more layer.
+    """
+    OUTER_OPS = ["AND", "OR", "XOR", "NAND", "NOR", "XNOR"]
+    op = random.choice(OUTER_OPS)
+    inner1 = _depth2_expression()
+    inner2 = _depth2_expression()
+    expr = f"{op} {inner1} {inner2}"
+    tt = _truth_table(expr)
+    return {
+        "type": "bool_expr_depth3",
+        "input": f"BOOLTAB3 {expr}",
+        "output": tt,
+    }
+
+
 if __name__ == "__main__":
     print("=== forward (BOOLTAB) ===")
     for _ in range(8):
