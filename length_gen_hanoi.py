@@ -27,7 +27,7 @@ N_MAX_DEFAULT = 25
 ACC_TRIALS_DEFAULT = 100
 
 
-def autoregressive_predict(model, tokens, sep_pos, max_new=8, device="cpu"):
+def autoregressive_predict(model, tokens, sep_pos, max_new=64, device="cpu"):
     """Greedy decode after the separator until EOS or max_new tokens.
 
     Returns the decoded byte string (the answer). Stops at byte 257 (EOS)
@@ -67,7 +67,7 @@ def evaluate_n(model, tok, n, n_trials, device):
         ex = make_hanoi_example(n)
         toks, sep = tok.encode_curriculum(ex)
         # Predict the answer string
-        pred = autoregressive_predict(model, toks, sep, max_new=12, device=device)
+        pred = autoregressive_predict(model, toks, sep, max_new=64, device=device)
         target = str(2 ** n - 1)
         if pred == target:
             correct += 1
