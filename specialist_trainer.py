@@ -209,8 +209,14 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
 
         # Generate task-specific data
         examples = []
+        bidir_input = config.get("bidir_input", False)
         for _ in range(5000):
             ex = gen_fn()
+            if bidir_input:
+                # Append the input's byte-reverse so both orientations sit
+                # adjacent to SEP. Diagnostic for the rightmost-byte shortcut.
+                ex = dict(ex)
+                ex["input"] = ex["input"] + " " + ex["input"][::-1]
             tokens, sep = tok.encode_curriculum(ex)
             examples.append((tokens, sep))
 
@@ -344,6 +350,9 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         with torch.no_grad():
             for _ in range(100):
                 ex = gen_fn()
+                if config.get("bidir_input", False):
+                    ex = dict(ex)
+                    ex["input"] = ex["input"] + " " + ex["input"][::-1]
                 tokens, sep = tok.encode_curriculum(ex)
                 out_bytes = list(ex["output"].encode("utf-8"))
                 inp_len = len(ex.get("input", "").split(","))
@@ -1028,6 +1037,13 @@ if __name__ == "__main__":
                        help="Number of registers in the bank (default 8).")
     parser.add_argument("--d-register", type=int, default=32,
                        help="Register vector dim (default 32).")
+    parser.add_argument("--bidir-input", action="store_true",
+                       help="Append the byte-reverse of the input after "
+                            "the input itself (separated by a space) so "
+                            "both orientations sit adjacent to SEP. "
+                            "Breaks the rightmost-byte shortcut without "
+                            "changing the architecture. Diagnostic for "
+                            "the Hanoi last-digit-attention failure.")
     parser.add_argument("--trajectory-loss-lambda", type=float, default=0.0,
                        help="If >0, add an auxiliary MSE loss on the "
                             "explicit-register write trajectory against "
@@ -1057,6 +1073,7 @@ if __name__ == "__main__":
         "n_registers": args.n_registers,
         "d_register": args.d_register,
         "trajectory_loss_lambda": args.trajectory_loss_lambda,
+        "bidir_input": args.bidir_input,
     }
     if args.scan_backend:
         config["scan_backend"] = args.scan_backend

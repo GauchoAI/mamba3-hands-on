@@ -322,6 +322,75 @@ representation of `n` itself is the bottleneck.
 
 ---
 
+## Entry — Bidir input breaks rightmost-byte shortcut, exposes the bounded counter (2026-04-27)
+
+**Setup.** Following the HANOIBIN diagnostic showing the model
+reads only the rightmost input byte, I added `--bidir-input`: append
+the byte-reverse of the input after itself, separated by a space.
+For HANOIBIN the input becomes `"HANOIBIN 21 12 NIBIONAH"`. The
+rightmost byte is now always `'H'` regardless of n — the
+rightmost-byte shortcut is mechanically impossible. Trained the
+same architecture (d=64, L=3, ~104k params) at lr=1e-4 (lr=3e-4
+had ~50% stage-3 NaN rate). Reached stage 6 (n=20) at 100%
+teacher-forced byte accuracy, NaN at cycle 13 — saved cycle 12,
+loss=0.94.
+
+**Result, autoregressive eval on n=1..30:**
+
+```
+n=1  → '111111111111' (12 ones)        n=18 → 18 ones ✓
+n=2  → '111111111111111111111' (21)    n=19 → 19 ones ✓
+n=3  → 20 ones                         n=20 → 21 ones
+n=11 → 11 ones ✓                       n=21 → 19 ones
+n=27 → 27 ones ✓                       n=30 → 21 ones
+```
+
+3/20 in-distribution, 1/10 out (n=27, accidentally landing on
+the model's natural cycle). Mean prediction length: ~17-25.
+
+**The shortcut shape is now revealed.** Per-position teacher-forced
+probe: feeding a long input (n=50, all 50 ones in answer span),
+the model's EOS probability oscillates with period ~20 starting
+at position sep+22:
+
+```
+pos  0..19 → predict '1'  (p≈1.0)
+pos 20-21 → transition
+pos 22-33 → predict EOS   (p≈0.99)
+pos 34-39 → predict '1'   (next cycle)
+pos 40-46 → predict EOS
+pos 47-50 → predict '1'
+pos 51    → predict EOS
+```
+
+The model has learned **a cyclic pattern with period ~20** in its
+hidden state — close to the training maximum. EOS prediction is
+position-driven, not input-driven. The bidir input *did* break
+the rightmost-byte shortcut: the resulting failure mode is not
+"emit last_digit(n) ones," it's "emit ~training_max ones."
+
+**What this rules in and out.**
+
+- ✗ Output-decoder bottleneck (HANOIBIN diagnostic, prior entry)
+- ✗ Rightmost-byte attention (bidir input, this entry)
+- ✓ The architecture cannot extract n from its input and use it
+  as a counter. The recurrence learns a **bounded periodic
+  pattern** whose period is set by the training distribution.
+
+**Implication.** Soft attention over a continuous register bank
+will not learn unbounded counting at this scale. The next ships
+need to give the model a *discrete* loop primitive — an integer
+register with hard `--` and `==0` semantics — supervised by an
+oracle that ties the register's initial value to the parsed input.
+The current trajectory oracle supervises the *value to write* but
+not the *iteration to perform*; a counter primitive supervises
+both.
+
+Saved checkpoint: `tower_of_hanoi_binary_bidir.pt` (~104k params,
+lr=1e-4, 12 clean cycles, NaN at 13).
+
+---
+
 ## Entry — Neural composition works (synapse v2, AttendBridge) (2026-04-26)
 
 **Setup.** A tiny router (d=16, L=1, 7,654 trainable params) trained on

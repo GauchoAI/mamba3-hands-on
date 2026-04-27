@@ -39,13 +39,16 @@ def autoregressive_predict(model, tokens, sep_pos, max_new, device):
     return bytes(b for b in out_bytes if 32 <= b < 127).decode("ascii", errors="replace")
 
 
-def make_example(n):
-    return {"type": "tower_of_hanoi_binary", "input": f"HANOIBIN {n}",
+def make_example(n, bidir=False):
+    inp = f"HANOIBIN {n}"
+    if bidir:
+        inp = inp + " " + inp[::-1]
+    return {"type": "tower_of_hanoi_binary", "input": inp,
             "output": "1" * n}
 
 
-def evaluate_n(model, tok, n, max_new, device):
-    ex = make_example(n)
+def evaluate_n(model, tok, n, max_new, device, bidir=False):
+    ex = make_example(n, bidir=bidir)
     toks, sep = tok.encode_curriculum(ex)
     pred = autoregressive_predict(model, toks, sep, max_new=max_new, device=device)
     target = "1" * n
@@ -99,6 +102,10 @@ def main():
                     help="In-distribution boundary for the report.")
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
     ap.add_argument("--seed", type=int, default=12345)
+    ap.add_argument("--bidir", action="store_true",
+                    help="Apply the same input + ' ' + reversed(input) "
+                         "rewrite the trainer used. Required if the "
+                         "checkpoint was trained with --bidir-input.")
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -123,7 +130,7 @@ def main():
     # max_new generously bigger than n_max so EOS prediction can fail openly
     max_new = max(args.n_max + 20, 64)
     for n in range(1, args.n_max + 1):
-        correct, pred, target, prefix = evaluate_n(model, tok, n, max_new, args.device)
+        correct, pred, target, prefix = evaluate_n(model, tok, n, max_new, args.device, bidir=args.bidir)
         rows.append({"n": n, "correct": correct, "pred_len": len(pred),
                      "prefix_ones": prefix, "pred_sample": pred[:50]})
         in_dist = n <= args.trained_up_to
