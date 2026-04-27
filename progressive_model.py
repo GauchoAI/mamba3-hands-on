@@ -121,32 +121,37 @@ class ExplicitRegisters(nn.Module):
         h = self.in_norm(x)
 
         # Initialize the register bank to zero per batch element.
-        # NOT a Parameter — these are persistent state across timesteps
-        # WITHIN a forward pass, reset at the start of each forward.
         registers = torch.zeros(B, self.n_registers, self.d_register,
                                 device=x.device, dtype=x.dtype)
 
         outputs = []
+        # Per-position write values, exposed for trajectory distillation.
+        # We store the *post-update* state of register r0 (the most-attended
+        # register's accumulated value) at every position. Used by the
+        # auxiliary trajectory loss to match against an oracle target.
+        write_values_traj = []
         for t in range(L):
             h_t = h[:, t, :]                              # (B, d_model)
 
-            # READ — soft-attention over the bank
-            r_q = self.read_query(h_t)                    # (B, R)
-            r_w = torch.softmax(r_q, dim=-1)              # (B, R)
-            r_v = torch.einsum("br,brd->bd", r_w, registers)  # (B, d_register)
-            r_out = self.read_proj(r_v)                   # (B, d_model)
+            r_q = self.read_query(h_t)
+            r_w = torch.softmax(r_q, dim=-1)
+            r_v = torch.einsum("br,brd->bd", r_w, registers)
+            r_out = self.read_proj(r_v)
 
-            # WRITE — soft-update a register based on h_t
-            w_q = self.write_query(h_t)                   # (B, R)
-            w_w = torch.softmax(w_q, dim=-1)              # (B, R)
-            w_v = self.write_value(h_t)                   # (B, d_register)
-            w_g = torch.sigmoid(self.write_gate(h_t))     # (B, 1)
-            update_strength = (w_w * w_g).unsqueeze(-1)   # (B, R, 1)
-            new_val = w_v.unsqueeze(1)                    # (B, 1, d_register)
+            w_q = self.write_query(h_t)
+            w_w = torch.softmax(w_q, dim=-1)
+            w_v = self.write_value(h_t)
+            w_g = torch.sigmoid(self.write_gate(h_t))
+            update_strength = (w_w * w_g).unsqueeze(-1)
+            new_val = w_v.unsqueeze(1)
             registers = (1 - update_strength) * registers + update_strength * new_val
 
             outputs.append(r_out)
+            # Track the post-update value of register 0 (the slot we
+            # supervise via the oracle trajectory). Shape: (B, d_register).
+            write_values_traj.append(registers[:, 0, :])
 
+        self.last_register_traj = torch.stack(write_values_traj, dim=1)  # (B, L, d_register)
         return self.mix * torch.stack(outputs, dim=1)
 
 

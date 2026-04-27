@@ -284,6 +284,39 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                     except Exception:
                         pass
 
+                # Trajectory-distillation loss on the explicit-register
+                # write trajectory. The model must write the binary
+                # encoding of the answer into r0 across the answer
+                # span. λ decays linearly to 0 over the run so the
+                # oracle trains the dynamics early; CE takes over later.
+                _traj_lambda_init = config.get("trajectory_loss_lambda", 0.0)
+                if (_traj_lambda_init > 0
+                        and getattr(model, "registers", None) is not None
+                        and hasattr(model.registers, "last_register_traj")):
+                    try:
+                        from hanoi_oracle import expected_register_trajectory
+                        # Linear decay over the full run (max_cycles*steps_per_cycle).
+                        _total_steps = max(1, max_cycles * steps_per_cycle)
+                        _global_step = (cycle - 1) * steps_per_cycle + step
+                        _decay = max(0.0, 1.0 - _global_step / _total_steps)
+                        _lambda_t = _traj_lambda_init * _decay
+                        if _lambda_t > 0:
+                            target_traj, _ = expected_register_trajectory(
+                                token_tensor,
+                                d_register=config.get("d_register", 32),
+                                device=device,
+                            )
+                            actual = model.registers.last_register_traj  # (B, L, d_register)
+                            # Supervise only at output-span positions
+                            traj_mask = mask.unsqueeze(-1)  # (B, L, 1)
+                            sq = (actual - target_traj) ** 2 * traj_mask
+                            n_supervised = traj_mask.sum() * actual.shape[-1] + 1e-8
+                            traj_loss = sq.sum() / n_supervised
+                            loss = loss + _lambda_t * traj_loss
+                    except Exception as _e:
+                        if step == 1:
+                            print(f"  trajectory loss skipped: {_e}", flush=True)
+
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 if perp:
@@ -992,6 +1025,12 @@ if __name__ == "__main__":
                        help="Number of registers in the bank (default 8).")
     parser.add_argument("--d-register", type=int, default=32,
                        help="Register vector dim (default 32).")
+    parser.add_argument("--trajectory-loss-lambda", type=float, default=0.0,
+                       help="If >0, add an auxiliary MSE loss on the "
+                            "explicit-register write trajectory against "
+                            "a programmatic oracle (currently Hanoi: r0 "
+                            "= binary encoding of 2^n−1 across the answer "
+                            "span). Decays linearly to 0 over training.")
     args = parser.parse_args()
 
     # Set module-level DB path before any usage
@@ -1014,6 +1053,7 @@ if __name__ == "__main__":
         "use_explicit_registers": args.explicit_registers,
         "n_registers": args.n_registers,
         "d_register": args.d_register,
+        "trajectory_loss_lambda": args.trajectory_loss_lambda,
     }
     if args.scan_backend:
         config["scan_backend"] = args.scan_backend
