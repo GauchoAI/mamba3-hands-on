@@ -618,6 +618,23 @@ counterfactual (input vs target divorced), and edge cases (n=0
 "0", far-OOD). All pass byte-for-byte vs Python reference in
 1.2s.
 
+**Extrapolation depth.** Pushed validate further:
+  - n=1..100: 100/100 ✓ (5x training length, max digits 21)
+  - n=1..200: 196/200 (4 failures at n=144, 187, 191, 199)
+
+The failures all share a shape: model emits `'0'` instead of the
+correct digit at deep answer-span positions (k=30+). For example
+n=191 emits "...833800000000" (8 zeros tail) instead of
+"...833808526209". Same shape as the HANOIBIN SEP-drift cliff —
+deep answer-span positions accumulate an SSM hidden-state bias
+that overwhelms the +50 iter_bias. Fixable directions:
+  - bigger iter_bias (e.g., +70)
+  - larger counter table (currently capped at 64 digits)
+  - extend training curriculum past 4-digit answers
+This isn't yet iron-solid past 7x extrapolation; HANOIBIN was
+solid to 12.8x with bidirectional gating because the iter_token
+was constant.
+
 The per-position iter_token primitive generalizes cleanly. The
 loop body is now: "while counter>0: emit iter_token_per_pos[t];
 at counter=0: stop." Both the WHEN-to-stop and WHAT-to-emit
