@@ -42,15 +42,16 @@ def load_model(pt_path: str, device: str):
     cfg = ck["config"]
     sd = ck["model"]
     has_lc = any(k.startswith("loop_counter.") for k in sd.keys())
-    lc_max = (sd["loop_counter.c_emb.weight"].shape[0] - 2
-              if has_lc else 1024)
     if not has_lc:
         raise SystemExit(f"checkpoint {pt_path} has no LoopCounter — "
                          f"FISH validation is for the loop-counter model")
+    # Parameter-free LoopCounter has no max_count; lc_max is now just a
+    # convention for "how far to test" in the validator, not an arch param.
+    lc_max = 256  # max_n for the length-gen sweep
     model = ProgressiveModel(
         d_model=cfg["d_model"], d_state=cfg["d_state"],
         expand=2, headdim=cfg["headdim"],
-        use_loop_counter=True, loop_counter_max=lc_max,
+        use_loop_counter=True,
     )
     for _ in range(cfg["n_kernel_layers"]):
         model.add_kernel_layer()

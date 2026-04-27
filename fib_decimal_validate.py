@@ -45,11 +45,11 @@ def load_model(pt_path: str, device: str):
     has_lc = any(k.startswith("loop_counter.") for k in sd.keys())
     if not has_lc:
         raise SystemExit(f"checkpoint {pt_path} has no LoopCounter")
-    lc_max = sd["loop_counter.c_emb.weight"].shape[0] - 2
+    lc_max = 1024
     model = ProgressiveModel(
         d_model=cfg["d_model"], d_state=cfg["d_state"],
         expand=2, headdim=cfg["headdim"],
-        use_loop_counter=True, loop_counter_max=lc_max,
+        use_loop_counter=True,
     )
     for _ in range(cfg["n_kernel_layers"]):
         model.add_kernel_layer()

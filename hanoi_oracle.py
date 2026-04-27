@@ -87,17 +87,14 @@ def parse_fib_n_from_tokens(token_tensor):
     return out
 
 
-def fib_unary_counter_trajectory(token_tensor, sentinel: int, max_count: int,
-                                 device="cpu"):
+def fib_unary_counter_trajectory(token_tensor, sentinel: int = -1,
+                                 max_count: int = None, device="cpu"):
     """Counter trajectory for FIB unary task: 'FIB n' -> '1' * F(n).
 
-    Same SHAPE as hanoibin_counter_trajectory but the initial counter
-    value at SEP is F(n), not n. The oracle handles the parse +
-    arithmetic; the model handles the loop.
-
-    Counter values are clamped to max_count so out-of-table values
-    map to a valid index. (For the experiment, train F(n) <= max_count
-    and the eval can push past it to test the bias-table generalisation.)
+    With the parameter-free LoopCounter (commit refactor), the
+    `max_count` parameter is irrelevant: counter values are
+    distinguished only by SIGN (sentinel<0, zero, positive). Kept
+    in the signature for backwards-compatible call sites.
 
     Returns (counter_int64 (B, L), Fns: list[int]).
     """
@@ -114,8 +111,7 @@ def fib_unary_counter_trajectory(token_tensor, sentinel: int, max_count: int,
         for k in range(fn + 1):
             p = s + k
             if 0 <= p < L:
-                # Clamp to max_count so the embedding lookup is safe.
-                counter[i, p] = min(fn - k, max_count)
+                counter[i, p] = fn - k  # 0..fn, no clamping needed
     return counter, fns
 
 
@@ -134,10 +130,9 @@ def parse_fibd_n_from_tokens(token_tensor):
     return out
 
 
-def fib_decimal_oracle(token_tensor, sentinel: int, max_count: int,
-                       device="cpu"):
-    """Counter trajectory + per-position iteration token for FIB decimal:
-    input 'FIBD n' -> output str(F(n)).
+def fib_decimal_oracle(token_tensor, sentinel: int = -1,
+                       max_count: int = None, device="cpu"):
+    """Counter trajectory + per-position iter token for FIB decimal.
 
     Counter at sep: digit_count(F(n)). Decrements per output position.
     Hits 0 at the EOS-target slot.
@@ -147,6 +142,7 @@ def fib_decimal_oracle(token_tensor, sentinel: int, max_count: int,
     the iter_token is irrelevant since eos_bias dominates; we set it
     to '0' as a safe default.
 
+    With the parameter-free LoopCounter, max_count is ignored.
     Returns (counter (B, L), iter_tok_per_pos (B, L), Fns: list[int]).
     """
     B, L = token_tensor.shape
@@ -162,13 +158,10 @@ def fib_decimal_oracle(token_tensor, sentinel: int, max_count: int,
             continue
         digits = str(fn)
         D = len(digits)
-        # Counter at sep through sep+D: D, D-1, ..., 0
         for k in range(D + 1):
             p = s + k
             if 0 <= p < L:
-                counter[i, p] = min(D - k, max_count)
-        # iter_token at sep+k = digit at position k (for k in [0, D-1]).
-        # At sep+D, the iter_token is unused (counter=0 routes to EOS).
+                counter[i, p] = D - k
         for k, ch in enumerate(digits):
             p = s + k
             if 0 <= p < L:
@@ -176,7 +169,7 @@ def fib_decimal_oracle(token_tensor, sentinel: int, max_count: int,
     return counter, iter_tok, fns
 
 
-def hanoibin_counter_trajectory(token_tensor, sentinel: int, device="cpu"):
+def hanoibin_counter_trajectory(token_tensor, sentinel: int = -1, device="cpu"):
     """Build the per-position counter trajectory for the unary-output
     HANOIBIN task.
 

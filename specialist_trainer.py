@@ -264,18 +264,17 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
             counter_values = None
             iter_tok_per_pos = None
             if config.get("use_loop_counter", False):
-                _max = config.get("loop_counter_max", 1024)
-                _sentinel = _max + 1
+                # Parameter-free LoopCounter: only sign of c matters.
+                # Sentinel = -1 (any negative value works).
+                _sentinel = -1
                 if task == "fib_unary":
                     from hanoi_oracle import fib_unary_counter_trajectory
                     counter_values, _ = fib_unary_counter_trajectory(
-                        token_tensor, sentinel=_sentinel, max_count=_max,
-                        device=device)
+                        token_tensor, sentinel=_sentinel, device=device)
                 elif task == "fib_decimal":
                     from hanoi_oracle import fib_decimal_oracle
                     counter_values, iter_tok_per_pos, _ = fib_decimal_oracle(
-                        token_tensor, sentinel=_sentinel, max_count=_max,
-                        device=device)
+                        token_tensor, sentinel=_sentinel, device=device)
                 else:
                     from hanoi_oracle import hanoibin_counter_trajectory
                     counter_values, _ = hanoibin_counter_trajectory(
@@ -398,19 +397,18 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 _cv = None
                 _it_pos = None
                 if config.get("use_loop_counter", False):
-                    _max = config.get("loop_counter_max", 1024)
                     if task == "fib_unary":
                         from hanoi_oracle import fib_unary_counter_trajectory
                         _cv, _ = fib_unary_counter_trajectory(
-                            t, sentinel=_max + 1, max_count=_max, device=device)
+                            t, sentinel=-1, device=device)
                     elif task == "fib_decimal":
                         from hanoi_oracle import fib_decimal_oracle
                         _cv, _it_pos, _ = fib_decimal_oracle(
-                            t, sentinel=_max + 1, max_count=_max, device=device)
+                            t, sentinel=-1, device=device)
                     else:
                         from hanoi_oracle import hanoibin_counter_trajectory
                         _cv, _ = hanoibin_counter_trajectory(
-                            t, sentinel=_max + 1, device=device)
+                            t, sentinel=-1, device=device)
                 logits = model(t, counter_values=_cv, iter_token_per_pos=_it_pos)
                 ok = True
                 conf = 0.0

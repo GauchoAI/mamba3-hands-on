@@ -209,108 +209,110 @@ class OutputHistoryAttention(nn.Module):
 
 
 class LoopCounter(nn.Module):
-    """A discrete integer-register pathway. Oracle-supervised: external
-    code provides per-position counter values (parsed-from-input n at
-    SEP, decremented one-per-output-position, sentinel outside the
-    answer span). The module just looks up an embedding and adds a
-    gated projection to the model stream.
+    """Parameter-free counter pathway: arbitrary unbounded c.
 
-    Unlike `ExplicitRegisters` (continuous, model-internal, soft I/O)
-    this is *handed* to the model — at inference an external parser
-    reads n from the input bytes and feeds the same trajectory.
+    The previous design used (max_count+2, ...) embedding tables, but
+    after training the iter_bias / eos_bias values were essentially
+    constant for c>0 and only c_emb[0] grew meaningfully. The actual
+    architectural distinction was always 3-way:
 
-    The argument we're testing: if the SSM is given a counter primitive,
-    can it learn to gate EOS prediction on `c==0`? The bidir experiment
-    showed the SSM cannot extract n itself; this externalises the part
-    it failed at and asks if the rest of the program is learnable.
+      c < 0  : sentinel (input span / past EOS) — no contribution
+      c == 0 : at the EOS-target slot — emit EOS
+      c > 0  : in answer span, iterating — emit iter_token
+
+    This refactor encodes those three states as torch.where dispatch
+    on the SIGN of c, with two learned d_model embeddings (stop_emb /
+    iter_emb) and four scalar biases. There is no `max_count` — c can
+    be any int64. HANOIBIN at n=10000 works the same as at n=20.
+
+    The depth ceiling we still have is the *training-curriculum* one
+    (the SSM's hidden state at deep answer-span positions is only
+    supervised up to the deepest training example). That's a real
+    limit; the table-size limit was an artifact of the previous design.
     """
-    SENTINEL_OFFSET = 1  # max_count + 1 = sentinel index
+    # Magic sentinel value the oracles use for "outside answer span".
+    # Any negative value works; -1 is human-readable.
+    SENTINEL = -1
 
-    def __init__(self, d_model: int, max_count: int = 1024,
-                 iteration_token: int = 49):
+    def __init__(self, d_model: int, iteration_token: int = 49,
+                 # `max_count` kept for backwards-compatible kwargs in
+                 # ProgressiveModel call sites; ignored.
+                 max_count: int = None):
         super().__init__()
         self.d_model = d_model
-        self.max_count = max_count
-        # Token id to bias UP when counter > 0 (i.e., the loop body's
-        # output token). For HANOIBIN this is ord('1') = 49.
         self.iteration_token = iteration_token
-        # max_count + 2 entries: [0..max_count] valid + 1 sentinel
-        self.c_emb = nn.Embedding(max_count + 2, d_model)
-        nn.init.normal_(self.c_emb.weight, std=0.02)
-        # Sentinel embedding starts at 0 so out-of-span positions are
-        # initially a no-op contribution.
-        with torch.no_grad():
-            self.c_emb.weight[max_count + 1].zero_()
+
+        # Two d_model embeddings: "stop" (c==0) and "iterate" (c>0).
+        # Sentinel positions add zero (no parameters needed).
+        self.stop_emb = nn.Parameter(torch.randn(d_model) * 0.02)
+        self.iter_emb = nn.Parameter(torch.randn(d_model) * 0.02)
+
         self.read_proj = nn.Linear(d_model, d_model)
-        # Init read_proj small so the counter pathway is near-identity at
-        # start; the model has to learn to use it.
         nn.init.normal_(self.read_proj.weight, std=0.01)
         nn.init.zeros_(self.read_proj.bias)
-        # mix=1.0: stronger initial presence in the hidden state. The
-        # previous 0.1 init never grew (additive injection insufficient
-        # finding); start strong and let the model attenuate if needed.
         self.mix = nn.Parameter(torch.tensor(1.0))
 
-        # Direct EOS-logit bias per counter value. Bypasses the LM head's
-        # weight tying so the counter overrides instead of competing with
-        # the SSM's prediction. Hot init: c=0 -> +15 (force EOS even
-        # against a confident '1' prediction; logit gap typically ~10),
-        # c in [1..max_count] -> -5 (suppress EOS), sentinel -> 0
-        # (input span / past-EOS, no bias). The previous additive
-        # injection failed because the SSM dominates the logit space; a
-        # direct override gives the counter pathway its own channel.
-        self.eos_bias = nn.Embedding(max_count + 2, 1)
-        with torch.no_grad():
-            self.eos_bias.weight.fill_(-15.0)
-            self.eos_bias.weight[0] = 30.0
-            self.eos_bias.weight[max_count + 1] = 0.0
-
-        # Mirror bias for the iteration token: push UP when counter > 0,
-        # DOWN when counter == 0 (so EOS wins decisively at the boundary).
-        # Without this, deep in the answer span the SSM's hidden-state
-        # alignment drifts and other tokens (notably SEP=258) start
-        # winning over '1'. This explicitly encodes loop-body semantics:
-        # "while counter>0: emit iteration_token; at counter==0: stop."
-        #
-        # Init magnitude tuned for FIB-decimal where iter_token varies
-        # per position and the LM head's incoming-token alignment puts
-        # logit[prev_digit] near +50 — bias must be strong enough to
-        # override. HANOIBIN works fine at +15 too (single iter_token,
-        # no conflict).
-        self.iter_bias = nn.Embedding(max_count + 2, 1)
-        with torch.no_grad():
-            self.iter_bias.weight.fill_(50.0)
-            self.iter_bias.weight[0] = -30.0
-            self.iter_bias.weight[max_count + 1] = 0.0
+        # Hot-init biases. These are scalars; no per-c table.
+        # eos_bias_zero  +70 (force EOS even when LM head has logit~50 on
+        #                     a previous-digit alignment via weight tying)
+        # eos_bias_pos   -30 (suppress EOS mid-loop)
+        # iter_bias_zero -40 (suppress iter_token at boundary; for HANOIBIN
+        #                     this suppresses '1' at counter=0)
+        # iter_bias_pos  +70 (force iter_token in answer span; matches
+        #                     eos_bias_zero in magnitude — dominates LM
+        #                     head's previous-input alignment)
+        # Both biases at sentinel are 0 (no-op outside answer span).
+        # Symmetric magnitudes (70/40) matter: at counter=0 the eos
+        # boost (+70) and iter suppress (-40) together overwhelm any
+        # base LM-head alignment of ~50; same logic at counter>0 with
+        # iter boost (+70) + eos suppress (-30).
+        self.eos_bias_zero = nn.Parameter(torch.tensor(70.0))
+        self.eos_bias_pos  = nn.Parameter(torch.tensor(-30.0))
+        self.iter_bias_zero = nn.Parameter(torch.tensor(-40.0))
+        self.iter_bias_pos  = nn.Parameter(torch.tensor(70.0))
 
     @property
     def sentinel(self) -> int:
-        return self.max_count + 1
+        return self.SENTINEL
+
+    def _state_masks(self, c: torch.Tensor):
+        """Returns (is_zero, is_pos) bool masks; sentinel is the negation
+        of (is_zero | is_pos)."""
+        is_zero = (c == 0)
+        is_pos = (c > 0)
+        return is_zero, is_pos
 
     def forward(self, counter_values: torch.Tensor) -> torch.Tensor:
-        """counter_values: int64 (B, L). Returns (B, L, d_model)."""
-        # Clamp to valid range; out-of-range -> sentinel.
-        cv = counter_values.clamp(0, self.max_count + 1)
-        return self.mix * self.read_proj(self.c_emb(cv))
+        """counter_values: int64 (B, L). Returns (B, L, d_model).
+        Three-way: sentinel -> 0, zero -> stop_emb, positive -> iter_emb."""
+        is_zero, is_pos = self._state_masks(counter_values)
+        # (B, L, d_model)
+        emb = torch.where(
+            is_zero.unsqueeze(-1),
+            self.stop_emb.expand_as(counter_values.unsqueeze(-1).expand(*counter_values.shape, self.d_model)),
+            torch.where(
+                is_pos.unsqueeze(-1),
+                self.iter_emb.expand_as(counter_values.unsqueeze(-1).expand(*counter_values.shape, self.d_model)),
+                torch.zeros(*counter_values.shape, self.d_model,
+                            device=counter_values.device, dtype=self.stop_emb.dtype),
+            ),
+        )
+        return self.mix * self.read_proj(emb)
 
     def get_eos_bias(self, counter_values: torch.Tensor) -> torch.Tensor:
-        """counter_values: int64 (B, L). Returns (B, L) scalar bias on the
-        EOS logit, applied AFTER the LM head."""
-        cv = counter_values.clamp(0, self.max_count + 1)
-        return self.eos_bias(cv).squeeze(-1)
+        is_zero, is_pos = self._state_masks(counter_values)
+        return torch.where(is_zero, self.eos_bias_zero,
+               torch.where(is_pos, self.eos_bias_pos,
+                           torch.zeros_like(counter_values, dtype=self.eos_bias_zero.dtype)))
 
     def get_iter_bias(self, counter_values: torch.Tensor) -> torch.Tensor:
-        """counter_values: int64 (B, L). Returns (B, L) scalar bias on the
-        iteration-token logit, applied AFTER the LM head.
-
-        The iteration token itself is either:
-          - the scalar `self.iteration_token` (constant per task — HANOIBIN),
-          - or a per-position int64 tensor passed at forward time (FIB-decimal).
-        The bias amount is shared regardless: it's just a "trust the body"
-        signal keyed off counter value.
-        """
-        cv = counter_values.clamp(0, self.max_count + 1)
-        return self.iter_bias(cv).squeeze(-1)
+        """Bias amount on the iteration-token logit. The iteration token
+        itself is the scalar self.iteration_token (HANOIBIN, FIB-unary)
+        or per-position via iter_token_per_pos (FIB-decimal)."""
+        is_zero, is_pos = self._state_masks(counter_values)
+        return torch.where(is_zero, self.iter_bias_zero,
+               torch.where(is_pos, self.iter_bias_pos,
+                           torch.zeros_like(counter_values, dtype=self.iter_bias_zero.dtype)))
 
 
 class ProgressiveModel(nn.Module):

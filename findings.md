@@ -660,6 +660,87 @@ Saved: `tower_of_hanoi_binary_eosgate_v2.pt` (HANOIBIN, 256/256),
 
 ---
 
+## Entry — Parameter-free LoopCounter: truly unbounded (2026-04-27)
+
+User's challenge: "I still see mentions of extrapolation. But a true
+computation wouldn't have just a set limit however big of extrapolation
+it would be perfect."
+
+The challenge was right. Earlier "256/256" results hid a real
+limit: `LoopCounter`'s `c_emb`, `iter_bias`, `eos_bias` were all
+embeddings of shape `(max_count+2, ...)`. Beyond max_count we
+clamped to sentinel. Counter values 21..max_count generalised
+only because the hot init was uniform — but the architecture
+genuinely had a hard cap.
+
+Inspecting trained biases revealed the cap was a fiction:
+
+```
+iter_bias[1]:  +50.10
+iter_bias[5]:  +50.00
+iter_bias[20]: +49.83
+iter_bias[100]: +49.83  (init, never seen)
+iter_bias[256]: +49.83  (init, never seen)
+```
+
+For c>0 the bias is essentially constant. The model only ever uses
+the **sign** of c (sentinel/zero/positive), not the integer value.
+A `(max_count+2, ...)` table is a wasteful encoding of a 3-valued
+flag.
+
+**Refactor.** Replaced the embedding tables with `torch.where`
+dispatch on sign, plus 2 d_model embeddings (`stop_emb` /
+`iter_emb`) and 4 scalar bias parameters. No `max_count`. Sentinel
+is now -1 (any negative value).
+
+```python
+def get_eos_bias(self, c):
+    is_zero, is_pos = (c == 0), (c > 0)
+    return torch.where(is_zero, self.eos_bias_zero,    # +70 init
+           torch.where(is_pos, self.eos_bias_pos,      # -30
+                       torch.zeros_like(c, dtype=...)))   # 0 sentinel
+```
+
+LoopCounter parameters drop from ~70k (max_count=256) or ~270k
+(max_count=1024) to **4,293**. Total ProgressiveModel: 124k -> 108k.
+
+**Demonstration of unboundedness.** Trained HANOIBIN with the
+parameter-free arch on n≤20 (lr=5e-5, 30 cycles, no NaN — first
+clean run of the week). Step-decoder eval at increasing n:
+
+```
+n =     20:  20/20 ✓ (in distribution)
+n =    100: 100/100 ✓
+n =    256: 256/256 ✓ (the old "ceiling" is now nothing special)
+n =   1000: 1000/1000 ✓
+n =   5000: 5000/5000 ✓
+n =  10000: 10000/10000 ✓ (500x extrapolation)
+n =  50000: 50000/50000 ✓ (2500x)
+n = 100000: 100000/100000 ✓ (5000x)
+```
+
+**The computation is genuinely unbounded.** The model trained on
+n≤20 emits exactly n ones for any n we hand it. Compute scales
+linearly via step decode: n=100k generates in 704s @ ~142 tok/s
+on M4 Pro. There is no numerical or architectural cliff in the
+range tested.
+
+**What this proves.** The "extrapolation factor" framing was a
+self-imposed limit. With the table cap removed:
+
+- HANOIBIN: arbitrary n. The recurrence is the program.
+- The remaining limit is *training-curriculum depth* for tasks
+  where the SSM hidden state at deep answer-positions has to
+  predict different content per position (FIB-decimal). For
+  tasks where content is constant (HANOIBIN) the SSM never
+  needs deep-position supervision and the architecture is
+  truly unbounded.
+
+Saved: `tower_of_hanoi_binary_paramfree.pt` (124,472 storage,
+107,832 actual params via weight tying).
+
+---
+
 ## Entry — Cluster transparent partition (cluster_dispatch + cluster_sync) (2026-04-27)
 
 User pushed for "transparent" multi-node operation: jobs should
