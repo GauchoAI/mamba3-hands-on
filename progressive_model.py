@@ -315,6 +315,138 @@ class LoopCounter(nn.Module):
                            torch.zeros_like(counter_values, dtype=self.iter_bias_zero.dtype)))
 
 
+class RegisterBank(nn.Module):
+    """A discrete integer-register pathway with hard read/write semantics.
+
+    Sibling to LoopCounter — but where LoopCounter exposes a single
+    ternary signal (sentinel/zero/positive), RegisterBank exposes
+    a *bank* of discrete integer registers that the model can
+    address, read, and write.
+
+    Per timestep the model emits 3 control signals from the SSM
+    hidden state:
+        read_addr  ∈ [0, n_registers]   (n_registers means "no-read")
+        write_addr ∈ [0, n_registers]   (n_registers means "no-write")
+        write_val  ∈ [0, value_range)   (only meaningful if write_addr < n_registers)
+
+    Plus the regular token output. So the model is producing a
+    4-tuple per step.
+
+    Read FEEDBACK: the value at register[read_addr] is fed back
+    as an additional input embedding on the *next* step (a learned
+    embedding indexed by the integer value). This is how the model
+    sees register contents.
+
+    Discretization: straight-through estimator. Forward uses
+    argmax (truly discrete addresses + values), backward uses
+    softmax of the head logits (smooth gradient). Same trick as
+    VQ-VAE / Gumbel-softmax with hard=True.
+
+    The bank STATE itself (the actual register values) is not stored
+    in this module — it's maintained by the decoder loop at inference
+    time, and oracle-supplied at training time. This keeps the
+    architecture stateless and lets training run in parallel over
+    a full sequence.
+    """
+    NO_READ_INDEX = lambda self: self.n_registers   # last index = no-op
+    NO_WRITE_INDEX = lambda self: self.n_registers
+
+    def __init__(self, d_model: int, n_registers: int = 16,
+                 value_range: int = 16):
+        super().__init__()
+        self.d_model = d_model
+        self.n_registers = n_registers
+        self.value_range = value_range
+
+        # Heads producing per-step control signals.
+        # read_addr / write_addr have an extra "no-op" index at n_registers.
+        self.read_addr_head = nn.Linear(d_model, n_registers + 1)
+        self.write_addr_head = nn.Linear(d_model, n_registers + 1)
+        self.write_val_head = nn.Linear(d_model, value_range)
+        # Init the heads near zero so the model starts with no preference;
+        # cross-entropy loss on the oracle targets shapes the distribution.
+        for h in (self.read_addr_head, self.write_addr_head, self.write_val_head):
+            nn.init.normal_(h.weight, std=0.01)
+            nn.init.zeros_(h.bias)
+        # No-op bias on the last (no-op) index of read/write addr is +2
+        # at init: model defaults to "do nothing" until trained. Avoids
+        # spurious early register operations from random init.
+        with torch.no_grad():
+            self.read_addr_head.bias[n_registers] = 2.0
+            self.write_addr_head.bias[n_registers] = 2.0
+
+        # Read-value embedding: V_REG -> d_model. Fed back as additive
+        # input on the *next* step (the decoder concatenates token_emb +
+        # last_read_emb before the SSM stack).
+        self.value_emb = nn.Embedding(value_range, d_model)
+        nn.init.normal_(self.value_emb.weight, std=0.02)
+        # mix at 0.1 — start small, model has to learn to use the read.
+        # Same lesson as LoopCounter: not too large at init or it
+        # over-influences early dynamics, not too small or it never grows.
+        self.value_mix = nn.Parameter(torch.tensor(0.1))
+
+    def heads(self, x: torch.Tensor):
+        """SSM hidden state -> (read_logits, write_logits, val_logits).
+        x: (B, L, d_model). Returns three tensors with last-dim sizes
+        n_registers+1, n_registers+1, value_range respectively.
+        """
+        return (
+            self.read_addr_head(x),
+            self.write_addr_head(x),
+            self.write_val_head(x),
+        )
+
+    def read_feedback(self, read_values: torch.Tensor) -> torch.Tensor:
+        """Embed integer read-results for feed-back into the next step.
+        read_values: int64 (B,) or (B, L). Returns (..., d_model)."""
+        return self.value_mix * self.value_emb(read_values.clamp(0, self.value_range - 1))
+
+    @staticmethod
+    def straight_through_argmax(logits: torch.Tensor) -> torch.Tensor:
+        """Forward = argmax index (discrete). Backward = softmax gradient.
+        Returns int64 (..., ) — the chosen index."""
+        soft = torch.softmax(logits, dim=-1)
+        idx = soft.argmax(dim=-1)
+        # Straight-through: index is discrete, gradient flows via soft.
+        # We don't need the soft tensor to be tied — the gradient is on
+        # the head's parameters via CE loss in the trainer; this method
+        # is for inference-time decoding.
+        return idx
+
+    def execute_step(self, registers: torch.Tensor,
+                     read_idx: torch.Tensor, write_idx: torch.Tensor,
+                     write_val: torch.Tensor):
+        """Apply one step of register IO.
+
+        registers:  int64 (B, n_registers) — current bank state
+        read_idx:   int64 (B,) — index in [0, n_registers]; n_registers = no-read
+        write_idx:  int64 (B,) — same convention
+        write_val:  int64 (B,) — value in [0, value_range)
+
+        Returns:
+          new_registers: int64 (B, n_registers)
+          read_value:    int64 (B,)  — register[read_idx] or 0 if no-read
+        """
+        B, N = registers.shape
+        # Read: gather the register at read_idx; clamp to valid range first
+        # so the no-read index doesn't index past the bank.
+        clamped_read = read_idx.clamp(0, N - 1)
+        read_value = registers.gather(1, clamped_read.unsqueeze(1)).squeeze(1)
+        # Mask: if no-read, return 0
+        is_no_read = (read_idx == N)
+        read_value = torch.where(is_no_read, torch.zeros_like(read_value), read_value)
+
+        # Write: scatter write_val into write_idx, conditional on not-no-op
+        new_regs = registers.clone()
+        is_write = (write_idx < N)
+        if is_write.any():
+            # For the rows that have a real write, do scatter
+            for b in range(B):
+                if is_write[b]:
+                    new_regs[b, write_idx[b]] = write_val[b]
+        return new_regs, read_value
+
+
 class ProgressiveModel(nn.Module):
     """
     Mamba-3 model that grows layer by layer.
