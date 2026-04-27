@@ -16,6 +16,9 @@ Three test suites:
   3. Edge cases: n=0 (empty answer), n=1 (single token), n=max_n
      (table cap), and n_input != n_counter at the boundaries.
 
+Uses the O(L) step decoder (mamba3 SSM hidden state cached per layer)
+so the full sweep over n=1..256 finishes in seconds.
+
 Exits with non-zero status if any test fails.
 """
 import argparse, sys
@@ -24,9 +27,9 @@ from pathlib import Path
 import torch
 sys.path.insert(0, ".")
 from progressive_model import ProgressiveModel, ByteTokenizer
+from step_decode import step_decode, BOS_TOKEN, SEP_TOKEN
 
 EOS = 257
-SEP_TOKEN = 258
 
 
 def python_reference(n: int) -> str:
@@ -56,69 +59,45 @@ def load_model(pt_path: str, device: str):
     return model, lc_max
 
 
-def autoregressive_decode(model, tok, n_input: int, n_counter: int,
-                          max_count: int, device: str,
-                          max_steps: int = None) -> bytes:
-    """Run the model autoregressively. Returns the raw output bytes
-    (no decoding, no filtering — we want byte-for-byte equality)."""
-    sentinel = max_count + 1
-    if max_steps is None:
-        # Generous cap so we always observe the model's own EOS choice.
-        max_steps = max(n_counter * 2 + 8, 32)
-    inp = f"HANOIBIN {n_input}".encode("utf-8")
-    cur = [256] + list(inp) + [SEP_TOKEN]  # BOS + input + SEP
-    sep = len(cur) - 1
-    out = []
-    for _ in range(max_steps):
-        cv = [sentinel] * len(cur)
-        for k in range(n_counter + 1):
-            p = sep + k
-            if 0 <= p < len(cur):
-                cv[p] = max(0, n_counter - k)
-        x = torch.tensor([cur], dtype=torch.long, device=device)
-        cv_t = torch.tensor([cv], dtype=torch.long, device=device)
-        with torch.no_grad():
-            logits = model(x, counter_values=cv_t)
-        nxt = int(logits[0, -1].argmax().item())
-        if nxt == EOS:
-            break
-        out.append(nxt)
-        cur.append(nxt)
+def decode(model, n_input: int, n_counter: int, max_count: int, device: str):
+    inp = list(f"HANOIBIN {n_input}".encode("utf-8"))
+    prefix = [BOS_TOKEN] + inp + [SEP_TOKEN]
+    sep_pos = len(prefix) - 1
+    out = step_decode(model, prefix, sep_pos, n_counter,
+                      max_steps=max(n_counter * 2 + 8, 32),
+                      device=device, max_count=max_count)
     return bytes(b for b in out if b < 256)
 
 
-def suite_1_length_gen(model, tok, max_n, max_count, device):
-    """For each n in [1, max_n], decode with input=counter=n and compare."""
+def suite_1_length_gen(model, max_n, max_count, device):
     fails = []
     for n in range(1, max_n + 1):
-        actual = autoregressive_decode(model, tok, n, n, max_count, device)
+        actual = decode(model, n, n, max_count, device)
         expected = python_reference(n).encode("ascii")
         if actual != expected:
             fails.append((n, expected, actual))
     return fails
 
 
-def suite_2_counterfactual(model, tok, max_count, device):
-    """Counter must override input. Test pairs (n_input, n_counter)."""
+def suite_2_counterfactual(model, max_count, device):
     pairs = [(20, 10), (10, 20), (5, 100), (100, 5), (50, 50),
              (15, 7), (7, 15), (3, 200), (200, 3),
              (1, 250), (250, 1), (100, 100), (150, 150),
              (256, 1), (1, 256), (0, 50), (50, 0)]
     fails = []
     for ni, nc in pairs:
-        actual = autoregressive_decode(model, tok, ni, nc, max_count, device)
+        actual = decode(model, ni, nc, max_count, device)
         expected = python_reference(nc).encode("ascii")
         if actual != expected:
             fails.append((ni, nc, expected, actual))
     return fails
 
 
-def suite_3_edges(model, tok, max_count, device):
-    """n=0, n=1, n=max_count."""
+def suite_3_edges(model, max_count, device):
     cases = [0, 1, 2, max_count - 1, max_count]
     fails = []
     for n in cases:
-        actual = autoregressive_decode(model, tok, n, n, max_count, device)
+        actual = decode(model, n, n, max_count, device)
         expected = python_reference(n).encode("ascii")
         if actual != expected:
             fails.append((n, expected, actual))
@@ -137,42 +116,44 @@ def main():
     if not Path(args.pt).exists():
         raise SystemExit(f"checkpoint not found: {args.pt}")
 
+    import time
+    t_total = time.time()
     model, lc_max = load_model(args.pt, args.device)
     max_n = args.max_n if args.max_n is not None else lc_max
-    tok = ByteTokenizer()
 
     print(f"Model: {args.pt}")
     print(f"Counter table max: {lc_max}, sentinel: {lc_max + 1}")
-    print(f"Reference: HANOIBIN n -> '1' * n")
+    print(f"Reference: HANOIBIN n -> '1' * n  (step-decoder)")
     print()
 
-    # Suite 1
-    print(f"Suite 1: length-gen sweep n=1..{max_n}")
-    fails1 = suite_1_length_gen(model, tok, max_n, lc_max, args.device)
+    t = time.time()
+    fails1 = suite_1_length_gen(model, max_n, lc_max, args.device)
+    print(f"Suite 1: length-gen sweep n=1..{max_n} ({time.time()-t:.1f}s)")
     print(f"  {max_n - len(fails1)}/{max_n} match Python reference")
     for n, exp, act in fails1[:5]:
         print(f"  ✗ n={n}: expected len={len(exp)}, got len={len(act)}")
     print()
 
-    # Suite 2
-    print(f"Suite 2: counterfactual control")
-    fails2 = suite_2_counterfactual(model, tok, lc_max, args.device)
+    t = time.time()
+    fails2 = suite_2_counterfactual(model, lc_max, args.device)
     n_total_2 = 17
+    print(f"Suite 2: counterfactual control ({time.time()-t:.1f}s)")
     print(f"  {n_total_2 - len(fails2)}/{n_total_2} pass")
     for ni, nc, exp, act in fails2[:5]:
         print(f"  ✗ input={ni} counter={nc}: expected len={len(exp)}, got len={len(act)}")
     print()
 
-    # Suite 3
-    print(f"Suite 3: edge cases (n=0, 1, 2, {lc_max-1}, {lc_max})")
-    fails3 = suite_3_edges(model, tok, lc_max, args.device)
+    t = time.time()
+    fails3 = suite_3_edges(model, lc_max, args.device)
     n_total_3 = 5
+    print(f"Suite 3: edge cases ({time.time()-t:.1f}s)")
     print(f"  {n_total_3 - len(fails3)}/{n_total_3} pass")
     for n, exp, act in fails3:
         print(f"  ✗ n={n}: expected len={len(exp)}, got len={len(act)}")
     print()
 
     total_fails = len(fails1) + len(fails2) + len(fails3)
+    print(f"Total wall: {time.time()-t_total:.1f}s")
     if total_fails == 0:
         print("FISH PASS — model matches Python reference byte-for-byte across all suites.")
         return 0
