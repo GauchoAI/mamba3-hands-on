@@ -79,25 +79,31 @@ class OutputHistoryAttention(nn.Module):
     def __init__(self, d_model: int, d_attn: int = 32):
         super().__init__()
         import math
+        # Pre-norm on input (matches the existing layer norm pattern).
+        # Critical for stability: the SSM's accumulated state has large
+        # variance; running attention scores on unnormalized values can
+        # produce extreme softmax values that send gradients to NaN.
+        self.in_norm = nn.LayerNorm(d_model)
         self.q_proj = nn.Linear(d_model, d_attn)
         self.k_proj = nn.Linear(d_model, d_attn)
         self.v_proj = nn.Linear(d_model, d_model)
         self.out_proj = nn.Linear(d_model, d_model)
         self.scale = 1.0 / math.sqrt(d_attn)
-        # Init out_proj near zero so the new pathway starts as a no-op;
-        # the model has to learn its way into using it. Pairs with the
-        # learnable mix factor to give a smooth gradient pathway.
-        nn.init.normal_(self.out_proj.weight, mean=0.0, std=0.01)
+        # Init out_proj at ZERO so the new pathway is a literal no-op
+        # at step 1. The mix factor + learned out_proj give the model
+        # full control over how much to use this pathway, growing it
+        # gradually if it helps.
+        nn.init.zeros_(self.out_proj.weight)
         nn.init.zeros_(self.out_proj.bias)
-        self.mix = nn.Parameter(torch.tensor(0.1))
+        self.mix = nn.Parameter(torch.tensor(0.01))
 
     def forward(self, x):
         B, L, D = x.shape
-        Q = self.q_proj(x)               # (B, L, d_attn)
-        K = self.k_proj(x)               # (B, L, d_attn)
-        V = self.v_proj(x)               # (B, L, D)
+        h = self.in_norm(x)
+        Q = self.q_proj(h)
+        K = self.k_proj(h)
+        V = self.v_proj(h)
         scores = torch.einsum("bld,bmd->blm", Q, K) * self.scale
-        # Causal mask: position l can only attend to positions ≤ l
         mask = torch.triu(torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1)
         scores = scores.masked_fill(mask, float("-inf"))
         weights = torch.softmax(scores, dim=-1)
