@@ -26,6 +26,7 @@ import torch
 HANOI_INPUT_RE = re.compile(rb"HANOI (\d+)")
 HANOITRACE_INPUT_RE = re.compile(rb"HANOITRACE (\d+)")
 HANOIBIN_INPUT_RE = re.compile(rb"HANOIBIN (\d+)")
+FIB_INPUT_RE = re.compile(rb"FIB (\d+)")
 
 
 SEP_TOKEN = 258
@@ -60,6 +61,61 @@ def find_sep_positions(token_tensor):
     for row in rows:
         out.append(row.index(SEP_TOKEN) if SEP_TOKEN in row else -1)
     return out
+
+
+def _fib_int(n: int) -> int:
+    """Iterative Fibonacci, identical to the generator's _fib."""
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    return a
+
+
+def parse_fib_n_from_tokens(token_tensor):
+    """Parse the integer n from 'FIB n' inputs, stopping at SEP."""
+    Bn = token_tensor.shape[0]
+    out = []
+    for i in range(Bn):
+        row = token_tensor[i].tolist()
+        if SEP_TOKEN in row:
+            row = row[: row.index(SEP_TOKEN)]
+        bytes_list = [b for b in row if 32 <= b < 127]
+        text = bytes(bytes_list)
+        m = FIB_INPUT_RE.search(text)
+        out.append(int(m.group(1)) if m else 0)
+    return out
+
+
+def fib_unary_counter_trajectory(token_tensor, sentinel: int, max_count: int,
+                                 device="cpu"):
+    """Counter trajectory for FIB unary task: 'FIB n' -> '1' * F(n).
+
+    Same SHAPE as hanoibin_counter_trajectory but the initial counter
+    value at SEP is F(n), not n. The oracle handles the parse +
+    arithmetic; the model handles the loop.
+
+    Counter values are clamped to max_count so out-of-table values
+    map to a valid index. (For the experiment, train F(n) <= max_count
+    and the eval can push past it to test the bias-table generalisation.)
+
+    Returns (counter_int64 (B, L), Fns: list[int]).
+    """
+    B, L = token_tensor.shape
+    counter = torch.full((B, L), sentinel, dtype=torch.long, device=device)
+    ns = parse_fib_n_from_tokens(token_tensor)
+    seps = find_sep_positions(token_tensor)
+    fns = []
+    for i, (n, s) in enumerate(zip(ns, seps)):
+        fn = _fib_int(n) if n > 0 else 0
+        fns.append(fn)
+        if fn <= 0 or s < 0:
+            continue
+        for k in range(fn + 1):
+            p = s + k
+            if 0 <= p < L:
+                # Clamp to max_count so the embedding lookup is safe.
+                counter[i, p] = min(fn - k, max_count)
+    return counter, fns
 
 
 def hanoibin_counter_trajectory(token_tensor, sentinel: int, device="cpu"):

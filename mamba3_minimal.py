@@ -198,6 +198,90 @@ class Mamba3Block(nn.Module):
         out = self.out_proj(y)
         return out
 
+    def init_state(self, batch_size: int, device, dtype=torch.float32):
+        """Allocate zero state for step-mode decoding. State is a dict:
+            h:          (B, H, hD, dS) — SSM hidden state
+            Bx_prev:    (B, H, hD, dS) — previous Bx for trapezoidal blend
+            phase_acc:  (B, dS//2) — cumulative RoPE phase
+        """
+        nH, hD, dS = self.nheads, self.headdim, self.d_state
+        return {
+            "h": torch.zeros(batch_size, nH, hD, dS, device=device, dtype=dtype),
+            "Bx_prev": torch.zeros(batch_size, nH, hD, dS, device=device, dtype=dtype),
+            "phase_acc": torch.zeros(batch_size, self.num_rope_angles, device=device, dtype=dtype),
+        }
+
+    def step(self, u, state):
+        """One-step recurrence for autoregressive decoding.
+
+        u:     (B, 1, d_model)  — single new token's embedding
+        state: dict from init_state() / a previous step()
+
+        Returns (out: (B, 1, d_model), new_state).
+
+        Mirrors forward() exactly for L=1 but threads state across calls
+        so cost is O(1) per token instead of O(L) per token.
+        """
+        cfg = self.cfg
+        nH, hD, dS = self.nheads, self.headdim, self.d_state
+        B_ = u.shape[0]
+
+        proj = self.in_proj(u)
+        splits = [
+            self.d_inner, self.d_inner,
+            dS, dS,
+            nH, nH, nH,
+            self.num_rope_angles,
+        ]
+        z, x, Bp, Cp, dd_dt, dd_A, trap_raw, angles = torch.split(proj, splits, dim=-1)
+        x = x.view(B_, 1, nH, hD)
+        z = z.view(B_, 1, nH, hD)
+        Bp = self.B_norm(Bp)
+        Cp = self.C_norm(Cp)
+
+        DT = F.softplus(dd_dt + self.dt_bias)             # (B, 1, H)
+        DT_mean = DT.mean(dim=-1, keepdim=True)            # (B, 1, 1)
+        phase_step = (angles * DT_mean).squeeze(1)         # (B, dS//2)
+        new_phase_acc = state["phase_acc"] + phase_step    # cumulative across calls
+
+        if self.use_rope:
+            phase_for_rope = new_phase_acc.unsqueeze(1)    # (B, 1, dS//2)
+            Bp_rot = apply_rope_pairs(Bp, phase_for_rope)
+            Cp_rot = apply_rope_pairs(Cp, phase_for_rope)
+        else:
+            Bp_rot, Cp_rot = Bp, Cp
+
+        Bp_rot = Bp_rot.unsqueeze(2).expand(B_, 1, nH, dS)
+        Cp_rot = Cp_rot.unsqueeze(2).expand(B_, 1, nH, dS)
+
+        A = (-F.softplus(dd_A)).clamp(max=-cfg.A_floor)    # (B, 1, H)
+        decay = torch.exp(A * DT)                          # (B, 1, H)
+
+        # Outer product Bx for the current step: (B, H, hD, dS)
+        Bx = torch.einsum("bhp,bhn->bhpn", x[:, 0], Bp_rot[:, 0])
+
+        # Trapezoidal blend with previous Bx (zeros at first step)
+        if self.use_trap:
+            trap = torch.sigmoid(trap_raw)[:, 0, :, None, None]  # (B, H, 1, 1)
+            inp = trap * Bx + (1 - trap) * state["Bx_prev"]
+        else:
+            inp = Bx
+
+        # Scale by dt
+        inp = inp * DT[:, 0, :, None, None]                # (B, H, hD, dS)
+
+        # One-step SSM recurrence: h_t = decay * h_{t-1} + inp
+        new_h = decay[:, 0, :, None, None] * state["h"] + inp
+        # Output: y = (h * C).sum(dS) + D * x; then gate by silu(z)
+        y = (new_h * Cp_rot[:, 0, :, None, :]).sum(dim=-1)     # (B, H, hD)
+        y = y + self.D[None, :, None] * x[:, 0]
+        y = y * (z[:, 0] * torch.sigmoid(z[:, 0]))             # silu gate
+        y = y.reshape(B_, 1, self.d_inner)
+
+        out = self.out_proj(y)
+        new_state = {"h": new_h, "Bx_prev": Bx, "phase_acc": new_phase_acc}
+        return out, new_state
+
 
 # ---------------- A Mamba-2-style baseline (no RoPE, Euler) ----------------
 

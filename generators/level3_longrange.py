@@ -94,6 +94,31 @@ def gen_tower_of_hanoi_binary(n_disks=2):
     return {"type": "tower_of_hanoi_binary", "input": f"HANOIBIN {n}", "output": "1" * n}
 
 
+def _fib(n: int) -> int:
+    """Iterative Fibonacci: F(0)=0, F(1)=1, F(2)=1, F(3)=2, ..."""
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    return a
+
+
+def gen_fib_unary(n_max=10):
+    """Fibonacci in UNARY: 'FIB n' → '1' * F(n).
+
+    Output length = F(n), which grows exponentially — F(10)=55,
+    F(15)=610, F(20)=6765. So n_max should stay small.
+
+    Sanity-check counterpart to HANOIBIN: instead of the counter
+    being the parsed integer n, the counter is F(n), computed by
+    the oracle from n. Tests whether the LoopCounter pattern
+    transfers when the counter value is a non-trivial function
+    of the input.
+    """
+    n = random.randint(1, n_max)
+    fn = _fib(n)
+    return {"type": "fib_unary", "input": f"FIB {n}", "output": "1" * fn}
+
+
 def gen_string_length(max_len=10):
     """Count the number of elements in a sequence.
     Example: '5 3 8 1 4 2' → '6'
