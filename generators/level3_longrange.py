@@ -78,6 +78,22 @@ def gen_tower_of_hanoi(n_disks=2):
     return {"type": "tower_of_hanoi", "input": f"HANOI {n}", "output": str(moves)}
 
 
+def gen_tower_of_hanoi_binary(n_disks=2):
+    """Hanoi move-count in BINARY: 2^n - 1 = n ones.
+    Example: 'HANOIBIN 3' → '111'
+
+    Diagnostic for the trajectory-distillation experiment: the
+    decimal-output Hanoi failed to extrapolate past the trained
+    range (memorized templates). The binary form removes the
+    binary→decimal converter — the model only needs to count
+    to n and emit n '1's. If THIS extrapolates while decimal
+    doesn't, the failure was the output head, not the program.
+    If this also fails, the recurrence itself isn't generalising.
+    """
+    n = random.randint(1, n_disks)
+    return {"type": "tower_of_hanoi_binary", "input": f"HANOIBIN {n}", "output": "1" * n}
+
+
 def gen_string_length(max_len=10):
     """Count the number of elements in a sequence.
     Example: '5 3 8 1 4 2' → '6'

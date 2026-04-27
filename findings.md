@@ -257,6 +257,71 @@ those at this scale.
 
 ---
 
+## Entry — The shortcut is *last-digit attention*, not output decoding (2026-04-27)
+
+**Setup.** The decimal-Hanoi failure mode (`HANOI 25` → `255` =
+2^8 − 1) was originally attributed to two possible bottlenecks:
+the binary→decimal output head, or the recurrence itself. To
+disambiguate I added a unary-output variant — `gen_tower_of_hanoi_binary`
+— where the answer is just `'1' * n`. No arithmetic, no
+carries, no decimal. The model only has to count to n and emit n
+ones. Trained the same baseline architecture (d=64, L=3, ~104k
+params, no oracle, no registers, no noise) on the staged
+curriculum; n_disks=12 hit 100% in 4 cycles, then stage 5 (n=16)
+NaN'd. The cycle-4 checkpoint (clean, n≤12) was used for the test.
+
+**Result.** 12/12 on n∈[1,12]. **0/88 on n∈[13,100]**, and the
+failure pattern is the diagnostic:
+
+```
+n=21 → '1'         n=31 → '1'         n=61 → '1'
+n=22 → '11'        n=32 → '11'        n=62 → '11'
+n=23 → '111'       n=33 → '111'       n=63 → '111'
+n=24 → '1111'      n=34 → '1111'      ...
+n=25 → '11111'     n=35 → '11111'     n=70 → '1111111111'
+n=29 → '111111111' n=39 → '111111111' n=99 → '111111111'
+n=100 → '1111111111'
+```
+
+The model is reading the **last digit of n** and emitting that
+many ones. It treats `"21"` as "1", `"35"` as "5", `"100"` as "0"
+(re-rolled via length norm to "10"). The first digit of a
+multi-digit input is invisible to it.
+
+**Why this matters.** This rules out the output-decoder hypothesis.
+It was never the binary→decimal converter — even with that path
+removed, the model picks the same shortcut. The architecture is
+not building a counter; it's running a token-level lookup with
+strong rightmost-token bias.
+
+**Mechanistic guess.** The SSM's local kernel mixes adjacent
+tokens, but in the byte-tokenizer setup `"HANOI 21"` ends with
+the byte for `'1'` immediately before SEP. Whatever feature gets
+written to the post-SEP register at the start of generation is
+dominated by that last byte. There's no architectural pressure to
+*combine* the digits into a place-valued integer before
+generation begins, so the model never learns to.
+
+**Implication for the next ship.** Three things would each force
+the model to attend to all input digits:
+
+1. **Length-modulated output supervision** — pad the answer with
+   the input's length encoding so the loss credits "pred_len ==
+   input-derived-n", not just per-digit CE. Cheap.
+2. **Bidirectional / multi-pass input encoding** — let the SSM
+   re-read the input from both sides before answer generation.
+   Architectural but contained.
+3. **Discrete loop-counter primitive** — an explicit integer
+   register the model can decrement, with hard `--` and `==0`
+   semantics, supervised by the trajectory oracle.
+
+The failure here is sharper than the trajectory-distillation
+result because the task was unary — there's no plausible
+alternative explanation involving output-side computation. The
+representation of `n` itself is the bottleneck.
+
+---
+
 ## Entry — Neural composition works (synapse v2, AttendBridge) (2026-04-26)
 
 **Setup.** A tiny router (d=16, L=1, 7,654 trainable params) trained on
