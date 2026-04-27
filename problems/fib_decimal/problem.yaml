@@ -5,8 +5,15 @@ target_accuracy: 0.95
 tags: [reasoning, longrange, level3, fibonacci, decimal]
 description: "Fibonacci as decimal digits: 'FIBD n' -> str(F(n)). Tests per-position iter_token in LoopCounter."
 curriculum:
-  - {stage: 1, n_max: 5,  advance_at: 0.95}
-  - {stage: 2, n_max: 10, advance_at: 0.95}
-  - {stage: 3, n_max: 15, advance_at: 0.95}
-  - {stage: 4, n_max: 20, advance_at: 0.90}
-  # Cap at n=20 (F=6765, 4 digits). Extrapolation test pushes further.
+  - {stage: 1, n_max: 5,   advance_at: 0.95}
+  - {stage: 2, n_max: 10,  advance_at: 0.95}
+  - {stage: 3, n_max: 15,  advance_at: 0.95}
+  - {stage: 4, n_max: 20,  advance_at: 0.90}
+  # Stages 5-7 expose the model to deeper answer spans during training,
+  # which the n_max<=20 v1/v2 model never saw. The earlier eval cliff
+  # was at depth ~30 (n=144+ where F has >30 digits) — without seeing
+  # depth >4 in training, the SSM's deep-span hidden state had no
+  # supervision and emitted '0' as the safe default.
+  - {stage: 5, n_max: 35,  advance_at: 0.90}   # F up to ~9.2M, 7 digits
+  - {stage: 6, n_max: 60,  advance_at: 0.90}   # F up to ~1.5B, 13 digits
+  - {stage: 7, n_max: 100, advance_at: 0.90}   # F up to 21 digits

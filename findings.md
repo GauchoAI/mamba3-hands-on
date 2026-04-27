@@ -627,13 +627,28 @@ correct digit at deep answer-span positions (k=30+). For example
 n=191 emits "...833800000000" (8 zeros tail) instead of
 "...833808526209". Same shape as the HANOIBIN SEP-drift cliff —
 deep answer-span positions accumulate an SSM hidden-state bias
-that overwhelms the +50 iter_bias. Fixable directions:
-  - bigger iter_bias (e.g., +70)
-  - larger counter table (currently capped at 64 digits)
-  - extend training curriculum past 4-digit answers
-This isn't yet iron-solid past 7x extrapolation; HANOIBIN was
-solid to 12.8x with bidirectional gating because the iter_token
-was constant.
+that overwhelms the +50 iter_bias.
+
+**v3: extended curriculum closes the cliff.** Trained with stages
+up to n_max=60 (13-digit answers; max stages 1-6 cleared, NaN at
+stage 7 transition to n_max=100). Saved cycle-9 checkpoint
+(`fib_decimal_deep_n60.pt`):
+
+  - n=1..200: **200/200 ✓** (3.2x depth extrapolation: 13-digit
+    training -> 42-digit eval) — iron solid in the supported range.
+  - n=1..500: 5 failures starting at n=268 (~56 digits). Cliff is
+    pushed out from n=144 (depth 30) to n=268 (depth 56) by
+    exposing the SSM to deeper answer spans during training.
+
+Training cap (n_max in curriculum) ↔ extrapolation depth scales
+roughly linearly: 4-digit cap ↔ depth-30 cliff; 13-digit cap ↔
+depth-56 cliff. The architecture works; the limitation is that
+the SSM's hidden-state at position k+answer_offset has only been
+supervised up to k_train, so deep positions fall back to the
+weight-tied LM head's "predict the previous token" or "0" mode.
+
+The fix that stayed *inside* the iron-solid bar: train deeper
+curriculum, not bigger model.
 
 The per-position iter_token primitive generalizes cleanly. The
 loop body is now: "while counter>0: emit iter_token_per_pos[t];
