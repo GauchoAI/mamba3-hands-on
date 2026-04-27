@@ -391,6 +391,83 @@ lr=1e-4, 12 clean cycles, NaN at 13).
 
 ---
 
+## Entry — LoopCounter primitive: additive injection isn't enough (2026-04-27)
+
+**Setup.** Following the bidir result (rules out rightmost-byte
+attention; the model learns a bounded periodic counter), I added
+a `LoopCounter` module to `progressive_model.py`: an oracle-driven
+embedding-table pathway. External code computes the per-position
+counter trajectory — n at SEP, decrementing one per output
+position, 0 at the EOS slot, sentinel elsewhere — and feeds it as
+a second input to the model. The module looks up `c_emb[c_t]`,
+projects, and adds a gated contribution to the model stream
+before the LM head. Training uses HANOIBIN, n≤20.
+
+**The pathway works structurally.** Teacher-forced EOS probe at
+cycle 40 (loss 0.38, byte acc 100%, mix=0.1005, c_emb[0] norm
+0.39, every other c_emb row near zero):
+
+```
+n=21..50 (OOD!) → predict EOS at counter==0 ✓
+n=1..20 (in-dist) → predict '1' at counter==0 ✗
+n=100 → fail
+```
+
+Autoregressive: 13/20 in-distribution (vs 0/20 baseline + bidir),
+0/10 OOD past 20.
+
+**The shape of the failure.** The model has learned `c_emb[0]` =
+"strong EOS push" (this is the only counter row with meaningful
+norm). At positions where the SSM is uncertain (n=21-50, just past
+training range), the counter wins and EOS fires. At positions
+where the SSM has memorized "still in answer cycle" (n=1..20), the
+counter pathway is too weak to override. At very-OOD (n=100+) the
+SSM's bounded-counter cycle wins again because its position-driven
+"still in answer" signal accumulates faster than the counter's
+single-position EOS push.
+
+**Why the pathway stays weak.** `mix` barely moved from its 0.1
+init across 40 cycles. The gradient on `mix` comes mostly from
+the EOS slot (one position per example), while the rest of the
+positions agree between SSM and counter (both want '1') and
+provide no differentiating signal. With grad clip 1.0 and
+loss averaged across many positions, the counter-pathway
+gradient is tiny.
+
+**The aux-loss attempt didn't help.** Added an EOS-weighted
+auxiliary CE loss at counter==0 positions to concentrate gradient.
+Weight=5: byte accuracy collapsed (100% → 16-83%, oscillating).
+Weight=1.0: ~3 cycles of gentler turbulence then NaN at cycle 47.
+The aux loss creates conflicts with the existing CE loss without
+actually growing the counter pathway — `mix` stayed at 0.1005.
+
+**What this proves.**
+
+- ✓ Oracle-supervised primitive can predict EOS correctly at OOD
+  ranges (counter pathway is structurally correct).
+- ✗ Additive injection of an oracle primitive is insufficient
+  when the SSM has competing learned patterns.
+- ✗ Concentrating gradient via aux loss destabilises training
+  without growing the new pathway.
+
+**The architectural lesson.** The model needs a *gating* mechanism,
+not addition. The counter pathway should be able to *override*
+the SSM's prediction at counter==0 rather than competing with it.
+Concretely: a direct counter→EOS logit bias
+
+```python
+logits[..., EOS] += eos_bias_table[c_t]
+```
+
+This bypasses both `mix` and the LM head's weight tying for the
+specific case of "stop now" — the counter doesn't have to fight
+the SSM, it just adds a hard preference.
+
+Saved diagnostic checkpoints:
+- `tower_of_hanoi_binary_loopctr.pt` (cycle 40, pre-aux, 13/20)
+
+---
+
 ## Entry — Neural composition works (synapse v2, AttendBridge) (2026-04-26)
 
 **Setup.** A tiny router (d=16, L=1, 7,654 trainable params) trained on

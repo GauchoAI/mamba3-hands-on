@@ -208,6 +208,53 @@ class OutputHistoryAttention(nn.Module):
         return self.mix * out
 
 
+class LoopCounter(nn.Module):
+    """A discrete integer-register pathway. Oracle-supervised: external
+    code provides per-position counter values (parsed-from-input n at
+    SEP, decremented one-per-output-position, sentinel outside the
+    answer span). The module just looks up an embedding and adds a
+    gated projection to the model stream.
+
+    Unlike `ExplicitRegisters` (continuous, model-internal, soft I/O)
+    this is *handed* to the model — at inference an external parser
+    reads n from the input bytes and feeds the same trajectory.
+
+    The argument we're testing: if the SSM is given a counter primitive,
+    can it learn to gate EOS prediction on `c==0`? The bidir experiment
+    showed the SSM cannot extract n itself; this externalises the part
+    it failed at and asks if the rest of the program is learnable.
+    """
+    SENTINEL_OFFSET = 1  # max_count + 1 = sentinel index
+
+    def __init__(self, d_model: int, max_count: int = 1024):
+        super().__init__()
+        self.d_model = d_model
+        self.max_count = max_count
+        # max_count + 2 entries: [0..max_count] valid + 1 sentinel
+        self.c_emb = nn.Embedding(max_count + 2, d_model)
+        nn.init.normal_(self.c_emb.weight, std=0.02)
+        # Sentinel embedding starts at 0 so out-of-span positions are
+        # initially a no-op contribution.
+        with torch.no_grad():
+            self.c_emb.weight[max_count + 1].zero_()
+        self.read_proj = nn.Linear(d_model, d_model)
+        # Init read_proj small so the counter pathway is near-identity at
+        # start; the model has to learn to use it.
+        nn.init.normal_(self.read_proj.weight, std=0.01)
+        nn.init.zeros_(self.read_proj.bias)
+        self.mix = nn.Parameter(torch.tensor(0.1))
+
+    @property
+    def sentinel(self) -> int:
+        return self.max_count + 1
+
+    def forward(self, counter_values: torch.Tensor) -> torch.Tensor:
+        """counter_values: int64 (B, L). Returns (B, L, d_model)."""
+        # Clamp to valid range; out-of-range -> sentinel.
+        cv = counter_values.clamp(0, self.max_count + 1)
+        return self.mix * self.read_proj(self.c_emb(cv))
+
+
 class ProgressiveModel(nn.Module):
     """
     Mamba-3 model that grows layer by layer.
@@ -223,7 +270,8 @@ class ProgressiveModel(nn.Module):
     def __init__(self, d_model=64, d_state=16, expand=2, headdim=16,
                  use_history_attn: bool = False, history_d_attn: int = 32,
                  use_explicit_registers: bool = False,
-                 n_registers: int = 8, d_register: int = 32):
+                 n_registers: int = 8, d_register: int = 32,
+                 use_loop_counter: bool = False, loop_counter_max: int = 1024):
         super().__init__()
         self.d_model = d_model
         self.ssm_cfg = Mamba3Config(
@@ -254,6 +302,12 @@ class ProgressiveModel(nn.Module):
         self.registers = (ExplicitRegisters(d_model, n_registers=n_registers,
                                              d_register=d_register)
                           if use_explicit_registers else None)
+
+        # Optional discrete loop counter — oracle-supervised integer
+        # register the model reads at every output position.
+        self.use_loop_counter = use_loop_counter
+        self.loop_counter = (LoopCounter(d_model, max_count=loop_counter_max)
+                             if use_loop_counter else None)
 
         self.mode = "all"
 
@@ -309,7 +363,7 @@ class ProgressiveModel(nn.Module):
     def get_trainable_params(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-    def forward(self, tokens):
+    def forward(self, tokens, counter_values=None):
         x = self.embed_norm(self.embed(tokens))
 
         for layer in self.kernel_layers:
@@ -331,6 +385,15 @@ class ProgressiveModel(nn.Module):
         # configured.
         if self.registers is not None:
             x = x + self.registers(x)
+
+        # Loop counter: oracle/parser-supervised. counter_values must be
+        # provided when this pathway is active; if None and the module
+        # exists we feed an all-sentinel tensor (no-op).
+        if self.loop_counter is not None:
+            if counter_values is None:
+                counter_values = torch.full(tokens.shape, self.loop_counter.sentinel,
+                                            dtype=torch.long, device=tokens.device)
+            x = x + self.loop_counter(counter_values)
 
         x = self.final_norm(x)
         return self.head(x)

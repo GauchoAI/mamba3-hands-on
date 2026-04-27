@@ -23,14 +23,34 @@ sys.path.insert(0, ".")
 from progressive_model import ProgressiveModel, ByteTokenizer, PAD
 
 
-def autoregressive_predict(model, tokens, sep_pos, max_new, device):
+def autoregressive_predict(model, tokens, sep_pos, max_new, device,
+                           loop_counter_n=None, loop_counter_max=1024):
+    """Greedy decode after SEP. If loop_counter_n is provided, build a
+    counter trajectory matching the trainer's oracle: counter[sep]=n,
+    decrementing one per emitted token, 0 at the would-be-EOS position,
+    sentinel elsewhere.
+    """
     EOS = 257
     cur = list(tokens[: sep_pos + 1])
     out_bytes = []
-    for _ in range(max_new):
+    sentinel = loop_counter_max + 1
+    for step in range(max_new):
         x = torch.tensor([cur], dtype=torch.long, device=device)
         with torch.no_grad():
-            logits = model(x)
+            if loop_counter_n is None:
+                logits = model(x)
+            else:
+                # Counter at every position in the current prefix:
+                # positions [0, sep) -> sentinel
+                # position  sep+k    -> max(0, n - k)  for k in 0..n
+                # past sep+n         -> sentinel
+                cv = [sentinel] * len(cur)
+                for k in range(loop_counter_n + 1):
+                    p = sep_pos + k
+                    if 0 <= p < len(cur):
+                        cv[p] = max(0, loop_counter_n - k)
+                cv_t = torch.tensor([cv], dtype=torch.long, device=device)
+                logits = model(x, counter_values=cv_t)
         next_tok = int(logits[0, -1].argmax().item())
         if next_tok == EOS:
             break
@@ -47,10 +67,15 @@ def make_example(n, bidir=False):
             "output": "1" * n}
 
 
-def evaluate_n(model, tok, n, max_new, device, bidir=False):
+def evaluate_n(model, tok, n, max_new, device, bidir=False,
+               loop_counter=False, loop_counter_max=1024):
     ex = make_example(n, bidir=bidir)
     toks, sep = tok.encode_curriculum(ex)
-    pred = autoregressive_predict(model, toks, sep, max_new=max_new, device=device)
+    pred = autoregressive_predict(
+        model, toks, sep, max_new=max_new, device=device,
+        loop_counter_n=(n if loop_counter else None),
+        loop_counter_max=loop_counter_max,
+    )
     target = "1" * n
     correct = (pred == target)
     # Diagnostic: length of correct-prefix and total length, so we can see
@@ -76,6 +101,9 @@ def load_specialist(pt_path, device):
                    if has_registers else 8)
     d_register = (sd["registers.read_proj.weight"].shape[1]
                   if has_registers else 32)
+    has_loop_counter = any(k.startswith("loop_counter.") for k in sd.keys())
+    loop_counter_max = (sd["loop_counter.c_emb.weight"].shape[0] - 2
+                        if has_loop_counter else 1024)
     model = ProgressiveModel(
         d_model=cfg.get("d_model", 64),
         d_state=cfg.get("d_state", 16),
@@ -86,12 +114,14 @@ def load_specialist(pt_path, device):
         use_explicit_registers=has_registers,
         n_registers=n_registers,
         d_register=d_register,
+        use_loop_counter=has_loop_counter,
+        loop_counter_max=loop_counter_max,
     ).to(device)
     for _ in range(cfg.get("n_kernel_layers", 1)):
         model.add_kernel_layer()
     model.load_state_dict(sd)
     model.eval()
-    return model, ck
+    return model, ck, has_loop_counter, loop_counter_max
 
 
 def main():
@@ -115,7 +145,9 @@ def main():
         raise SystemExit(f"checkpoint not found: {args.pt}")
 
     print(f"Loading {args.pt} on {args.device} ...")
-    model, ck = load_specialist(args.pt, args.device)
+    model, ck, has_lc, lc_max = load_specialist(args.pt, args.device)
+    if has_lc:
+        print(f"Loop counter detected: max_count={lc_max}, sentinel={lc_max+1}")
     cfg = ck.get("config", {})
     print(f"Model: d={cfg.get('d_model')}, L={cfg.get('n_kernel_layers')}, "
           f"trained_acc={ck.get('accuracy', 0):.0%}, params="
@@ -130,7 +162,9 @@ def main():
     # max_new generously bigger than n_max so EOS prediction can fail openly
     max_new = max(args.n_max + 20, 64)
     for n in range(1, args.n_max + 1):
-        correct, pred, target, prefix = evaluate_n(model, tok, n, max_new, args.device, bidir=args.bidir)
+        correct, pred, target, prefix = evaluate_n(
+            model, tok, n, max_new, args.device,
+            bidir=args.bidir, loop_counter=has_lc, loop_counter_max=lc_max)
         rows.append({"n": n, "correct": correct, "pred_len": len(pred),
                      "prefix_ones": prefix, "pred_sample": pred[:50]})
         in_dist = n <= args.trained_up_to

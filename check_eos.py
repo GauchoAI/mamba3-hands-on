@@ -19,24 +19,33 @@ ONE = ord("1")
 def load(pt_path, device):
     ck = torch.load(pt_path, map_location=device, weights_only=False)
     cfg = ck["config"]
+    sd = ck["model"]
+    has_lc = any(k.startswith("loop_counter.") for k in sd.keys())
+    lc_max = (sd["loop_counter.c_emb.weight"].shape[0] - 2
+              if has_lc else 1024)
     model = ProgressiveModel(d_model=cfg["d_model"], d_state=cfg["d_state"],
-                             expand=2, headdim=cfg["headdim"])
+                             expand=2, headdim=cfg["headdim"],
+                             use_loop_counter=has_lc, loop_counter_max=lc_max)
     for _ in range(cfg["n_kernel_layers"]):
         model.add_kernel_layer()
-    model.load_state_dict(ck["model"])
+    model.load_state_dict(sd)
     model.eval()
-    return model.to(device), ck
+    return model.to(device), ck, has_lc, lc_max
 
 
-def check_n(model, tok, n, bidir, device):
+def check_n(model, tok, n, bidir, device, has_lc=False, lc_max=1024):
     inp = f"HANOIBIN {n}"
     if bidir:
         inp = inp + " " + inp[::-1]
     ex = {"input": inp, "output": "1" * n}
     toks, sep = tok.encode_curriculum(ex)
     x = torch.tensor([toks], dtype=torch.long, device=device)
+    cv = None
+    if has_lc:
+        from hanoi_oracle import hanoibin_counter_trajectory
+        cv, _ = hanoibin_counter_trajectory(x, sentinel=lc_max + 1, device=device)
     with torch.no_grad():
-        logits = model(x)
+        logits = model(x, counter_values=cv) if has_lc else model(x)
     # Position sep+n predicts the (n+1)-th answer-position output, which
     # should be EOS. Position sep+n-1 predicts the n-th '1'. So we want
     # argmax at position sep+n-1 (the LAST '1' in the answer) to be EOS,
@@ -63,13 +72,16 @@ def main():
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
     args = ap.parse_args()
 
-    model, ck = load(args.pt, args.device)
+    model, ck, has_lc, lc_max = load(args.pt, args.device)
     tok = ByteTokenizer()
+    if has_lc:
+        print(f"loop counter detected: max_count={lc_max}")
     print(f"{'n':>4}  {'argmax':>8}  {'p(EOS)':>10}  {'p(1)':>10}  verdict")
     print("-" * 60)
     for s in args.ns.split(","):
         n = int(s)
-        argmax, p_eos, p_one = check_n(model, tok, n, args.bidir, args.device)
+        argmax, p_eos, p_one = check_n(model, tok, n, args.bidir, args.device,
+                                        has_lc=has_lc, lc_max=lc_max)
         if argmax is None:
             print(f"{n:>4}  out of range")
             continue

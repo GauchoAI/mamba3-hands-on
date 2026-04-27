@@ -25,6 +25,7 @@ import torch
 
 HANOI_INPUT_RE = re.compile(rb"HANOI (\d+)")
 HANOITRACE_INPUT_RE = re.compile(rb"HANOITRACE (\d+)")
+HANOIBIN_INPUT_RE = re.compile(rb"HANOIBIN (\d+)")
 
 
 SEP_TOKEN = 258
@@ -32,8 +33,9 @@ SEP_TOKEN = 258
 
 def parse_n_from_tokens(token_tensor):
     """Given an int64 token tensor (B, L), parse the integer 'n' from the
-    HANOI / HANOITRACE prefix in each row. Stops at SEP so we don't bleed
-    answer bytes into the parse. Returns a list of ints, one per batch.
+    HANOI / HANOITRACE / HANOIBIN prefix in each row. Stops at SEP so we
+    don't bleed answer bytes into the parse. Returns a list of ints,
+    one per batch.
     """
     Bn = token_tensor.shape[0]
     out = []
@@ -44,9 +46,53 @@ def parse_n_from_tokens(token_tensor):
             row = row[: row.index(SEP_TOKEN)]
         bytes_list = [b for b in row if 32 <= b < 127]
         text = bytes(bytes_list)
-        m = HANOI_INPUT_RE.search(text) or HANOITRACE_INPUT_RE.search(text)
+        m = (HANOI_INPUT_RE.search(text)
+             or HANOITRACE_INPUT_RE.search(text)
+             or HANOIBIN_INPUT_RE.search(text))
         out.append(int(m.group(1)) if m else 0)
     return out
+
+
+def find_sep_positions(token_tensor):
+    """Per-row position of the (first) SEP token. -1 if not found."""
+    out = []
+    rows = token_tensor.tolist()
+    for row in rows:
+        out.append(row.index(SEP_TOKEN) if SEP_TOKEN in row else -1)
+    return out
+
+
+def hanoibin_counter_trajectory(token_tensor, sentinel: int, device="cpu"):
+    """Build the per-position counter trajectory for the unary-output
+    HANOIBIN task.
+
+    For each batch item with parsed integer n at SEP position s:
+        positions [0, s)        -> sentinel  (input span, counter inactive)
+        position  s             -> n         (predicts first '1', count=n)
+        position  s+k  (1..n-1) -> n-k       (predicts (k+1)-th '1')
+        position  s+n           -> 0         (predicts EOS)
+        positions s+n+1..       -> sentinel  (irrelevant past EOS)
+
+    Returns int64 (B, L) tensor and parsed ns (list).
+
+    Why these positions: at training the model's prediction at
+    position p targets position p+1. So at p=s the model is about to
+    emit the first answer '1' and the counter says "n remaining."
+    At p=s+n the model is about to emit EOS; counter is 0.
+    """
+    B, L = token_tensor.shape
+    counter = torch.full((B, L), sentinel, dtype=torch.long, device=device)
+    ns = parse_n_from_tokens(token_tensor)
+    seps = find_sep_positions(token_tensor)
+    for i, (n, s) in enumerate(zip(ns, seps)):
+        if n <= 0 or s < 0:
+            continue
+        # Counter is n at SEP, then n-1, n-2, ... 0 at SEP+n.
+        for k in range(n + 1):
+            p = s + k
+            if 0 <= p < L:
+                counter[i, p] = n - k
+    return counter, ns
 
 
 def expected_register_target(n: int, d_register: int = 32) -> list[float]:

@@ -122,6 +122,8 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         use_explicit_registers=config.get("use_explicit_registers", False),
         n_registers=config.get("n_registers", 8),
         d_register=config.get("d_register", 32),
+        use_loop_counter=config.get("use_loop_counter", False),
+        loop_counter_max=config.get("loop_counter_max", 1024),
     ).to(device)
     for _ in range(config.get("n_kernel_layers", 3)):
         model.add_kernel_layer()
@@ -259,7 +261,15 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 random_digits = torch.randint(48, 58, token_tensor.shape, device=device)
                 token_input = torch.where(do_corrupt, random_digits, token_tensor)
 
-            logits = model(token_input)
+            counter_values = None
+            if config.get("use_loop_counter", False):
+                from hanoi_oracle import hanoibin_counter_trajectory
+                _max = config.get("loop_counter_max", 1024)
+                _sentinel = _max + 1
+                counter_values, _ = hanoibin_counter_trajectory(
+                    token_tensor, sentinel=_sentinel, device=device)
+
+            logits = model(token_input, counter_values=counter_values)
             B, L, V = logits.shape
             pos = torch.arange(L, device=device).unsqueeze(0)
             sep_t = torch.tensor(sep_positions, device=device, dtype=torch.long).unsqueeze(1)
@@ -323,6 +333,20 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                         if step == 1:
                             print(f"  trajectory loss skipped: {_e}", flush=True)
 
+                # EOS-weighted auxiliary loss: concentrate gradient at the
+                # counter==0 positions so the LoopCounter pathway learns
+                # to override the SSM's bounded-counter cycle. Without
+                # this, mix barely grows and counter dominates only at
+                # OOD ranges where the SSM is uncertain.
+                _eos_w = config.get("eos_weight", 0.0)
+                if _eos_w > 0 and counter_values is not None:
+                    eos_mask = (counter_values == 0).float()
+                    if eos_mask.sum() > 0:
+                        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+                        eos_logp = log_probs[..., 257]  # EOS token = 257
+                        eos_loss = -(eos_logp * eos_mask).sum() / (eos_mask.sum() + 1e-8)
+                        loss = loss + _eos_w * eos_loss
+
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 if perp:
@@ -358,7 +382,13 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 inp_len = len(ex.get("input", "").split(","))
                 out_char = ex["output"][0] if ex["output"] else "?"
                 t = torch.tensor([tokens], dtype=torch.long, device=device)
-                logits = model(t)
+                _cv = None
+                if config.get("use_loop_counter", False):
+                    from hanoi_oracle import hanoibin_counter_trajectory
+                    _max = config.get("loop_counter_max", 1024)
+                    _cv, _ = hanoibin_counter_trajectory(
+                        t, sentinel=_max + 1, device=device)
+                logits = model(t, counter_values=_cv)
                 ok = True
                 conf = 0.0
                 for j, expected in enumerate(out_bytes):
@@ -1037,6 +1067,23 @@ if __name__ == "__main__":
                        help="Number of registers in the bank (default 8).")
     parser.add_argument("--d-register", type=int, default=32,
                        help="Register vector dim (default 32).")
+    parser.add_argument("--loop-counter", action="store_true",
+                       help="Add a discrete integer-register pathway. "
+                            "External oracle (currently HANOIBIN) provides "
+                            "per-position counter values: n at SEP, "
+                            "decrementing one-per-output-position, 0 at "
+                            "the EOS slot. Tests whether the model can "
+                            "use a counter primitive to gate EOS — the "
+                            "thing the bidir experiment proved the SSM "
+                            "can't synthesise on its own.")
+    parser.add_argument("--loop-counter-max", type=int, default=1024,
+                       help="Embedding-table size for the loop counter; "
+                            "supports n in [0, MAX] plus a sentinel.")
+    parser.add_argument("--eos-weight", type=float, default=0.0,
+                       help="Weight on auxiliary CE loss for EOS prediction "
+                            "at counter==0 positions. Concentrates gradient "
+                            "on the EOS slot so the LoopCounter pathway "
+                            "grows fast enough to override the SSM cycle.")
     parser.add_argument("--bidir-input", action="store_true",
                        help="Append the byte-reverse of the input after "
                             "the input itself (separated by a space) so "
@@ -1074,6 +1121,9 @@ if __name__ == "__main__":
         "d_register": args.d_register,
         "trajectory_loss_lambda": args.trajectory_loss_lambda,
         "bidir_input": args.bidir_input,
+        "use_loop_counter": args.loop_counter,
+        "loop_counter_max": args.loop_counter_max,
+        "eos_weight": args.eos_weight,
     }
     if args.scan_backend:
         config["scan_backend"] = args.scan_backend
