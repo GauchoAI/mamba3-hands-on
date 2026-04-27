@@ -384,12 +384,15 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         prev_best = best_acc
         best_acc = max(best_acc, acc)
 
-        # Interim save — write the best clean state we've seen so a
-        # later peak-then-NaN trajectory can't lose the win. Only fire
-        # when this cycle improved the best AND the model has clean
-        # weights right now (NaN guard). Cheap: one .pt write per
-        # *improving* cycle.
-        if best_acc > prev_best:
+        # Interim save — write the latest clean state every cycle so a
+        # later peak-then-NaN trajectory can't lose the win. Save fires
+        # when EITHER (a) best_acc improved this cycle, OR (b) cycle
+        # acc is high (≥80%) AND state is clean — this catches the
+        # "best_acc capped at 100% from stage 1, but we're now mastering
+        # later stages" case that the prior best_acc>prev_best gate
+        # missed. The NaN guard inside still refuses to write corrupted
+        # weights; the regression guard below still refuses to downgrade.
+        if best_acc > prev_best or acc >= 0.80:
             _has_nan_now = any(
                 torch.isnan(v).any().item() if v.is_floating_point() else False
                 for v in model.state_dict().values()
