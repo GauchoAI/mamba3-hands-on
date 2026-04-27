@@ -130,6 +130,48 @@ def gen_truth_table_to_bool_expr():
     }
 
 
+# ── Tier 2 — depth-2 expressions evaluated to truth tables ────────────
+#
+# A depth-2 expression composes two depth-1 expressions with an outer op:
+#
+#   <outer_op> <inner1> <inner2>
+#
+# where each <inner> is itself one of the depth-1 forms (op + literals).
+# The truth table over (a, b) is computed end-to-end. A router solving
+# this can use the tier-1 bool_expr_to_truth_table specialist on each
+# <inner> sub-expression and combine the results — exactly the
+# function-call composition we want to demonstrate.
+
+def _depth1_expression():
+    """Sample one depth-1 expression as a string."""
+    OPS = ["AND", "OR", "XOR", "NAND", "NOR", "XNOR"]
+    LITS = ["a", "b", "NOT a", "NOT b"]
+    if random.random() < 0.2:
+        return random.choice(LITS)  # bare literal (depth 0)
+    op = random.choice(OPS)
+    lhs = random.choice(LITS)
+    rhs = random.choice(LITS)
+    return f"{op} {lhs} {rhs}"
+
+
+def gen_bool_expr_depth2():
+    """Depth-2: outer op over two depth-1 sub-expressions."""
+    OUTER_OPS = ["AND", "OR", "XOR", "NAND", "NOR", "XNOR"]
+    op = random.choice(OUTER_OPS)
+    inner1 = _depth1_expression()
+    inner2 = _depth1_expression()
+
+    # Build a parser-friendly expression string. Inner expressions are
+    # already in operator-prefix form so concatenation just works.
+    expr = f"{op} {inner1} {inner2}"
+    tt = _truth_table(expr)
+    return {
+        "type": "bool_expr_depth2",
+        "input": f"BOOLTAB2 {expr}",
+        "output": tt,
+    }
+
+
 if __name__ == "__main__":
     print("=== forward (BOOLTAB) ===")
     for _ in range(8):

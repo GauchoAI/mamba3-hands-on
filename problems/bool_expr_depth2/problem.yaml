@@ -1,0 +1,8 @@
+name: bool_expr_depth2
+type: generator
+generator: formal_language:gen_bool_expr_depth2
+target_accuracy: 0.95
+tags: [language, formal, boolean, tier-2, composition]
+description: "Tier-2 formal language: depth-2 boolean expression → 4-bit truth table. The natural synapse target — a router can use the tier-1 bool_expr_to_truth_table specialist to evaluate each inner sub-expression."
+curriculum:
+  - {stage: 1, advance_at: 0.95}
