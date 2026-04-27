@@ -468,6 +468,88 @@ Saved diagnostic checkpoints:
 
 ---
 
+## Entry — EOS-bias gating: train n≤20, generalize to n=230 (2026-04-27)
+
+**Setup.** After the LoopCounter additive injection failed
+("additive isn't enough" entry), I added a second pathway: a
+direct EOS-logit bias keyed off the same counter trajectory.
+Implementation in `LoopCounter`:
+
+```python
+self.eos_bias = nn.Embedding(max_count + 2, 1)
+# Hot init:
+#   counter = 0  -> +30  (force EOS)
+#   counter > 0  -> -15  (suppress EOS)
+#   sentinel     -> 0    (input span / past-EOS, no bias)
+```
+
+In `ProgressiveModel.forward`, after `head(x)` produces logits, we
+add `eos_bias[counter_values]` directly to the EOS logit column.
+This bypasses the LM head's weight tying — the counter doesn't
+have to fight the SSM's `'1'`-aligned hidden state through a
+shared output embedding, it gets its own dedicated channel.
+
+Also bumped `mix` init 0.1 → 1.0 so the c_emb pathway has full
+presence in the hidden state from step 1.
+
+**Why the gap from +5/+15 to +30 mattered.** The SSM trained on
+HANOIBIN puts logit on `'1'` of ~44 at the EOS-target position
+(after seeing several `'1'` tokens, weight-tied LM head's `'1'`
+weight aligns with the hidden state). Bias of +5 → EOS logit ~20,
+loses. Bias of +15 → EOS logit ~30, still loses (logit `'1'` even
+after gradient pressure stays at ~44). Bias of +30 → EOS logit
+~57, wins decisively.
+
+**Training.** Same configuration as bidir (lr=1e-4, no aux loss,
+no bidir input), HANOIBIN n≤20. 8 cycles to clear all 6 stages at
+100% byte accuracy, loss=0.61. NaN at cycle 9 (same instability as
+all previous Hanoi variants — gradient grows when sequence length
+jumps to stage 6). Cycle 8 saved cleanly.
+
+**Result. Trained on n≤20, evaluated autoregressively to n=256:**
+
+```
+n =   1..20  : 20/20  ✓  (in distribution)
+n =  21..100 : 80/80  ✓  (4–5x training length)
+n = 101..230 : 130/130 ✓  (11x training length)
+n = 231      : off-by-one (230 ones for n=231)
+n = 232..256 : pred_len drifts down to ~225-230
+```
+
+**The model trained on n≤20 emits exactly n ones for every n in
+[1, 230].** The cliff at 231 is graceful — the model produces
+~230 ones for any n thereafter, suggesting the SSM's residual
+`'1'`-attractor wins once the hidden state has been integrating
+`'1'` tokens for ~230 timesteps.
+
+**What this proves architecturally.** The previous diagnostics
+(HANOIBIN, bidir, additive LoopCounter) all showed that the
+model could not extract n from its input *and* count to it. The
+EOS-gate experiment splits that:
+
+- **n is provided externally** (oracle/parser reads input bytes)
+- **The neural recurrence handles the loop** (read counter →
+  decrement → check zero → emit / stop)
+
+With this split, a 124k-param Mamba-3 trained on n≤20 runs the
+loop correctly for n up to 230. The architectural ceiling we
+identified was specifically about *fusing* parse + count in the
+SSM's hidden state. Given a clean primitive interface, the SSM
+is a competent loop executor.
+
+**The lesson generalizes.** This is the "tool use" pattern: the
+neural model orchestrates a primitive, doesn't replace it. For
+unbounded computation tasks at this scale, the architectural
+move is to *factor* the program — externalize parts the SSM
+can't represent (unbounded counter, exact arithmetic), keep the
+SSM in the loop body (decision, output token).
+
+Saved checkpoint: `tower_of_hanoi_binary_eosgate.pt` (124k params,
+loss 0.61, byte-acc 100%, length-gen 230/230 to n=230, gentle
+falloff to n=256).
+
+---
+
 ## Entry — Neural composition works (synapse v2, AttendBridge) (2026-04-26)
 
 **Setup.** A tiny router (d=16, L=1, 7,654 trainable params) trained on

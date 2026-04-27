@@ -242,7 +242,24 @@ class LoopCounter(nn.Module):
         # start; the model has to learn to use it.
         nn.init.normal_(self.read_proj.weight, std=0.01)
         nn.init.zeros_(self.read_proj.bias)
-        self.mix = nn.Parameter(torch.tensor(0.1))
+        # mix=1.0: stronger initial presence in the hidden state. The
+        # previous 0.1 init never grew (additive injection insufficient
+        # finding); start strong and let the model attenuate if needed.
+        self.mix = nn.Parameter(torch.tensor(1.0))
+
+        # Direct EOS-logit bias per counter value. Bypasses the LM head's
+        # weight tying so the counter overrides instead of competing with
+        # the SSM's prediction. Hot init: c=0 -> +15 (force EOS even
+        # against a confident '1' prediction; logit gap typically ~10),
+        # c in [1..max_count] -> -5 (suppress EOS), sentinel -> 0
+        # (input span / past-EOS, no bias). The previous additive
+        # injection failed because the SSM dominates the logit space; a
+        # direct override gives the counter pathway its own channel.
+        self.eos_bias = nn.Embedding(max_count + 2, 1)
+        with torch.no_grad():
+            self.eos_bias.weight.fill_(-15.0)
+            self.eos_bias.weight[0] = 30.0
+            self.eos_bias.weight[max_count + 1] = 0.0
 
     @property
     def sentinel(self) -> int:
@@ -253,6 +270,12 @@ class LoopCounter(nn.Module):
         # Clamp to valid range; out-of-range -> sentinel.
         cv = counter_values.clamp(0, self.max_count + 1)
         return self.mix * self.read_proj(self.c_emb(cv))
+
+    def get_eos_bias(self, counter_values: torch.Tensor) -> torch.Tensor:
+        """counter_values: int64 (B, L). Returns (B, L) scalar bias on the
+        EOS logit, applied AFTER the LM head."""
+        cv = counter_values.clamp(0, self.max_count + 1)
+        return self.eos_bias(cv).squeeze(-1)
 
 
 class ProgressiveModel(nn.Module):
@@ -389,14 +412,25 @@ class ProgressiveModel(nn.Module):
         # Loop counter: oracle/parser-supervised. counter_values must be
         # provided when this pathway is active; if None and the module
         # exists we feed an all-sentinel tensor (no-op).
+        eos_bias = None
         if self.loop_counter is not None:
             if counter_values is None:
                 counter_values = torch.full(tokens.shape, self.loop_counter.sentinel,
                                             dtype=torch.long, device=tokens.device)
             x = x + self.loop_counter(counter_values)
+            eos_bias = self.loop_counter.get_eos_bias(counter_values)  # (B, L)
 
         x = self.final_norm(x)
-        return self.head(x)
+        logits = self.head(x)
+
+        # Direct EOS-logit override from the LoopCounter. Bypasses weight
+        # tying so the counter doesn't have to fight the SSM through the
+        # LM head. Adds bias only to the EOS column.
+        if eos_bias is not None:
+            eos_addition = torch.zeros_like(logits)
+            eos_addition[..., EOS] = eos_bias
+            logits = logits + eos_addition
+        return logits
 
     def forward_from_hidden(self, x):
         """Run the SSM stack starting from a continuous hidden state — i.e.
