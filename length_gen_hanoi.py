@@ -80,15 +80,22 @@ def evaluate_n(model, tok, n, n_trials, device):
 def load_specialist(pt_path, device):
     ck = torch.load(str(pt_path), map_location=device, weights_only=False)
     cfg = ck.get("config", {})
+    sd = ck.get("model", {})
+    # Detect optional output-history attention from the saved state_dict
+    has_history_attn = any(k.startswith("history_attn.") for k in sd.keys())
+    history_d_attn = (sd["history_attn.q_proj.weight"].shape[0]
+                      if has_history_attn else 32)
     model = ProgressiveModel(
         d_model=cfg.get("d_model", 64),
         d_state=cfg.get("d_state", 16),
         expand=2,
         headdim=cfg.get("headdim", 16),
+        use_history_attn=has_history_attn,
+        history_d_attn=history_d_attn,
     ).to(device)
     for _ in range(cfg.get("n_kernel_layers", 1)):
         model.add_kernel_layer()
-    model.load_state_dict(ck["model"])
+    model.load_state_dict(sd)
     model.eval()
     return model, ck
 
