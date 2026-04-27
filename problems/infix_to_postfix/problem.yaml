@@ -1,0 +1,8 @@
+name: infix_to_postfix
+type: generator
+generator: formal_language:gen_infix_to_postfix
+target_accuracy: 0.95
+tags: [language, formal, arithmetic, parsing, bidirectional]
+description: "Infix arithmetic expression (with parens) → postfix. Same expression, two notations. Tests parsing without semantics. Forward direction of the infix↔postfix bidirectional pair."
+curriculum:
+  - {stage: 1, advance_at: 0.95}

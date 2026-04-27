@@ -1,0 +1,8 @@
+name: postfix_to_infix
+type: generator
+generator: formal_language:gen_postfix_to_infix
+target_accuracy: 0.95
+tags: [language, formal, arithmetic, parsing, bidirectional]
+description: "Postfix arithmetic → fully-parenthesized infix. Reverse direction of the infix↔postfix bidirectional pair. Round-trip identity (infix → postfix → infix) is the semantic-vs-pattern litmus test."
+curriculum:
+  - {stage: 1, advance_at: 0.95}

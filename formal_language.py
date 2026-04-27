@@ -214,6 +214,48 @@ def gen_bool_simplify():
     }
 
 
+def _arith_expr(max_depth=2):
+    """Sample an infix arithmetic expression as a list of tokens.
+    Returns (infix_tokens, postfix_tokens, value)."""
+    OPS = ["+", "-", "*"]
+    if max_depth == 0 or random.random() < 0.4:
+        n = random.randint(0, 9)
+        return [str(n)], [str(n)], n
+    op = random.choice(OPS)
+    li, lp, lv = _arith_expr(max_depth - 1)
+    ri, rp, rv = _arith_expr(max_depth - 1)
+    if op == "+":   v = lv + rv
+    elif op == "-": v = lv - rv
+    else:           v = lv * rv
+    # Infix with explicit parens to keep parse unambiguous (and match
+    # the byte tokenizer's vocabulary).
+    infix = ["("] + li + [op] + ri + [")"]
+    postfix = lp + rp + [op]
+    return infix, postfix, v
+
+
+def gen_infix_to_postfix():
+    """Forward direction: infix expression → postfix.
+    Same expression, two notations — tests parsing without semantics."""
+    inf, post, _ = _arith_expr(max_depth=2)
+    return {
+        "type": "infix_to_postfix",
+        "input": "INFIX2POST " + " ".join(inf),
+        "output": " ".join(post),
+    }
+
+
+def gen_postfix_to_infix():
+    """Reverse direction: postfix → fully-parenthesized infix.
+    The mapping is deterministic (one canonical infix per postfix)."""
+    inf, post, _ = _arith_expr(max_depth=2)
+    return {
+        "type": "postfix_to_infix",
+        "input": "POST2INFIX " + " ".join(post),
+        "output": " ".join(inf),
+    }
+
+
 def gen_bool_expr_depth3():
     """Depth-3: outer op over two depth-2 sub-expressions.
 
