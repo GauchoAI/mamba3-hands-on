@@ -573,6 +573,94 @@ Saved: `tower_of_hanoi_binary_eosgate_v2.pt`.
 
 ---
 
+## Entry — FIB-decimal: per-position iter_token, train n<=20, perfect to F(40) (2026-04-27)
+
+After HANOIBIN/FIB-unary established the LoopCounter pattern with a
+single iteration token, decimal Fibonacci is the first task where the
+iteration token *varies per position* — at output position k of FIBD
+n, the model emits the k-th digit of str(F(n)). Counter at SEP =
+digit_count(F(n)), decrementing per position; eos_bias dominates at
+counter=0; iter_bias dominates the per-position digit at counter>0.
+
+**Architectural extension.** `LoopCounter` now exposes an
+`iter_token_per_pos` channel: instead of a fixed scalar
+`iteration_token`, the oracle passes a (B, L) tensor specifying
+which token to bias UP at each position. `forward` /
+`forward_step` use scatter_add to route the iter_bias amount to
+the position-specific token column. HANOIBIN / FIB-unary still
+work with the scalar fallback; FIB-decimal uses the new path.
+
+**iter_bias init had to grow.** With variable iter_token, the LM
+head's weight tying creates a per-position adversary: at position
+sep+k+1 the model has just consumed the k-th answer digit, so
+`logit[digit_k]` reaches ~50 (weight-tied alignment with
+embed(digit_k)). +15 bias on the *next* digit (digit_{k+1}) was
+overwhelmed. Bumped iter_bias hot init from 15 to 50 — the model
+locks onto the correct digit immediately and convergence is
+dramatically faster (acc 23% at cycle 1 vs 0% with +15).
+
+**Result.** Train fib_decimal n<=20 (max digits = 4, F(20)=6765),
+30 cycles, lr=1e-4, no NaN, final loss 0.26. Eval n=1..40 with
+step-decoder:
+
+```
+n=1..20:  20/20 ✓ (in distribution)
+n=21..40: 20/20 ✓ (out of distribution, max 9 digits)
+```
+
+n=40 → "102334155" (9 digits, 2.25x training-max digit count).
+Each digit emitted is the *correct* digit of F(n) — the model
+isn't just emitting any digit of the right length, it's emitting
+the *exact* digits the oracle specified.
+
+**fib_decimal_validate.py.** 57 tests across length-gen,
+counterfactual (input vs target divorced), and edge cases (n=0
+"0", far-OOD). All pass byte-for-byte vs Python reference in
+1.2s.
+
+The per-position iter_token primitive generalizes cleanly. The
+loop body is now: "while counter>0: emit iter_token_per_pos[t];
+at counter=0: stop." Both the WHEN-to-stop and WHAT-to-emit
+signals come from the oracle; the SSM provides the recurrence.
+
+Saved: `tower_of_hanoi_binary_eosgate_v2.pt` (HANOIBIN, 256/256),
+`fib_unary.pt` (FIB-unary, 20/20), `fib_decimal.pt` (FIBD, 40/40).
+
+---
+
+## Entry — Cluster transparent partition (cluster_dispatch + cluster_sync) (2026-04-27)
+
+User pushed for "transparent" multi-node operation: jobs should
+fan out across the M4 Pro + M4 mini cluster naturally, not
+require manual SSH per experiment. cluster_dispatch.py was a
+scaffold from earlier; refactored to manifest-driven and added
+cluster_sync.py for repo rsync.
+
+**cluster_sync.py**: rsync the repo to every non-local node
+(excludes `.venv/`, `runs/`, `checkpoints/`, `three_pop/`,
+`__pycache__`, `*.pt`, `.git/` — node-local state stays local).
+
+**cluster_dispatch.py**: takes a JSON manifest of {node, name, cmd}
+tuples and runs each via SSH (or local subprocess) in parallel.
+Single ad-hoc shorthand: `--node X --name Y --cmd '...'`.
+Stdout streams to `/tmp/cluster_dispatch_logs/{name}.log` on the
+orchestrator side, so the M4 Pro sees mini's training in real
+time without a separate log fetch.
+
+**End-to-end verified.** Today's run had FIBD-decimal training
+on M4 Pro, parallel HANOIBIN regression on the mini (testing
+the new iter_bias=+50 init for behavioral parity with the +15
+HANOIBIN_v2 model). Both nodes doing real training simultaneously,
+stable, no SSH drops.
+
+The pattern is now ready for any sweep. Future experiments
+should default to writing a tiny manifest (one job per node)
+rather than running serially here. cluster_nodes.json has
+the actual M4 Pro + mini IPs and repo paths; just `cluster_sync`
+before launching to ensure code parity.
+
+---
+
 ## Entry — Neural composition works (synapse v2, AttendBridge) (2026-04-26)
 
 **Setup.** A tiny router (d=16, L=1, 7,654 trainable params) trained on
