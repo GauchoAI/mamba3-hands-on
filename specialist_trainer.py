@@ -119,6 +119,9 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         headdim=config.get("headdim", 16),
         use_history_attn=config.get("use_history_attn", False),
         history_d_attn=config.get("history_d_attn", 32),
+        use_explicit_registers=config.get("use_explicit_registers", False),
+        n_registers=config.get("n_registers", 8),
+        d_register=config.get("d_register", 32),
     ).to(device)
     for _ in range(config.get("n_kernel_layers", 3)):
         model.add_kernel_layer()
@@ -980,6 +983,15 @@ if __name__ == "__main__":
     parser.add_argument("--history-d-attn", type=int, default=32,
                        help="Attention head dim when --output-history-attn "
                             "is set.")
+    parser.add_argument("--explicit-registers", action="store_true",
+                       help="Add an explicit register bank (CPU-style "
+                            "working memory) the model can read/write "
+                            "across timesteps. Persistent state separate "
+                            "from the SSM hidden state. ~10k extra params.")
+    parser.add_argument("--n-registers", type=int, default=8,
+                       help="Number of registers in the bank (default 8).")
+    parser.add_argument("--d-register", type=int, default=32,
+                       help="Register vector dim (default 32).")
     args = parser.parse_args()
 
     # Set module-level DB path before any usage
@@ -999,6 +1011,9 @@ if __name__ == "__main__":
         "no_distill": args.no_distill,
         "use_history_attn": args.output_history_attn,
         "history_d_attn": args.history_d_attn,
+        "use_explicit_registers": args.explicit_registers,
+        "n_registers": args.n_registers,
+        "d_register": args.d_register,
     }
     if args.scan_backend:
         config["scan_backend"] = args.scan_backend

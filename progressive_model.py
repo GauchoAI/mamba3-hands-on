@@ -59,6 +59,97 @@ class ByteTokenizer:
 
 # ── Progressive model ───────────────────────────────────────────────
 
+class ExplicitRegisters(nn.Module):
+    """A bank of K register vectors that live *separate* from the SSM
+    hidden state, written and read via differentiable soft-attention.
+
+    Distinct from OutputHistoryAttention: that one is a pathway *through*
+    the SSM (attention over the same tokens). This one is *external
+    working memory* — the registers are persistent state that the SSM
+    queries and updates. The SSM's continuous-state blending dynamics
+    don't apply to the registers; a value written at timestep t stays
+    until *explicitly* overwritten.
+
+    Mental model: the model has K = 8 small CPU-style registers. At each
+    timestep it can:
+      - read a value via soft-addressing of the bank
+      - write a value to a soft-selected register
+    The recurrence `x_{k+1} = 2*x_k + 1` becomes "load running value
+    into r0; multiply by 2 and store; emit digits; repeat."
+
+    Per attention experiments: pre-norm input, zero-init out path, very
+    small mix factor at start. Write gate biased toward closed (-3.0)
+    so the registers are no-op until training opens them.
+
+    Sequential per-timestep loop (O(L)). For L≤200 typical, fine.
+    """
+
+    def __init__(self, d_model: int, n_registers: int = 8, d_register: int = 32):
+        super().__init__()
+        self.n_registers = n_registers
+        self.d_register = d_register
+
+        self.in_norm = nn.LayerNorm(d_model)
+
+        # Read: soft-addressing query over n_registers
+        self.read_query = nn.Linear(d_model, n_registers)
+        self.read_proj = nn.Linear(d_register, d_model)
+
+        # Write: which register, what value, how strongly
+        self.write_query = nn.Linear(d_model, n_registers)
+        self.write_value = nn.Linear(d_model, d_register)
+        self.write_gate = nn.Linear(d_model, 1)
+
+        # Mix factor for adding the read result to the SSM state.
+        # Init very small (0.001) — the new pathway is near-no-op at
+        # step 1. Per output-history-attention learnings, aggressive
+        # init destabilizes training within a few cycles.
+        self.mix = nn.Parameter(torch.tensor(0.001))
+
+        # Init the read out_proj to zero — the read path is a literal
+        # no-op at step 1; the model has to learn its way into using it.
+        nn.init.zeros_(self.read_proj.weight)
+        nn.init.zeros_(self.read_proj.bias)
+        # Write gate biased toward closed at start (sigmoid(-3) ≈ 0.05)
+        # so the registers stay near-zero until training opens them.
+        nn.init.zeros_(self.write_gate.weight)
+        nn.init.constant_(self.write_gate.bias, -3.0)
+
+    def forward(self, x):
+        # x: (B, L, d_model)
+        B, L, D = x.shape
+        h = self.in_norm(x)
+
+        # Initialize the register bank to zero per batch element.
+        # NOT a Parameter — these are persistent state across timesteps
+        # WITHIN a forward pass, reset at the start of each forward.
+        registers = torch.zeros(B, self.n_registers, self.d_register,
+                                device=x.device, dtype=x.dtype)
+
+        outputs = []
+        for t in range(L):
+            h_t = h[:, t, :]                              # (B, d_model)
+
+            # READ — soft-attention over the bank
+            r_q = self.read_query(h_t)                    # (B, R)
+            r_w = torch.softmax(r_q, dim=-1)              # (B, R)
+            r_v = torch.einsum("br,brd->bd", r_w, registers)  # (B, d_register)
+            r_out = self.read_proj(r_v)                   # (B, d_model)
+
+            # WRITE — soft-update a register based on h_t
+            w_q = self.write_query(h_t)                   # (B, R)
+            w_w = torch.softmax(w_q, dim=-1)              # (B, R)
+            w_v = self.write_value(h_t)                   # (B, d_register)
+            w_g = torch.sigmoid(self.write_gate(h_t))     # (B, 1)
+            update_strength = (w_w * w_g).unsqueeze(-1)   # (B, R, 1)
+            new_val = w_v.unsqueeze(1)                    # (B, 1, d_register)
+            registers = (1 - update_strength) * registers + update_strength * new_val
+
+            outputs.append(r_out)
+
+        return self.mix * torch.stack(outputs, dim=1)
+
+
 class OutputHistoryAttention(nn.Module):
     """A single causal attention head added as a side-channel to the SSM
     stack. At each timestep t, attend to all previous positions 0..t and
@@ -125,7 +216,9 @@ class ProgressiveModel(nn.Module):
         "all"    — train everything
     """
     def __init__(self, d_model=64, d_state=16, expand=2, headdim=16,
-                 use_history_attn: bool = False, history_d_attn: int = 32):
+                 use_history_attn: bool = False, history_d_attn: int = 32,
+                 use_explicit_registers: bool = False,
+                 n_registers: int = 8, d_register: int = 32):
         super().__init__()
         self.d_model = d_model
         self.ssm_cfg = Mamba3Config(
@@ -148,6 +241,14 @@ class ProgressiveModel(nn.Module):
         self.use_history_attn = use_history_attn
         self.history_attn = (OutputHistoryAttention(d_model, d_attn=history_d_attn)
                              if use_history_attn else None)
+
+        # Optional explicit register bank — separate persistent state
+        # the model can read/write across timesteps. CPU-register-style
+        # working memory for unbounded program execution.
+        self.use_explicit_registers = use_explicit_registers
+        self.registers = (ExplicitRegisters(d_model, n_registers=n_registers,
+                                             d_register=d_register)
+                          if use_explicit_registers else None)
 
         self.mode = "all"
 
@@ -220,6 +321,12 @@ class ProgressiveModel(nn.Module):
         if self.history_attn is not None:
             x = x + self.history_attn(x)
 
+        # Explicit registers: external working memory bank, read/write
+        # via soft-addressing, persistent across timesteps. No-op if not
+        # configured.
+        if self.registers is not None:
+            x = x + self.registers(x)
+
         x = self.final_norm(x)
         return self.head(x)
 
@@ -236,6 +343,8 @@ class ProgressiveModel(nn.Module):
             x = x + scale * layer["block"](layer["norm"](x))
         if self.history_attn is not None:
             x = x + self.history_attn(x)
+        if self.registers is not None:
+            x = x + self.registers(x)
         return self.final_norm(x)
 
     def forward_hidden(self, tokens):

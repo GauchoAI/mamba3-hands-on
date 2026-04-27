@@ -85,6 +85,12 @@ def load_specialist(pt_path, device):
     has_history_attn = any(k.startswith("history_attn.") for k in sd.keys())
     history_d_attn = (sd["history_attn.q_proj.weight"].shape[0]
                       if has_history_attn else 32)
+    # Detect optional explicit registers
+    has_registers = any(k.startswith("registers.") for k in sd.keys())
+    n_registers = (sd["registers.read_query.weight"].shape[0]
+                   if has_registers else 8)
+    d_register = (sd["registers.read_proj.weight"].shape[1]
+                  if has_registers else 32)
     model = ProgressiveModel(
         d_model=cfg.get("d_model", 64),
         d_state=cfg.get("d_state", 16),
@@ -92,6 +98,9 @@ def load_specialist(pt_path, device):
         headdim=cfg.get("headdim", 16),
         use_history_attn=has_history_attn,
         history_d_attn=history_d_attn,
+        use_explicit_registers=has_registers,
+        n_registers=n_registers,
+        d_register=d_register,
     ).to(device)
     for _ in range(cfg.get("n_kernel_layers", 1)):
         model.add_kernel_layer()
