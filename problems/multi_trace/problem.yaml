@@ -1,0 +1,13 @@
+name: multi_trace
+type: generator
+generator: multi_trace:gen_multi_trace
+target_accuracy: 0.95
+tags: [reasoning, longrange, level3, trace, programs, multi-restart]
+description: "Multi-restart Hanoi trace: K traces back-to-back, separated by '|'. Every trace starts with '1 3 7 ...' regardless of its n. A model running the recurrence as a program handles each restart fresh. A model doing input-keyed memorization fails on the 2nd+ traces because there's no per-n template for 'trace after |'."
+curriculum:
+  - {stage: 1, n_disks: 3, max_traces: 2, advance_at: 0.90}
+  - {stage: 2, n_disks: 5, max_traces: 2, advance_at: 0.90}
+  - {stage: 3, n_disks: 5, max_traces: 4, advance_at: 0.90}
+  - {stage: 4, n_disks: 8, max_traces: 4, advance_at: 0.90}
+  - {stage: 5, n_disks: 12, max_traces: 4, advance_at: 0.90}
+  - {stage: 6, n_disks: 16, max_traces: 6, advance_at: 0.90}
