@@ -1,0 +1,8 @@
+name: bool_simplify
+type: generator
+generator: formal_language:gen_bool_simplify
+target_accuracy: 0.95
+tags: [language, formal, boolean, rewrite, simplification]
+description: "Symbolic simplification: any depth-1 or depth-2 boolean expression → smallest canonical equivalent form. Many-to-one mapping; tests whether the model can recognize equivalence classes (idempotence, De Morgan, double-negation, etc.) rather than just evaluate."
+curriculum:
+  - {stage: 1, advance_at: 0.95}

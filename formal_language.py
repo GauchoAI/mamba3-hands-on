@@ -181,6 +181,39 @@ def _depth2_expression():
     return f"{op} {_depth1_expression()} {_depth1_expression()}"
 
 
+def gen_bool_simplify():
+    """Symbolic simplification: arbitrary depth-1 or depth-2 boolean
+    expression → smallest equivalent canonical form.
+
+    Many expressions map to the same truth table; the canonical form
+    is the unique smallest representative for that equivalence class.
+    Example mappings:
+
+      'AND a a'        → 'a'          (idempotence)
+      'OR a NOT a'     → 'OR a NOT a' (canonical for TRUE; surface stays)
+      'NAND NOT a NOT b' → 'OR a b'   (De Morgan)
+      'XOR a NOT b'    → 'XNOR a b'   (rewrite)
+      'AND OR a b TRUE' → ... (model has to reduce nested literals)
+
+    The mapping is deterministic: any expression evaluates to one of
+    16 truth tables (2 vars), and each truth table has exactly one
+    canonical form. So this is a many-to-one task.
+    """
+    if random.random() < 0.5:
+        expr = _depth1_expression()
+    else:
+        OUTER_OPS = ["AND", "OR", "XOR", "NAND", "NOR", "XNOR"]
+        op = random.choice(OUTER_OPS)
+        expr = f"{op} {_depth1_expression()} {_depth1_expression()}"
+    tt = _truth_table(expr)
+    canonical = TT_TO_EXPR[tt]
+    return {
+        "type": "bool_simplify",
+        "input": f"SIMPLIFY {expr}",
+        "output": canonical,
+    }
+
+
 def gen_bool_expr_depth3():
     """Depth-3: outer op over two depth-2 sub-expressions.
 
