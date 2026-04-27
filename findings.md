@@ -129,6 +129,55 @@ gating factor is the data.
 
 ---
 
+## Entry — The "n=40 cliff" was a decoder bug. Bounded program found. (2026-04-27)
+
+After running scheduled-sampling Hanoi (curriculum out to n=100) we saw
+the cliff sit at n=40 and called it the "self-conditioned trust horizon" —
+hypothesizing the model couldn't sustain self-emission past 12 tokens.
+
+**That hypothesis was wrong. The cliff was a bug in the test harness.**
+
+`length_gen_hanoi.py` had `max_new=12` hard-coded in the autoregressive
+decoder. Outputs longer than 12 tokens were truncated, making it look
+like "the model emits EOS at position 13." It was actually the test
+harness terminating the decoder loop before the model had a chance to
+emit more. With `max_new=64`:
+
+```
+n=1..100   →  100% accuracy  (31-digit answers correct, e.g. n=100 → 1267650600228229401496703205375)
+n=110+     →  fails, cliff sits exactly at the training boundary
+```
+
+**The model has program-like behavior across the entire trained range,
+including 31-digit autoregressive emission with correct EOS placement at
+every length 1..31.** That's not what a memorization model does.
+
+**But** it doesn't truly extrapolate. n=110 (20 disks past the curriculum
+max) already fails, with predictions like `''` or single digits. So:
+
+- The user's strict pressure test ("a true program is unbounded")
+  still rules — `2^n − 1` is unbounded; this isn't.
+- The middle ground between "memorization" and "true program" is real:
+  a learned continuous-state procedure that produces correct
+  multi-digit outputs over the trained range. Calling that "bounded
+  program" is more accurate than "memorization."
+
+**Architectural follow-up.** Tried output-history attention as a
+copy/lookup primitive on top of the SSM (smallest change in the
+spectrum from "minimal" to "Neural Turing Machine"). Initial runs
+unstable; tuning ongoing. Even if it fixes the n>100 extrapolation,
+unbounded program-shape probably needs a discrete-register primitive
+(design #2) — the SSM's continuous-state blending fundamentally
+limits how a counter can be tracked across many output tokens.
+
+**Methodology lesson.** *Always look at what the model actually emits
+before drawing conclusions about what it learned.* The 12-cap turned
+out to be the bug; the real story (program-shape over the trained
+range) was hiding in plain sight. Several rounds of "memorization"
+diagnoses were over-claiming based on a buggy decoder.
+
+---
+
 ## Entry — Neural composition works (synapse v2, AttendBridge) (2026-04-26)
 
 **Setup.** A tiny router (d=16, L=1, 7,654 trainable params) trained on
