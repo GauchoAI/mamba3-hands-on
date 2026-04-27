@@ -1,0 +1,12 @@
+name: fib_decimal
+type: generator
+generator: generators.level3_longrange:gen_fib_decimal
+target_accuracy: 0.95
+tags: [reasoning, longrange, level3, fibonacci, decimal]
+description: "Fibonacci as decimal digits: 'FIBD n' -> str(F(n)). Tests per-position iter_token in LoopCounter."
+curriculum:
+  - {stage: 1, n_max: 5,  advance_at: 0.95}
+  - {stage: 2, n_max: 10, advance_at: 0.95}
+  - {stage: 3, n_max: 15, advance_at: 0.95}
+  - {stage: 4, n_max: 20, advance_at: 0.90}
+  # Cap at n=20 (F=6765, 4 digits). Extrapolation test pushes further.

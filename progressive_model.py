@@ -271,9 +271,15 @@ class LoopCounter(nn.Module):
         # alignment drifts and other tokens (notably SEP=258) start
         # winning over '1'. This explicitly encodes loop-body semantics:
         # "while counter>0: emit iteration_token; at counter==0: stop."
+        #
+        # Init magnitude tuned for FIB-decimal where iter_token varies
+        # per position and the LM head's incoming-token alignment puts
+        # logit[prev_digit] near +50 — bias must be strong enough to
+        # override. HANOIBIN works fine at +15 too (single iter_token,
+        # no conflict).
         self.iter_bias = nn.Embedding(max_count + 2, 1)
         with torch.no_grad():
-            self.iter_bias.weight.fill_(15.0)
+            self.iter_bias.weight.fill_(50.0)
             self.iter_bias.weight[0] = -30.0
             self.iter_bias.weight[max_count + 1] = 0.0
 
@@ -295,7 +301,14 @@ class LoopCounter(nn.Module):
 
     def get_iter_bias(self, counter_values: torch.Tensor) -> torch.Tensor:
         """counter_values: int64 (B, L). Returns (B, L) scalar bias on the
-        iteration-token logit, applied AFTER the LM head."""
+        iteration-token logit, applied AFTER the LM head.
+
+        The iteration token itself is either:
+          - the scalar `self.iteration_token` (constant per task — HANOIBIN),
+          - or a per-position int64 tensor passed at forward time (FIB-decimal).
+        The bias amount is shared regardless: it's just a "trust the body"
+        signal keyed off counter value.
+        """
         cv = counter_values.clamp(0, self.max_count + 1)
         return self.iter_bias(cv).squeeze(-1)
 
@@ -428,17 +441,19 @@ class ProgressiveModel(nn.Module):
             states.append(layer["block"].init_state(batch_size, device, dtype))
         return states
 
-    def forward_step(self, token, counter_value=None, states=None):
+    def forward_step(self, token, counter_value=None, states=None,
+                     iter_token_per_pos=None):
         """Single-token forward pass for autoregressive decoding.
 
-        token:         (B, 1) int64
-        counter_value: (B, 1) int64 or None
-        states:        list[dict] from init_decode_state()
+        token:               (B, 1) int64
+        counter_value:       (B, 1) int64 or None
+        iter_token_per_pos:  (B, 1) int64 or None (FIB-decimal etc.)
+        states:              list[dict] from init_decode_state()
 
         Returns (logits: (B, 1, V), new_states).
 
         For batch_size=1 and a model trained at d_model=64 L=3, this is
-        ~50–100x faster than re-running the prefix at every step.
+        ~50-100x faster than re-running the prefix at every step.
         """
         if states is None:
             states = self.init_decode_state(token.shape[0])
@@ -457,10 +472,9 @@ class ProgressiveModel(nn.Module):
             ssm_out, new_state = layer["block"].step(normed, states[offset + j])
             x = x + scale * ssm_out
             new_states.append(new_state)
-        # Loop counter: same as full forward but for L=1
         eos_bias = None
         iter_bias = None
-        iter_tok = None
+        iter_tok_scalar = None
         if self.loop_counter is not None:
             if counter_value is None:
                 counter_value = torch.full(token.shape, self.loop_counter.sentinel,
@@ -468,18 +482,25 @@ class ProgressiveModel(nn.Module):
             x = x + self.loop_counter(counter_value)
             eos_bias = self.loop_counter.get_eos_bias(counter_value)
             iter_bias = self.loop_counter.get_iter_bias(counter_value)
-            iter_tok = self.loop_counter.iteration_token
+            iter_tok_scalar = self.loop_counter.iteration_token
         x = self.final_norm(x)
         logits = self.head(x)
         if eos_bias is not None:
             addition = torch.zeros_like(logits)
             addition[..., EOS] = eos_bias
-            if iter_tok is not None and iter_bias is not None:
-                addition[..., iter_tok] = iter_bias
+            if iter_bias is not None:
+                if iter_token_per_pos is not None:
+                    addition.scatter_add_(
+                        2,
+                        iter_token_per_pos.unsqueeze(-1),
+                        iter_bias.unsqueeze(-1),
+                    )
+                elif iter_tok_scalar is not None:
+                    addition[..., iter_tok_scalar] = iter_bias
             logits = logits + addition
         return logits, new_states
 
-    def forward(self, tokens, counter_values=None):
+    def forward(self, tokens, counter_values=None, iter_token_per_pos=None):
         x = self.embed_norm(self.embed(tokens))
 
         for layer in self.kernel_layers:
@@ -507,7 +528,7 @@ class ProgressiveModel(nn.Module):
         # exists we feed an all-sentinel tensor (no-op).
         eos_bias = None
         iter_bias = None
-        iter_tok = None
+        iter_tok_scalar = None
         if self.loop_counter is not None:
             if counter_values is None:
                 counter_values = torch.full(tokens.shape, self.loop_counter.sentinel,
@@ -515,7 +536,7 @@ class ProgressiveModel(nn.Module):
             x = x + self.loop_counter(counter_values)
             eos_bias = self.loop_counter.get_eos_bias(counter_values)  # (B, L)
             iter_bias = self.loop_counter.get_iter_bias(counter_values)
-            iter_tok = self.loop_counter.iteration_token
+            iter_tok_scalar = self.loop_counter.iteration_token
 
         x = self.final_norm(x)
         logits = self.head(x)
@@ -531,8 +552,18 @@ class ProgressiveModel(nn.Module):
         if eos_bias is not None:
             addition = torch.zeros_like(logits)
             addition[..., EOS] = eos_bias
-            if iter_tok is not None and iter_bias is not None:
-                addition[..., iter_tok] = iter_bias
+            if iter_bias is not None:
+                if iter_token_per_pos is not None:
+                    # Per-position iter_token (FIB-decimal etc.): scatter
+                    # the bias amount to the position-specific token.
+                    addition.scatter_add_(
+                        2,
+                        iter_token_per_pos.unsqueeze(-1),
+                        iter_bias.unsqueeze(-1),
+                    )
+                elif iter_tok_scalar is not None:
+                    # Scalar iter_token (HANOIBIN, FIB-unary).
+                    addition[..., iter_tok_scalar] = iter_bias
             logits = logits + addition
         return logits
 

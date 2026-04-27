@@ -27,6 +27,7 @@ HANOI_INPUT_RE = re.compile(rb"HANOI (\d+)")
 HANOITRACE_INPUT_RE = re.compile(rb"HANOITRACE (\d+)")
 HANOIBIN_INPUT_RE = re.compile(rb"HANOIBIN (\d+)")
 FIB_INPUT_RE = re.compile(rb"FIB (\d+)")
+FIBD_INPUT_RE = re.compile(rb"FIBD (\d+)")
 
 
 SEP_TOKEN = 258
@@ -116,6 +117,63 @@ def fib_unary_counter_trajectory(token_tensor, sentinel: int, max_count: int,
                 # Clamp to max_count so the embedding lookup is safe.
                 counter[i, p] = min(fn - k, max_count)
     return counter, fns
+
+
+def parse_fibd_n_from_tokens(token_tensor):
+    """Parse n from 'FIBD n' inputs."""
+    Bn = token_tensor.shape[0]
+    out = []
+    for i in range(Bn):
+        row = token_tensor[i].tolist()
+        if SEP_TOKEN in row:
+            row = row[: row.index(SEP_TOKEN)]
+        bytes_list = [b for b in row if 32 <= b < 127]
+        text = bytes(bytes_list)
+        m = FIBD_INPUT_RE.search(text)
+        out.append(int(m.group(1)) if m else 0)
+    return out
+
+
+def fib_decimal_oracle(token_tensor, sentinel: int, max_count: int,
+                       device="cpu"):
+    """Counter trajectory + per-position iteration token for FIB decimal:
+    input 'FIBD n' -> output str(F(n)).
+
+    Counter at sep: digit_count(F(n)). Decrements per output position.
+    Hits 0 at the EOS-target slot.
+
+    iter_token_per_pos at position sep+k: the byte for the k-th digit
+    of F(n) (e.g., '5' = byte 53). At the EOS-target slot (counter=0)
+    the iter_token is irrelevant since eos_bias dominates; we set it
+    to '0' as a safe default.
+
+    Returns (counter (B, L), iter_tok_per_pos (B, L), Fns: list[int]).
+    """
+    B, L = token_tensor.shape
+    counter = torch.full((B, L), sentinel, dtype=torch.long, device=device)
+    iter_tok = torch.zeros((B, L), dtype=torch.long, device=device)
+    ns = parse_fibd_n_from_tokens(token_tensor)
+    seps = find_sep_positions(token_tensor)
+    fns = []
+    for i, (n, s) in enumerate(zip(ns, seps)):
+        fn = _fib_int(n) if n > 0 else 0
+        fns.append(fn)
+        if s < 0:
+            continue
+        digits = str(fn)
+        D = len(digits)
+        # Counter at sep through sep+D: D, D-1, ..., 0
+        for k in range(D + 1):
+            p = s + k
+            if 0 <= p < L:
+                counter[i, p] = min(D - k, max_count)
+        # iter_token at sep+k = digit at position k (for k in [0, D-1]).
+        # At sep+D, the iter_token is unused (counter=0 routes to EOS).
+        for k, ch in enumerate(digits):
+            p = s + k
+            if 0 <= p < L:
+                iter_tok[i, p] = ord(ch)
+    return counter, iter_tok, fns
 
 
 def hanoibin_counter_trajectory(token_tensor, sentinel: int, device="cpu"):

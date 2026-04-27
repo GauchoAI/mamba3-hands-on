@@ -119,6 +119,25 @@ def gen_fib_unary(n_max=10):
     return {"type": "fib_unary", "input": f"FIB {n}", "output": "1" * fn}
 
 
+def gen_fib_decimal(n_max=20):
+    """Fibonacci in DECIMAL: 'FIBD n' → str(F(n)).
+
+    Example: FIBD 10 → '55', FIBD 30 → '832040', FIBD 100 → 21 digits.
+
+    The output is the actual decimal representation of F(n). Unlike
+    fib_unary where every output token is the same character ('1'),
+    here the iteration token *varies per position* — it's the digit
+    at each position of F(n). This stress-tests the per-position
+    iter_token extension of LoopCounter.
+
+    Counter at SEP = digit_count(F(n)) (much smaller than F(n)
+    itself: F(20)=6765 has 4 digits, F(100) has 21 digits).
+    """
+    n = random.randint(1, n_max)
+    fn = _fib(n)
+    return {"type": "fib_decimal", "input": f"FIBD {n}", "output": str(fn)}
+
+
 def gen_string_length(max_len=10):
     """Count the number of elements in a sequence.
     Example: '5 3 8 1 4 2' → '6'

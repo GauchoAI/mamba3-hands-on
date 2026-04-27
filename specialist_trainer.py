@@ -262,6 +262,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 token_input = torch.where(do_corrupt, random_digits, token_tensor)
 
             counter_values = None
+            iter_tok_per_pos = None
             if config.get("use_loop_counter", False):
                 _max = config.get("loop_counter_max", 1024)
                 _sentinel = _max + 1
@@ -270,12 +271,18 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                     counter_values, _ = fib_unary_counter_trajectory(
                         token_tensor, sentinel=_sentinel, max_count=_max,
                         device=device)
+                elif task == "fib_decimal":
+                    from hanoi_oracle import fib_decimal_oracle
+                    counter_values, iter_tok_per_pos, _ = fib_decimal_oracle(
+                        token_tensor, sentinel=_sentinel, max_count=_max,
+                        device=device)
                 else:
                     from hanoi_oracle import hanoibin_counter_trajectory
                     counter_values, _ = hanoibin_counter_trajectory(
                         token_tensor, sentinel=_sentinel, device=device)
 
-            logits = model(token_input, counter_values=counter_values)
+            logits = model(token_input, counter_values=counter_values,
+                          iter_token_per_pos=iter_tok_per_pos)
             B, L, V = logits.shape
             pos = torch.arange(L, device=device).unsqueeze(0)
             sep_t = torch.tensor(sep_positions, device=device, dtype=torch.long).unsqueeze(1)
@@ -389,17 +396,22 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 out_char = ex["output"][0] if ex["output"] else "?"
                 t = torch.tensor([tokens], dtype=torch.long, device=device)
                 _cv = None
+                _it_pos = None
                 if config.get("use_loop_counter", False):
                     _max = config.get("loop_counter_max", 1024)
                     if task == "fib_unary":
                         from hanoi_oracle import fib_unary_counter_trajectory
                         _cv, _ = fib_unary_counter_trajectory(
                             t, sentinel=_max + 1, max_count=_max, device=device)
+                    elif task == "fib_decimal":
+                        from hanoi_oracle import fib_decimal_oracle
+                        _cv, _it_pos, _ = fib_decimal_oracle(
+                            t, sentinel=_max + 1, max_count=_max, device=device)
                     else:
                         from hanoi_oracle import hanoibin_counter_trajectory
                         _cv, _ = hanoibin_counter_trajectory(
                             t, sentinel=_max + 1, device=device)
-                logits = model(t, counter_values=_cv)
+                logits = model(t, counter_values=_cv, iter_token_per_pos=_it_pos)
                 ok = True
                 conf = 0.0
                 for j, expected in enumerate(out_bytes):
