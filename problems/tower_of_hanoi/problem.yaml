@@ -27,3 +27,11 @@ curriculum:
   # at all answer lengths from 1 to 31.
   - {stage: 9, n_disks: 75, advance_at: 0.90}
   - {stage: 10, n_disks: 100, advance_at: 0.90}
+  # Beyond n=100 — see how far the bounded-reach program scales.
+  # At n=500 the answer is 151 digits; at n=1000 it's 302 digits.
+  # The model's recurrent state is fixed (2,048 register slots) so
+  # information capacity isn't the issue; the question is whether
+  # the training pressure can keep the program coherent across
+  # outputs of arbitrary length.
+  - {stage: 11, n_disks: 200, advance_at: 0.90}
+  - {stage: 12, n_disks: 500, advance_at: 0.90}
