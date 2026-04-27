@@ -182,7 +182,10 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     # Load teacher for distillation — transparently from any node via ModelRegistry
     teacher_model_for_distill = None
     teacher_ckpt_path = None
-    try:
+    if config.get("no_distill"):
+        print(f"  Distillation skipped (--no-distill)", flush=True)
+    else:
+      try:
         from registry.model_registry import ModelRegistry
         _model_reg = ModelRegistry()
         if _model_reg.has_teacher(task):
@@ -191,7 +194,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 teacher_model_for_distill, _t_cfg, _t_acc = result
                 teacher_ckpt_path = _model_reg.local_dir / f"{task}.pt"
                 print(f"  Distilling from teacher ({_t_acc:.0%}, d={_t_cfg.get('d_model')} L={_t_cfg.get('n_kernel_layers')})", flush=True)
-    except Exception as e:
+      except Exception as e:
         print(f"  Teacher discovery: {e}", flush=True)
 
     _hit_target = False
@@ -224,7 +227,28 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
                 token_tensor[i, :len(tokens)] = torch.tensor(tokens)
                 sep_positions.append(sep)
 
-            logits = model(token_tensor)
+            # Scheduled-sampling input noise: with prob p_schedule, replace
+            # answer-position INPUT tokens with random digit bytes ('0'..'9'
+            # = ASCII 48..57). The TARGET (token_tensor itself, used at
+            # line below for next-token supervision) stays clean — so the
+            # model learns "predict the correct next token even when your
+            # context has errors." Closes the autoregressive vs teacher-
+            # forced gap that produced the n=40 Hanoi cliff.
+            token_input = token_tensor
+            p_schedule = config.get("scheduled_noise_p", 0.0)
+            if p_schedule > 0:
+                _pos = torch.arange(max_len, device=device).unsqueeze(0)
+                _sep_t = torch.tensor(sep_positions, device=device,
+                                      dtype=torch.long).unsqueeze(1)
+                # Answer-INPUT positions are sep+1 ... last (excluding pad).
+                # Corrupting position k means model SEES wrong token at k
+                # while predicting position k+1's target (which stays clean).
+                answer_input_mask = (_pos > _sep_t) & (token_tensor != PAD)
+                do_corrupt = (torch.rand_like(token_tensor.float()) < p_schedule) & answer_input_mask
+                random_digits = torch.randint(48, 58, token_tensor.shape, device=device)
+                token_input = torch.where(do_corrupt, random_digits, token_tensor)
+
+            logits = model(token_input)
             B, L, V = logits.shape
             pos = torch.arange(L, device=device).unsqueeze(0)
             sep_t = torch.tensor(sep_positions, device=device, dtype=torch.long).unsqueeze(1)
@@ -932,6 +956,19 @@ if __name__ == "__main__":
                        help="Directory containing problem YAML manifests")
     parser.add_argument("--db-path", type=str, default="three_pop/training.db",
                        help="Path to StateDB SQLite file")
+    parser.add_argument("--scheduled-noise-p", type=float, default=0.0,
+                       help="Probability of replacing each answer-position "
+                            "INPUT token with a random digit byte during "
+                            "training. Closes the autoregressive vs "
+                            "teacher-forced gap; addresses the n=40 "
+                            "Hanoi cliff. 0.0 = off (default), 0.1-0.3 "
+                            "is the useful range.")
+    parser.add_argument("--no-distill", action="store_true",
+                       help="Skip teacher discovery and KL distillation "
+                            "entirely. Useful when training with scheduled "
+                            "noise — a teacher trained on clean inputs "
+                            "produces noisy logits on corrupted contexts "
+                            "and KL on those NaNs out the loss.")
     args = parser.parse_args()
 
     # Set module-level DB path before any usage
@@ -947,6 +984,8 @@ if __name__ == "__main__":
         "optimizer": args.optimizer, "loss_fn": args.loss_fn,
         "batch_size": args.batch_size, "steps_per_cycle": args.steps_per_cycle,
         "use_perp": args.weight_decay == 0.0,
+        "scheduled_noise_p": args.scheduled_noise_p,
+        "no_distill": args.no_distill,
     }
     if args.scan_backend:
         config["scan_backend"] = args.scan_backend

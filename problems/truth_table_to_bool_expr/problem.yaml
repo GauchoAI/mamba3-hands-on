@@ -1,0 +1,8 @@
+name: truth_table_to_bool_expr
+type: generator
+generator: formal_language:gen_truth_table_to_bool_expr
+target_accuracy: 0.95
+tags: [language, formal, boolean, tier-1, reverse]
+description: "Tier-1 formal language: 4-bit truth table → smallest canonical 2-variable boolean expression. Reverse direction of bool_expr_to_truth_table."
+curriculum:
+  - {stage: 1, advance_at: 0.95}

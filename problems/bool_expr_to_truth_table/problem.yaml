@@ -1,0 +1,8 @@
+name: bool_expr_to_truth_table
+type: generator
+generator: formal_language:gen_bool_expr_to_truth_table
+target_accuracy: 0.95
+tags: [language, formal, boolean, tier-1]
+description: "Tier-1 formal language: 2-variable boolean expression → 4-bit truth table. Forward direction of a bidirectional pair; the reverse is truth_table_to_bool_expr."
+curriculum:
+  - {stage: 1, advance_at: 0.95}
