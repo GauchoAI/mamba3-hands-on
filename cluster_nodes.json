@@ -1,0 +1,17 @@
+[
+  {
+    "name": "m4-pro",
+    "local": true,
+    "_chip": "Apple M4 Pro, 12 cores",
+    "_repo": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on"
+  },
+  {
+    "name": "m4-mini",
+    "host": "192.168.0.170",
+    "port": 22,
+    "user": "miguel_lemos",
+    "repo_path": "~/mamba3-hands-on",
+    "_chip": "Apple M4, 10 cores",
+    "_macos": "15.1.1"
+  }
+]
