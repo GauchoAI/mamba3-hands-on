@@ -226,10 +226,14 @@ class LoopCounter(nn.Module):
     """
     SENTINEL_OFFSET = 1  # max_count + 1 = sentinel index
 
-    def __init__(self, d_model: int, max_count: int = 1024):
+    def __init__(self, d_model: int, max_count: int = 1024,
+                 iteration_token: int = 49):
         super().__init__()
         self.d_model = d_model
         self.max_count = max_count
+        # Token id to bias UP when counter > 0 (i.e., the loop body's
+        # output token). For HANOIBIN this is ord('1') = 49.
+        self.iteration_token = iteration_token
         # max_count + 2 entries: [0..max_count] valid + 1 sentinel
         self.c_emb = nn.Embedding(max_count + 2, d_model)
         nn.init.normal_(self.c_emb.weight, std=0.02)
@@ -261,6 +265,18 @@ class LoopCounter(nn.Module):
             self.eos_bias.weight[0] = 30.0
             self.eos_bias.weight[max_count + 1] = 0.0
 
+        # Mirror bias for the iteration token: push UP when counter > 0,
+        # DOWN when counter == 0 (so EOS wins decisively at the boundary).
+        # Without this, deep in the answer span the SSM's hidden-state
+        # alignment drifts and other tokens (notably SEP=258) start
+        # winning over '1'. This explicitly encodes loop-body semantics:
+        # "while counter>0: emit iteration_token; at counter==0: stop."
+        self.iter_bias = nn.Embedding(max_count + 2, 1)
+        with torch.no_grad():
+            self.iter_bias.weight.fill_(15.0)
+            self.iter_bias.weight[0] = -30.0
+            self.iter_bias.weight[max_count + 1] = 0.0
+
     @property
     def sentinel(self) -> int:
         return self.max_count + 1
@@ -276,6 +292,12 @@ class LoopCounter(nn.Module):
         EOS logit, applied AFTER the LM head."""
         cv = counter_values.clamp(0, self.max_count + 1)
         return self.eos_bias(cv).squeeze(-1)
+
+    def get_iter_bias(self, counter_values: torch.Tensor) -> torch.Tensor:
+        """counter_values: int64 (B, L). Returns (B, L) scalar bias on the
+        iteration-token logit, applied AFTER the LM head."""
+        cv = counter_values.clamp(0, self.max_count + 1)
+        return self.iter_bias(cv).squeeze(-1)
 
 
 class ProgressiveModel(nn.Module):
@@ -413,23 +435,34 @@ class ProgressiveModel(nn.Module):
         # provided when this pathway is active; if None and the module
         # exists we feed an all-sentinel tensor (no-op).
         eos_bias = None
+        iter_bias = None
+        iter_tok = None
         if self.loop_counter is not None:
             if counter_values is None:
                 counter_values = torch.full(tokens.shape, self.loop_counter.sentinel,
                                             dtype=torch.long, device=tokens.device)
             x = x + self.loop_counter(counter_values)
             eos_bias = self.loop_counter.get_eos_bias(counter_values)  # (B, L)
+            iter_bias = self.loop_counter.get_iter_bias(counter_values)
+            iter_tok = self.loop_counter.iteration_token
 
         x = self.final_norm(x)
         logits = self.head(x)
 
-        # Direct EOS-logit override from the LoopCounter. Bypasses weight
+        # Direct logit overrides from the LoopCounter. Bypasses weight
         # tying so the counter doesn't have to fight the SSM through the
-        # LM head. Adds bias only to the EOS column.
+        # LM head. Two channels:
+        #   - EOS column gets a bias that is positive at counter==0,
+        #     negative otherwise (force "stop" at boundary).
+        #   - Iteration-token column gets the mirror (force "continue"
+        #     when counter > 0). Without this, the SSM's hidden state
+        #     drifts deep in the answer span and other tokens win.
         if eos_bias is not None:
-            eos_addition = torch.zeros_like(logits)
-            eos_addition[..., EOS] = eos_bias
-            logits = logits + eos_addition
+            addition = torch.zeros_like(logits)
+            addition[..., EOS] = eos_bias
+            if iter_tok is not None and iter_bias is not None:
+                addition[..., iter_tok] = iter_bias
+            logits = logits + addition
         return logits
 
     def forward_from_hidden(self, x):

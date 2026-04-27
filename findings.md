@@ -548,6 +548,29 @@ Saved checkpoint: `tower_of_hanoi_binary_eosgate.pt` (124k params,
 loss 0.61, byte-acc 100%, length-gen 230/230 to n=230, gentle
 falloff to n=256).
 
+**Iron-solid v2: bidirectional gating.** The cliff at n=231 wasn't
+about EOS — it was the SSM's logit on **SEP=258** growing faster
+than `'1'`=49 as the answer span deepened (~0.05 per position).
+At k≈232 they crossed; the model emitted SEP (filtered from the
+printable answer string, hence the off-by-one).
+
+Fix: mirror the EOS bias on the iteration token. Added
+`iter_bias` to `LoopCounter`: per-counter scalar bias on
+`logit[iteration_token=49]`. Hot init: `c=0 → −30`, `c>0 → +15`,
+sentinel → 0. Now the LoopCounter explicitly encodes loop-body
+semantics: "while counter>0: push iteration_token; at counter=0:
+push EOS." Both biases bypass weight tying.
+
+Re-trained from scratch (same config), cycle 11 gave loss 0.51
+without NaN (improvement over v1's NaN at cycle 9).
+Length-gen n=1..256: **256/256 ✓**. Counterfactual (feed input
+n, counter m) 13/13 — emits exactly m ones regardless of input.
+Edge cases (n=0, n=1, n=256) 3/3.
+
+The recurrence is iron-solid out to the counter table's max.
+
+Saved: `tower_of_hanoi_binary_eosgate_v2.pt`.
+
 ---
 
 ## Entry — Neural composition works (synapse v2, AttendBridge) (2026-04-26)
