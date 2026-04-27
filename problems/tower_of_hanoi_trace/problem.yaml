@@ -1,0 +1,14 @@
+name: tower_of_hanoi_trace
+type: generator
+generator: hanoi_trace:gen_tower_of_hanoi_trace
+target_accuracy: 0.95
+tags: [reasoning, longrange, level3, trace, programs]
+description: "Tower of Hanoi but the output is the iterative trace x_k for k=1..n (each x_{k+1} = 2*x_k + 1). Forces program-shape output; sustained trace length directly measures how much program the model has internalized."
+curriculum:
+  - {stage: 1, n_disks: 3, advance_at: 0.90}
+  - {stage: 2, n_disks: 5, advance_at: 0.90}
+  - {stage: 3, n_disks: 8, advance_at: 0.95}
+  - {stage: 4, n_disks: 12, advance_at: 0.90}
+  - {stage: 5, n_disks: 16, advance_at: 0.90}
+  - {stage: 6, n_disks: 20, advance_at: 0.90}
+  - {stage: 7, n_disks: 30, advance_at: 0.90}
