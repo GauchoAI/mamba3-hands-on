@@ -463,7 +463,9 @@ class ProgressiveModel(nn.Module):
                  use_history_attn: bool = False, history_d_attn: int = 32,
                  use_explicit_registers: bool = False,
                  n_registers: int = 8, d_register: int = 32,
-                 use_loop_counter: bool = False, loop_counter_max: int = 1024):
+                 use_loop_counter: bool = False, loop_counter_max: int = 1024,
+                 use_register_bank: bool = False,
+                 reg_n_registers: int = 16, reg_value_range: int = 16):
         super().__init__()
         self.d_model = d_model
         self.ssm_cfg = Mamba3Config(
@@ -500,6 +502,15 @@ class ProgressiveModel(nn.Module):
         self.use_loop_counter = use_loop_counter
         self.loop_counter = (LoopCounter(d_model, max_count=loop_counter_max)
                              if use_loop_counter else None)
+
+        # Optional discrete register bank — hard read/write semantics
+        # for state-machine execution. Used by tasks like
+        # tower_of_hanoi_exec where the model has to maintain state
+        # across many output positions.
+        self.use_register_bank = use_register_bank
+        self.register_bank = (RegisterBank(d_model, n_registers=reg_n_registers,
+                                           value_range=reg_value_range)
+                              if use_register_bank else None)
 
         self.mode = "all"
 
@@ -634,8 +645,28 @@ class ProgressiveModel(nn.Module):
             logits = logits + addition
         return logits, new_states
 
-    def forward(self, tokens, counter_values=None, iter_token_per_pos=None):
+    def forward(self, tokens, counter_values=None, iter_token_per_pos=None,
+                register_read_values=None):
+        """
+        register_read_values: int64 (B, L) or None. If the register
+        bank is active and oracle-supplied (training), this is the
+        per-position read-back value (the integer that was at the
+        register read at the PREVIOUS step). It's embedded via the
+        bank's value_emb and added to the token embedding so the
+        SSM "sees" the register contents.
+
+        Return value:
+          - if not use_register_bank: token logits (B, L, V) [unchanged]
+          - if use_register_bank: a dict with keys
+                'token_logits':  (B, L, V)
+                'read_logits':   (B, L, n_registers + 1)
+                'write_logits':  (B, L, n_registers + 1)
+                'val_logits':    (B, L, value_range)
+        """
         x = self.embed_norm(self.embed(tokens))
+        # Inject register read-feedback as additive input embedding.
+        if self.register_bank is not None and register_read_values is not None:
+            x = x + self.register_bank.read_feedback(register_read_values)
 
         for layer in self.kernel_layers:
             scale = layer["scale"][0]
@@ -699,6 +730,19 @@ class ProgressiveModel(nn.Module):
                     # Scalar iter_token (HANOIBIN, FIB-unary).
                     addition[..., iter_tok_scalar] = iter_bias
             logits = logits + addition
+
+        # If RegisterBank is active, ALSO compute the three control
+        # heads from the same SSM hidden state and return them
+        # alongside token logits as a dict. Backwards-compat: when
+        # the bank is not active the return type is the plain tensor.
+        if self.register_bank is not None:
+            r_logits, w_logits, v_logits = self.register_bank.heads(x)
+            return {
+                "token_logits": logits,
+                "read_logits": r_logits,
+                "write_logits": w_logits,
+                "val_logits": v_logits,
+            }
         return logits
 
     def forward_from_hidden(self, x):
