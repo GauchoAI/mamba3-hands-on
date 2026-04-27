@@ -178,6 +178,85 @@ diagnoses were over-claiming based on a buggy decoder.
 
 ---
 
+## Entry — Trajectory-distillation: stabilizes training, doesn't induce program (2026-04-27)
+
+After multiple architectural attempts (output-history attention,
+explicit registers) all NaN'd around stage 5 of the Hanoi curriculum,
+we tried the user's "FD-style" idea: train against a programmatic
+*oracle trajectory* that tells the model what its register state
+should be at every timestep, not just what the final output should
+be. Implementation: explicit register bank + auxiliary MSE loss
+between actual register-write trajectory and a binary encoding of
+2^n−1 from a hardcoded oracle.
+
+**The training-stability finding is real and useful.** The trajectory
+loss took the architectural addition from "NaN at stage 5 (n=12)"
+to "trains cleanly to stage 9 (n=75) and registers' mix factor
+grows 500×." The aux loss provides a much richer gradient signal
+than end-to-end CE alone. Worth documenting as a methodology win:
+when adding a new architectural pathway to an SSM, supervise its
+*intermediate state* against a known-correct trajectory if you have
+one.
+
+**The extrapolation claim, however, falls.** We then ran the
+decisive test: train on n ∈ [1, 20] only with the full trajectory
+oracle, evaluate out to n=100. If the oracle teaches the recurrence,
+the model should extrapolate. If it teaches templated outputs, the
+model fails past 20.
+
+Result:
+
+```
+n=1..20:  100% accuracy   (in trained range)
+n=21:     '3'             (random)
+n=25:     '255'           ← that's 2^8−1, the n=8 answer
+n=29:     '511'           ← n=9's answer
+n=30:     '127'           ← n=7's answer
+n=40:     '1023'          ← n=10's answer
+n=49:     '511'           ← n=9's answer again
+```
+
+The model produces **answers FROM the trained range for unseen
+inputs**. It's pattern-matching surface features of n and emitting
+the closest seen output. The trajectory oracle didn't make it
+generalize the recurrence — it just gave it a stronger lookup
+table within [1, 20].
+
+**Synthesis.** The user's strict pressure test ("a true program
+runs to any input") holds robustly across:
+- baseline SSM + curriculum
+- baseline SSM + scheduled sampling
+- output-history attention
+- explicit registers (no oracle)
+- explicit registers + trajectory oracle
+- explicit registers + trajectory oracle + restricted curriculum
+
+Every variant produces *bounded program-shape* behavior over the
+training range and *memorized-template* behavior outside it. The
+75k-param Mamba-3 architecture with these training methodologies
+cannot induce a program that extrapolates.
+
+What's left to try, in increasing scope:
+1. Discrete registers with hard write semantics (push/pop/load/store)
+   — what we currently have is soft attention over a continuous bank.
+2. Scheduled sampling on the *recurrence steps themselves* — the
+   model conditions on its own intermediate values, not just final
+   tokens. This is the autoregressive-loss extension to trajectory
+   distillation.
+3. Universal Transformer / Neural Turing Machine architecture —
+   accept that small Mamba-3 has a fundamental ceiling for unbounded
+   computation and switch primitive.
+
+The architectural surgery for (3) is real research; (1) and (2) are
+shippable in days. But the cleanest finding here is the negative
+one: training methodology improvements (oracle, scheduled noise)
+help with stability and within-range performance, not with
+extrapolation. **Extrapolation requires architectural primitives
+that can encode unbounded counters discretely**, and we don't have
+those at this scale.
+
+---
+
 ## Entry — Neural composition works (synapse v2, AttendBridge) (2026-04-26)
 
 **Setup.** A tiny router (d=16, L=1, 7,654 trainable params) trained on
