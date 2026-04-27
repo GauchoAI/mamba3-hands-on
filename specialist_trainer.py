@@ -117,6 +117,8 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         d_state=config.get("d_state", 16),
         expand=2,
         headdim=config.get("headdim", 16),
+        use_history_attn=config.get("use_history_attn", False),
+        history_d_attn=config.get("history_d_attn", 32),
     ).to(device)
     for _ in range(config.get("n_kernel_layers", 3)):
         model.add_kernel_layer()
@@ -969,6 +971,15 @@ if __name__ == "__main__":
                             "noise — a teacher trained on clean inputs "
                             "produces noisy logits on corrupted contexts "
                             "and KL on those NaNs out the loss.")
+    parser.add_argument("--output-history-attn", action="store_true",
+                       help="Add a single causal attention head as a "
+                            "side-channel after the SSM stack. Gives the "
+                            "model a copy/lookup primitive over its own "
+                            "prior-position hidden states. ~12k extra "
+                            "params at d_model=64. Init near-identity.")
+    parser.add_argument("--history-d-attn", type=int, default=32,
+                       help="Attention head dim when --output-history-attn "
+                            "is set.")
     args = parser.parse_args()
 
     # Set module-level DB path before any usage
@@ -986,6 +997,8 @@ if __name__ == "__main__":
         "use_perp": args.weight_decay == 0.0,
         "scheduled_noise_p": args.scheduled_noise_p,
         "no_distill": args.no_distill,
+        "use_history_attn": args.output_history_attn,
+        "history_d_attn": args.history_d_attn,
     }
     if args.scan_backend:
         config["scan_backend"] = args.scan_backend

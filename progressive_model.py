@@ -59,19 +59,67 @@ class ByteTokenizer:
 
 # ── Progressive model ───────────────────────────────────────────────
 
+class OutputHistoryAttention(nn.Module):
+    """A single causal attention head added as a side-channel to the SSM
+    stack. At each timestep t, attend to all previous positions 0..t and
+    add the result (scaled by a learnable mix factor) to the hidden state.
+
+    Why this exists: the SSM scan blends information into the recurrent
+    state with a decay factor; the model can't directly query "what was
+    my hidden state at position k?" When generating multi-digit answers
+    autoregressively, that's the difference between losing track of a
+    carry vs. holding it. This module is the smallest architectural
+    change that gives Mamba a copy/lookup primitive without abandoning
+    the SSM scan.
+
+    Init: mix=0.1 keeps the layer near-identity at start so the model
+    learns to USE the new pathway rather than competing with it from
+    step 1.
+    """
+    def __init__(self, d_model: int, d_attn: int = 32):
+        super().__init__()
+        import math
+        self.q_proj = nn.Linear(d_model, d_attn)
+        self.k_proj = nn.Linear(d_model, d_attn)
+        self.v_proj = nn.Linear(d_model, d_model)
+        self.out_proj = nn.Linear(d_model, d_model)
+        self.scale = 1.0 / math.sqrt(d_attn)
+        # Init out_proj near zero so the new pathway starts as a no-op;
+        # the model has to learn its way into using it. Pairs with the
+        # learnable mix factor to give a smooth gradient pathway.
+        nn.init.normal_(self.out_proj.weight, mean=0.0, std=0.01)
+        nn.init.zeros_(self.out_proj.bias)
+        self.mix = nn.Parameter(torch.tensor(0.1))
+
+    def forward(self, x):
+        B, L, D = x.shape
+        Q = self.q_proj(x)               # (B, L, d_attn)
+        K = self.k_proj(x)               # (B, L, d_attn)
+        V = self.v_proj(x)               # (B, L, D)
+        scores = torch.einsum("bld,bmd->blm", Q, K) * self.scale
+        # Causal mask: position l can only attend to positions ≤ l
+        mask = torch.triu(torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1)
+        scores = scores.masked_fill(mask, float("-inf"))
+        weights = torch.softmax(scores, dim=-1)
+        out = torch.einsum("blm,bmd->bld", weights, V)
+        out = self.out_proj(out)
+        return self.mix * out
+
+
 class ProgressiveModel(nn.Module):
     """
     Mamba-3 model that grows layer by layer.
 
     Architecture:
-        embed(260) → [kernel layers] → [cortex layers] → head(260)
+        embed(260) → [kernel layers] → [cortex layers] → [history attention] → head(260)
 
     Modes:
         "kernel" — train kernel layers + embed + head, freeze cortex
         "cortex" — train cortex layers + embed + head, freeze kernel
         "all"    — train everything
     """
-    def __init__(self, d_model=64, d_state=16, expand=2, headdim=16):
+    def __init__(self, d_model=64, d_state=16, expand=2, headdim=16,
+                 use_history_attn: bool = False, history_d_attn: int = 32):
         super().__init__()
         self.d_model = d_model
         self.ssm_cfg = Mamba3Config(
@@ -89,6 +137,11 @@ class ProgressiveModel(nn.Module):
         # Layer groups
         self.kernel_layers = nn.ModuleList()
         self.cortex_layers = nn.ModuleList()
+
+        # Optional output-history attention (one layer after the SSM stack)
+        self.use_history_attn = use_history_attn
+        self.history_attn = (OutputHistoryAttention(d_model, d_attn=history_d_attn)
+                             if use_history_attn else None)
 
         self.mode = "all"
 
@@ -155,6 +208,12 @@ class ProgressiveModel(nn.Module):
             scale = layer["scale"][0]
             x = x + scale * layer["block"](layer["norm"](x))
 
+        # Output-history attention (causal): adds a copy/lookup primitive.
+        # No-op if not configured. Lives after the SSM stack so attention
+        # operates on the SSM's accumulated representation.
+        if self.history_attn is not None:
+            x = x + self.history_attn(x)
+
         x = self.final_norm(x)
         return self.head(x)
 
@@ -169,6 +228,8 @@ class ProgressiveModel(nn.Module):
         for layer in self.cortex_layers:
             scale = layer["scale"][0]
             x = x + scale * layer["block"](layer["norm"](x))
+        if self.history_attn is not None:
+            x = x + self.history_attn(x)
         return self.final_norm(x)
 
     def forward_hidden(self, tokens):
