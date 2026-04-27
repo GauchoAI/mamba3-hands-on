@@ -138,11 +138,47 @@ accumulate. Releases don't happen.
 
 - Synapse v2 (AttendBridge): one-to-one and one-to-many primitives
   validated on simple tasks.
+- Recursion: a saved router can be loaded and used as a specialist
+  for a higher-order router. The hierarchy primitive holds —
+  routers and specialists are interchangeable at runtime.
+- **Distillation-via-synapse: closes the loop.** A synapse-router
+  (e.g. 97% on compose_logic_gate via composition of a router + the
+  logic_gate leaf) can be distilled into a *solo* ProgressiveModel
+  that captures the composed capability in a single set of weights.
+  The student matched the teacher (96% vs 97%). The student is then
+  publishable as a new leaf specialist; future routers can compose
+  over an expanded library that now includes it. The ecology
+  literally compounds.
 - Firebase as the substrate: nodes register, publish teacher blobs,
   download teacher blobs, all via plain HTTPS. No SSH required.
 - Hardened save/load/teacher paths (NaN guards × 3) so corrupted
   models can't propagate through the cluster.
-- 21 mastered specialists currently live, retrain in flight.
+- 22 mastered specialists currently live, plus a brand-new
+  compose_logic_gate specialist born via the distillation cycle.
+
+## The growth cycle
+
+1. **Compose.** A new task arrives. A small router is trained
+   from scratch, with the current specialist library available
+   as potential synapses. The router learns which peers to attend
+   to and produces the task's first solver.
+2. **Distill.** The router is distilled into a solo
+   ProgressiveModel that captures the composed capability in a
+   single set of weights. The router itself can be retired or
+   kept around; what matters is the new solo .pt.
+3. **Publish.** The solo .pt becomes a new specialist. It joins
+   the Firebase library. Now any future router can use it as a
+   leaf — no composition cost at runtime.
+4. **Repeat.** The next task gets a fresh router. Its synapse
+   options now include this newly-distilled specialist.
+   Compositions get progressively deeper because each cycle
+   adds new primitives that themselves contain prior
+   compositions.
+
+The cluster's reach grows by *layers of crystallization*. Each
+synapse-composition is, in time, frozen into a leaf. The leaves
+themselves had previously been compositions. Six layers down,
+"it" is a tower of distillations.
 
 ## What's next
 
