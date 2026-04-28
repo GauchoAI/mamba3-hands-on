@@ -11,6 +11,86 @@ Silicon MPS. Each entry corresponds to a commit.
 
 ---
 
+## Entry — First-class harness: language as translation layer, demoed end-to-end (2026-04-28)
+
+Wired the thesis up as a working artifact. `assistant.py` is a 220-line
+single-file harness over a tool registry:
+
+  natural language → router → specialist → renderer → natural language
+
+The router and renderer are stubs (regex matching + string templates).
+The specialists are real:
+
+  - `hanoi_solver` calls the 45,318-param order-invariant GRU we trained
+    earlier today; given an arbitrary n it returns the optimal move
+    count.
+  - `gcd` is `math.gcd` for now (placeholder for the GCD step Lego).
+  - `gcdhanoi` is a composite that chains the two; demonstrates that
+    the orchestrator can route to *compositions* of specialists, not
+    just one at a time.
+
+Three demo prompts, all working end-to-end on the M4 mini via
+`cluster_dispatch.py`:
+
+```
+> Solve Tower of Hanoi with 10 disks
+  [trace] router: scored=[('hanoi_solver', 4)]; chose=hanoi_solver; args={'n': 10}
+  [tool ] calling Hanoi GRU via hanoi_solver({'n': 10})
+  [spec ] hanoi_invariant_gru_offtrace (45,318 params, order-invariant GRU)  timing=895 ms
+The optimal solution to Tower of Hanoi with 10 disks requires 1,023 moves.
+
+> What is gcd of 462 and 252?
+  [trace] router: scored=[('gcd', 1)]; chose=gcd; args={'a': 462, 'b': 252}
+  [tool ] calling GCD tool via gcd({'a': 462, 'b': 252})
+gcd(462, 252) = 42.
+
+> Compute the gcd of Hanoi 6 and Hanoi 9
+  [trace] router: scored=[('hanoi_solver', 1), ('gcd', 1), ('gcdhanoi', 1)]; chose=gcdhanoi; args={'a': 6, 'b': 9}
+Hanoi(6) needs 63 moves; Hanoi(9) needs 511 moves; gcd of the two = 7.
+```
+
+The trace lines are the point: every step is auditable from the
+command line — what the router scored, what it chose, which specialist
+was called, with what args, and how long the inner computation took.
+The model isn't pretending to "think out loud"; it's literally calling
+inner specialists and translating their outputs back to language.
+
+**Why this is the right shape, not just a CLI demo.** The substitution
+path for both stubs is clean. The router is currently a regex score
+over keywords, but its signature is `(text) → (Tool, args)`; replacing
+it with a small Mamba-3 head over hidden state changes nothing
+elsewhere. The renderer is currently a template, but its signature is
+`(tool, args, ToolResult) → text`; replacing it with the bilingual
+char-LM (already trained on April 20) changes nothing elsewhere.
+
+**Two protocols that fell out naturally:**
+
+  - `Tool(name, description, keywords, run, specialist_label)` — what a
+    specialist looks like to the registry.
+  - `ToolResult(ok, payload, timing_ms, specialist)` — what a
+    specialist returns. `specialist` is a human-readable label that
+    makes the trace honest about *which* underlying model was called
+    (e.g. `"hanoi_invariant_gru_offtrace (45,318 params, order-invariant GRU)"`).
+
+**Cluster sanity-check.** The whole flow works under
+`cluster_dispatch.py`. One catch surfaced: `cluster_sync.py` excludes
+`checkpoints/` (sensible default for the 100s of `.pt`s we have), so
+specialist checkpoints have to be `rsync`'d explicitly. The Hanoi GRU
+is 182 KB; not a deal. We should probably add an explicit
+`--include-checkpoint` flag at some point, or a `specialist_checkpoint`
+field on the `Tool` that triggers a per-tool sync.
+
+**Where this leaves us, the actual situation.** The thesis is
+demoable. Mamba-3 LM does language; the Lego library (and the GRU)
+does reasoning; the harness composes them. Next concrete step is
+upgrading the router from regex to a learned classifier head — small
+job — followed by the renderer using the bilingual char-LM.
+
+Files: `assistant.py`. Cluster: m4-mini at 192.168.0.170 via
+`cluster_sync.py` + `cluster_dispatch.py`. Commit `dc5144b`.
+
+---
+
 ## Entry — Hanoi true invariance: the role-MLP plateau and the GRU fix (2026-04-28)
 
 User question that opened the thread:
