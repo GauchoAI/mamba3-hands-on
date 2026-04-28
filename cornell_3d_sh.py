@@ -277,7 +277,7 @@ def sh_evaluate_4(coefs: np.ndarray, d: np.ndarray) -> np.ndarray:
     return np.maximum(rad, 0.0)
 
 
-def render_perspective(materials_np, outgoing_np, normals_np, view_W=384, view_H=384,
+def render_perspective(materials_np, outgoing_np, view_W=384, view_H=384,
                        cam_offset_z: float = -0.6, cam_offset_y: float = 0.05,
                        fov_deg: float = 55.0, max_march: int = 256):
     W, H, D = materials_np.shape
@@ -326,37 +326,8 @@ def render_perspective(materials_np, outgoing_np, normals_np, view_W=384, view_H
                 cell_sh = outgoing_np[
                     ix_safe[hit_idx], iy_safe[hit_idx], iz_safe[hit_idx]
                 ]                                          # (n_hit, 4, 3)
-                cell_n = normals_np[
-                    ix_safe[hit_idx], iy_safe[hit_idx], iz_safe[hit_idx]
-                ]                                          # (n_hit, 3)
                 back = -ray_dir[hit_idx]                   # (n_hit, 3)
-
-                # SOLID/LIGHT split: SOLID is Lambertian (constant radiance
-                # in the hemisphere of n). Recover that constant directly
-                # as c_0/sqrt(pi) instead of evaluating the order-1 SH,
-                # which drops to half at the equator and creates a dark
-                # silhouette outline. Gate by back·n > 0 so we only see
-                # the front side of the surface.
-                hit_mat = mat[hit_idx]
-                is_light_hit = (hit_mat == LIGHT)
-
-                # Lambertian constant (front-hemisphere)
-                lambertian_V = cell_sh[:, 0, :] / SQRT_PI  # (n_hit, 3)
-                front_dot = (back * cell_n).sum(axis=-1, keepdims=True)
-                # Where the cell has no normal (no empty neighbor), front_dot
-                # is 0; treat that as "always front" so isolated cells don't
-                # render black.
-                no_normal = (np.linalg.norm(cell_n, axis=-1, keepdims=True) < 1e-6)
-                front_visible = (front_dot > 0) | no_normal      # (n_hit, 1)
-                solid_radiance = np.where(front_visible, lambertian_V, 0.0)
-
-                # LIGHT: SH evaluation captures the cosine-weighted lamp
-                # emission well enough for our purposes.
-                light_radiance = sh_evaluate_4(cell_sh, back)
-
-                img[hit_idx] = np.where(
-                    is_light_hit[:, None], light_radiance, solid_radiance
-                )
+                img[hit_idx] = sh_evaluate_4(cell_sh, back)
                 alive &= ~hit
 
         pos += ray_dir * step
@@ -430,8 +401,8 @@ def main():
 
     print("Rendering perspective view…")
     t0 = time.time()
-    img_lego = render_perspective(mat_np, out_lego, normals, args.view_W, args.view_H)
-    img_sym  = render_perspective(mat_np, out_sym,  normals, args.view_W, args.view_H)
+    img_lego = render_perspective(mat_np, out_lego, args.view_W, args.view_H)
+    img_sym  = render_perspective(mat_np, out_sym,  args.view_W, args.view_H)
     print(f"  render time: {(time.time()-t0)*1000:.1f} ms")
     print()
 
