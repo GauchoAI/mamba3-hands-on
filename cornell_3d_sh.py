@@ -282,7 +282,8 @@ def sh_evaluate_4(coefs: np.ndarray, d: np.ndarray) -> np.ndarray:
     return np.maximum(rad, 0.0)
 
 
-def render_perspective(materials_np, outgoing_np, view_W=384, view_H=384,
+def render_perspective(materials_np, outgoing_np, normals_np,
+                       view_W=384, view_H=384,
                        cam_offset_z: float = -0.6, cam_offset_y: float = 0.05,
                        fov_deg: float = 55.0, max_march: int = 256):
     W, H, D = materials_np.shape
@@ -312,6 +313,16 @@ def render_perspective(materials_np, outgoing_np, view_W=384, view_H=384,
     alive = np.ones(N, dtype=bool)
     step = 0.5
 
+    # Track the last EMPTY voxel each ray was in. On hit, we sample that
+    # cell's SH at the back-toward-camera direction — it gives the
+    # radiance flowing toward the camera at the surface boundary, which
+    # avoids the "buried wall-corner cell" artifact (corner cells with
+    # no empty neighbors render dim because their LPV gather + SOLID
+    # rule degenerate).
+    last_empty_x = np.full(N, -1, dtype=np.int32)
+    last_empty_y = np.full(N, -1, dtype=np.int32)
+    last_empty_z = np.full(N, -1, dtype=np.int32)
+
     for _ in range(max_march):
         if not alive.any():
             break
@@ -325,6 +336,13 @@ def render_perspective(materials_np, outgoing_np, view_W=384, view_H=384,
             iy_safe = np.clip(iy, 0, H - 1)
             iz_safe = np.clip(iz, 0, D - 1)
             mat = materials_np[ix_safe, iy_safe, iz_safe]
+            # Update last-empty trail for any ray currently in an empty cell.
+            now_empty = (mat == EMPTY) & can_check
+            if now_empty.any():
+                last_empty_x[now_empty] = ix_safe[now_empty]
+                last_empty_y[now_empty] = iy_safe[now_empty]
+                last_empty_z[now_empty] = iz_safe[now_empty]
+
             hit = (mat != EMPTY) & can_check
             if hit.any():
                 hit_idx = np.where(hit)[0]
@@ -384,9 +402,39 @@ def render_perspective(materials_np, outgoing_np, view_W=384, view_H=384,
                                           0.0)
 
                 is_light_hit = (hit_mat == LIGHT)[:, None]
-                img[hit_idx] = np.where(
+                primary_radiance = np.where(
                     is_light_hit, light_radiance, solid_radiance
                 )
+
+                # Buried-cell fallback: cells with zero stored normal
+                # (no empty neighbors — the wall/floor/back corners) get
+                # the cell.c_0 dim by ~3× because the SOLID rule
+                # degenerates without a normal. Sample the last empty
+                # voxel the ray passed through and evaluate its SH at
+                # the back direction. This gives the radiance flowing
+                # toward the camera at the surface boundary, smoothing
+                # through the buried-cell darkening.
+                cell_n_stored = normals_np[
+                    ix_safe[hit_idx], iy_safe[hit_idx], iz_safe[hit_idx]
+                ]
+                is_buried = (np.linalg.norm(cell_n_stored, axis=-1) < 1e-6)
+
+                lex = last_empty_x[hit_idx]
+                ley = last_empty_y[hit_idx]
+                lez = last_empty_z[hit_idx]
+                has_prev = (lex >= 0) & (ley >= 0) & (lez >= 0)
+                use_fallback = is_buried & has_prev
+
+                if use_fallback.any():
+                    fb_idx = np.where(use_fallback)[0]
+                    fb_sh = outgoing_np[
+                        lex[fb_idx], ley[fb_idx], lez[fb_idx]
+                    ]                                       # (n_fb, 4, 3)
+                    fb_back = back[fb_idx]                  # (n_fb, 3)
+                    fallback_radiance = sh_evaluate_4(fb_sh, fb_back)
+                    primary_radiance[fb_idx] = fallback_radiance
+
+                img[hit_idx] = primary_radiance
                 alive &= ~hit
 
         pos += ray_dir * step
@@ -460,8 +508,8 @@ def main():
 
     print("Rendering perspective view…")
     t0 = time.time()
-    img_lego = render_perspective(mat_np, out_lego, args.view_W, args.view_H)
-    img_sym  = render_perspective(mat_np, out_sym,  args.view_W, args.view_H)
+    img_lego = render_perspective(mat_np, out_lego, normals, args.view_W, args.view_H)
+    img_sym  = render_perspective(mat_np, out_sym,  normals, args.view_W, args.view_H)
     print(f"  render time: {(time.time()-t0)*1000:.1f} ms")
     print()
 
