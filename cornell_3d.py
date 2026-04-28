@@ -180,6 +180,36 @@ def _direction_bin(d: np.ndarray) -> int:
     return ax * 2 + (0 if sign_pos else 1)
 
 
+def sh_lookup(outgoing_6: np.ndarray, dirs: np.ndarray) -> np.ndarray:
+    """Spherical-harmonics radiance lookup at hit cells.
+
+    `outgoing_6`: (..., 6, 3) — six axis-aligned radiance samples per channel
+                  in order [+X, -X, +Y, -Y, +Z, -Z].
+    `dirs`: (..., 3) — the direction to evaluate at (unit vector). For
+            rendering, this is `-ray_dir` (back toward the camera).
+
+    Fits SH order 1 from the 6 samples (closed-form: per-axis difference
+    gives the linear coefs, mean-of-6 gives the constant term), evaluates
+    the SH at `dirs`, clamps negatives to zero. Returns (..., 3).
+
+    SH order 1 in Cartesian form: f(d) = c_0 + c_x·dx + c_y·dy + c_z·dz.
+    From 6 axis-aligned samples this is overdetermined; we use the
+    least-squares solution: mean for c_0, half-difference per axis.
+    """
+    px, nx = outgoing_6[..., 0, :], outgoing_6[..., 1, :]
+    py, ny = outgoing_6[..., 2, :], outgoing_6[..., 3, :]
+    pz, nz = outgoing_6[..., 4, :], outgoing_6[..., 5, :]
+    c0 = (px + nx + py + ny + pz + nz) / 6.0          # (..., 3)
+    cx = (px - nx) * 0.5
+    cy = (py - ny) * 0.5
+    cz = (pz - nz) * 0.5
+    dx = dirs[..., 0:1]
+    dy = dirs[..., 1:2]
+    dz = dirs[..., 2:3]
+    radiance = c0 + cx * dx + cy * dy + cz * dz
+    return np.maximum(radiance, 0.0)
+
+
 def render_perspective(materials_np, outgoing_np, view_W=512, view_H=512,
                        cam_offset_z: float = -0.6,
                        cam_offset_y: float = 0.05,
@@ -243,17 +273,16 @@ def render_perspective(materials_np, outgoing_np, view_W=512, view_H=512,
             hit = (mat != EMPTY) & can_check
             if hit.any():
                 hit_idx = np.where(hit)[0]
-                # Sampling rule:
-                #   LIGHT  → outgoing[-Y]: emission direction (downward).
-                #   SOLID  → outgoing[0]:  any direction (all 6 equal for our rule).
-                hit_mat = mat[hit_idx]
-                is_light_hit = (hit_mat == LIGHT)
-                # NY = 3 in [+X, -X, +Y, -Y, +Z, -Z]
-                bins = np.where(is_light_hit, NY, 0)
-                img[hit_idx] = outgoing_np[
-                    ix_safe[hit_idx], iy_safe[hit_idx], iz_safe[hit_idx],
-                    bins,
-                ]
+                # SH order-1 radiance lookup at each hit cell. Fits a
+                # smooth spherical function to the 6 axis-aligned samples
+                # and evaluates it at the back-toward-camera direction.
+                # Clean fix for both the LIGHT/oblique-ray issue and any
+                # angular aliasing on solid surfaces.
+                cell_out = outgoing_np[
+                    ix_safe[hit_idx], iy_safe[hit_idx], iz_safe[hit_idx]
+                ]                                         # (n_hit, 6, 3)
+                back = -ray_dir[hit_idx]                  # (n_hit, 3)
+                img[hit_idx] = sh_lookup(cell_out, back)
                 alive &= ~hit
 
         pos += ray_dir * step
