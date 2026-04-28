@@ -286,9 +286,11 @@ def main():
             last_components = components
         cycle_loss /= args.steps_per_cycle
 
-        # Eval: teacher-forced accuracy on each n
+        # Eval: teacher-forced accuracy on training n only (no OOD —
+        # OOD eval has long sequences and slows the cycle. We do AR
+        # validation as a separate one-shot script after training.)
         eval_metrics = {n: teacher_forced_eval(model, n, args.n_registers, args.device)
-                        for n in ns + [max(ns) + 2]}  # also test 1 OOD
+                        for n in ns}
 
         elapsed = time.time() - t0
         avg_token_acc = sum(m["token_acc"] for m in eval_metrics.values()) / len(eval_metrics)

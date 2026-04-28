@@ -33,10 +33,12 @@ def load_model(pt_path: str, device: str):
         raise SystemExit(f"checkpoint {pt_path} has no RegisterBank")
     n_reg = sd["register_bank.read_addr_head.weight"].shape[0] - 1
     val_range = sd["register_bank.write_val_head.weight"].shape[0]
+    has_lc = any(k.startswith("loop_counter.") for k in sd.keys())
     model = ProgressiveModel(
         d_model=cfg["d_model"], d_state=16, expand=2, headdim=16,
         use_register_bank=True,
         reg_n_registers=n_reg, reg_value_range=val_range,
+        use_loop_counter=has_lc, lc_iteration_token=None,
     )
     for _ in range(cfg["n_kernel_layers"]):
         model.add_kernel_layer()
@@ -46,59 +48,57 @@ def load_model(pt_path: str, device: str):
 
 
 def autoregressive_decode(model, n: int, n_registers: int, value_range: int,
-                          device: str, max_steps: int = None):
+                          device: str, max_steps: int = None,
+                          use_loop_counter: bool = False):
     """Step-by-step autoregressive decode for HANOI(n).
 
-    Returns:
-      emitted_bytes: the bytes the model produced as the trace
-      register_history: list of register states after each step
-      head_history: list of (read_addr, write_addr, write_val) the model chose
+    If use_loop_counter, the oracle pre-computes the LoopCounter
+    trajectory (= total trace bytes, decrementing) and feeds it
+    as counter_values. The model uses the LoopCounter's eos_bias
+    to decide when to halt, instead of relying on SSM-side n parsing.
     """
+    total_bytes = (2 ** n - 1) * 6  # 6 bytes per move ("k X Y\n")
     if max_steps is None:
-        max_steps = (2 ** n - 1) * 8 + 16   # generous
+        max_steps = total_bytes + 16
 
     inp_bytes = list(f"HANOI {n}".encode("utf-8"))
     prefix = [BOS] + inp_bytes + [SEP]
 
-    # Initial register state: all zeros
-    registers = torch.zeros(1, n_registers, dtype=torch.long, device=device)
-    last_read_value = torch.zeros(1, dtype=torch.long, device=device)
-
-    # We use the FULL forward (not step-mode) since we want simplicity here.
-    # Inefficient but correct. Step-mode could speed it up later.
     cur = list(prefix)
     emitted = []
     head_history = []
+    sep_pos = len(prefix) - 1
 
     NO_REG = n_registers
     for step in range(max_steps):
-        # Build input: tokens are `cur`. read_input is per-position:
-        # 0 for prefix, then last_read_value at the answer-span positions.
         L = len(cur)
         toks = torch.tensor([cur], dtype=torch.long, device=device)
-        # Build read_input vector: at position p, read_input[p] is what
-        # was read by the read_addr at position p-1.
+
+        # Build read_input vector: replay register state from head_history.
         read_in = torch.zeros(1, L, dtype=torch.long, device=device)
-        # Fill in read_input for the answer span:
-        # head_history[k] was emitted at position sep_pos+k (predicting sep_pos+k+1).
-        # The READ_VALUE that comes from head_history[k]['read_addr'] is the
-        # input at position sep_pos+k+1.
-        sep_pos = len(prefix) - 1
-        # Need to reconstruct register values at each step too
         regs_running = torch.zeros(n_registers, dtype=torch.long, device=device)
         for k, (ra, wa, wv) in enumerate(head_history):
             p_curr = sep_pos + k
             p_next = p_curr + 1
-            # Read happens at p_curr; the read result is what was at the
-            # register BEFORE this step's write.
             if ra < NO_REG and p_next < L:
                 read_in[0, p_next] = regs_running[ra].item()
-            # Apply write
             if wa < NO_REG:
                 regs_running[wa] = wv
 
+        # Build LoopCounter trajectory if model has one. Total bytes
+        # = (2^n - 1) * 6; counter at sep_pos+k = total_bytes - k.
+        # Sentinel (-1) for input span and past-trace positions.
+        counter_kwargs = {}
+        if use_loop_counter:
+            cv = torch.full((1, L), -1, dtype=torch.long, device=device)
+            for k in range(total_bytes + 1):
+                p = sep_pos + k
+                if 0 <= p < L:
+                    cv[0, p] = total_bytes - k
+            counter_kwargs["counter_values"] = cv
+
         with torch.no_grad():
-            out = model(toks, register_read_values=read_in)
+            out = model(toks, register_read_values=read_in, **counter_kwargs)
 
         # Predict at last position
         last_idx = L - 1
@@ -137,7 +137,8 @@ def main():
         raise SystemExit(f"checkpoint not found: {args.pt}")
 
     model, n_reg, val_range = load_model(args.pt, args.device)
-    print(f"Model: {args.pt}  registers={n_reg}  value_range={val_range}")
+    has_lc = model.loop_counter is not None
+    print(f"Model: {args.pt}  registers={n_reg}  value_range={val_range}  loop_counter={has_lc}")
     print(f"Reference: HANOI(n) recursive moves -> bytes\n")
     print(f"{'n':>3}  {'expected_len':>12}  {'got_len':>8}  {'match':>6}  {'first_diff_byte':>15}")
     print("-" * 65)
@@ -148,7 +149,8 @@ def main():
         n = int(s)
         expected = expected_trace(n)
         t0 = time.time()
-        got, _ = autoregressive_decode(model, n, n_reg, val_range, args.device)
+        got, _ = autoregressive_decode(model, n, n_reg, val_range, args.device,
+                                       use_loop_counter=has_lc)
         dt = time.time() - t0
         match = (got == expected)
         first_diff = "—"
