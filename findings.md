@@ -954,6 +954,26 @@ state representation as much as the MLP.
 Code: `{hanoi,gcd,conway,bubble,maze}_step_function.py`,
 `train_*_step.py`, `orchestrator.py`.
 
+**Sort suite stress test (commit 5860a3a)**: same 38-param
+`bubble_step` Lego, four orchestrators, n=3000 items vs Python's
+`sorted()`:
+
+| algo       | time     | neural calls | correct |
+|------------|----------|--------------|---------|
+| sorted()   | 0.16ms   | —            | ✓       |
+| bubble     | 1671ms   | 2,976        | ✓       |
+| selection  | 852ms    | 2,999        | ✓       |
+| insertion  | 26980ms  | 2,254,405    | ✓       |
+| merge      | 377ms    | 31,236       | ✓       |
+
+All four byte-for-byte correct. Neural-call count matches algorithmic
+complexity exactly (O(n) for bubble's batched passes, O(n²) for
+insertion's sequential decisions, O(n log n) for merge). The shared
+Lego is frozen; the orchestrators are the sole difference. **One
+primitive, four algorithms — the cleanest "Legos composed at random"
+demonstration so far.** The step function pattern scales with no
+fall-off in correctness; what we don't get is C-speed comparisons.
+
 ---
 
 ## Entry — Cluster transparent partition (cluster_dispatch + cluster_sync) (2026-04-27)
