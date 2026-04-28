@@ -25,7 +25,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, ".")
 from progressive_model import ProgressiveModel, ByteTokenizer, BOS, SEP, EOS, PAD
-from hanoi_exec_oracle import gen_exec_trace, hanoi_moves
+from hanoi_exec_oracle import gen_exec_trace, hanoi_moves, initial_register_state
 
 
 def build_example(n: int, n_registers: int, max_input_n: int = 99):
@@ -65,6 +65,7 @@ def build_example(n: int, n_registers: int, max_input_n: int = 99):
     # The read_input at position p is what was read at the PREVIOUS step:
     # i.e., the register value at trace[k-1]['read_addr'] from the
     # snapshot trace[k-1]['registers_after'].
+    initial_state = initial_register_state(n, n_registers)
     for k, rec in enumerate(trace):
         p = sep_pos + k
         if p >= L:
@@ -76,17 +77,10 @@ def build_example(n: int, n_registers: int, max_input_n: int = 99):
         if k + 1 < len(trace):
             ra = rec["read_addr"]
             if ra < NO_REG:
-                # The register state right BEFORE the write of this step
-                # is what gets read. Since registers_after reflects post-write,
-                # we need the pre-step state. For our simple oracle, the
-                # read happens at the start of the move and the write at
-                # the end, so registers_after of the PREVIOUS record (or
-                # the initial state) is what's read.
-                if k == 0:
-                    read_input[p + 1] = 0  # initial state, all zeros
-                else:
-                    read_input[p + 1] = trace[k - 1]["registers_after"][ra]
-            # else: no-read, read_input stays 0
+                # Pre-step register state: initial_state if k==0,
+                # else previous record's registers_after.
+                pre_step = initial_state if k == 0 else trace[k - 1]["registers_after"]
+                read_input[p + 1] = pre_step[ra]
 
     # LoopCounter trajectory: at sep_pos+k the counter is (trace_len - k);
     # input span and post-EOS positions get sentinel (-1).

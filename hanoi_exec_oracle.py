@@ -84,28 +84,38 @@ def gen_exec_trace(n: int, n_registers: int = 16):
     moves = hanoi_moves(n)
     NO_REG = n_registers  # "no-op" address index
 
-    # Initialise registers: all disks on peg 0 (A); move counter at 0.
+    # NEW LAYOUT (n now lives in reg[0] so the model can dispatch on it):
+    #   reg[0]     = n  (the input integer, pre-loaded by the oracle)
+    #   reg[1..n]  = peg of disk k (k=1..n)  (peg index 0=A, 1=B, 2=C)
+    #   reg[n+1..] = unused / zero
+    # Initial register state has reg[0]=n, everything else 0.
     registers = [0] * n_registers
-    # reg[0..n-1] are disk pegs; reg[n] is move counter.
+    registers[0] = n
 
     trace = []
 
     for move_idx, (k, src, dst) in enumerate(moves):
         bytes_ = encode_move(k, src, dst)
         for byte_idx, b in enumerate(bytes_):
-            # Read register k-1 on the FIRST byte (offers the model the
-            # current peg of disk k as feature input on the NEXT byte).
-            read_addr = (k - 1) if byte_idx == 0 else NO_REG
-            # Write register k-1 := dst on the LAST byte (commits the
-            # move to state after the model has emitted the full record).
+            if byte_idx == 0 and move_idx == 0:
+                # On the very first byte of the very first move, READ
+                # reg[0] = n so the model has the input integer as
+                # input feature on the next position. This is the
+                # parity-dispatch read.
+                read_addr = 0
+            elif byte_idx == 0:
+                # First byte of every other move: read peg of disk k
+                # (now at reg[k] under the new layout).
+                read_addr = k
+            else:
+                read_addr = NO_REG
+            # Write register k := dst on the LAST byte.
             if byte_idx == len(bytes_) - 1:
-                write_addr = k - 1
+                write_addr = k
                 write_val = dst
             else:
                 write_addr = NO_REG
                 write_val = 0
-            # Apply the write to our running register snapshot AFTER
-            # this step (so registers_after reflects post-step state).
             if write_addr < NO_REG:
                 registers = list(registers)
                 registers[write_addr] = write_val
@@ -118,6 +128,16 @@ def gen_exec_trace(n: int, n_registers: int = 16):
             })
 
     return trace, moves
+
+
+def initial_register_state(n: int, n_registers: int = 16) -> list[int]:
+    """The oracle's initial register state at SEP.
+    reg[0] = n; reg[1..n] = 0 (peg A); rest = 0.
+    """
+    state = [0] * n_registers
+    if n > 0:
+        state[0] = n
+    return state
 
 
 def gen_loop_counter_trajectory(n: int, trace_len: int):
