@@ -108,7 +108,6 @@ class DiscoveryHanoiAgg(nn.Module):
         self.dec = nn.Linear(K, N_ACTIONS)
 
     def forward(self, state, aggregates, tau=1.0, deterministic: bool = False):
-        # state is unused now — kept in signature for compatibility.
         a0 = self.peg_p_emb(aggregates[:, 0])
         a1 = self.peg_p_emb(aggregates[:, 1])
         c0 = self.count_emb(aggregates[:, 2])
@@ -121,12 +120,13 @@ class DiscoveryHanoiAgg(nn.Module):
         pl = self.peg_p_emb(aggregates[:, 9])
         x = torch.cat([a0, a1, c0, c1, c2, t0, t1, t2, nd, pl], dim=-1)
         logits = self.enc(x)
-        if deterministic:
-            # Pure argmax — no Gumbel noise. Use straight-through one-hot.
-            idx = logits.argmax(dim=-1, keepdim=True)
-            code = torch.zeros_like(logits).scatter_(-1, idx, 1.0)
-        else:
-            code = F.gumbel_softmax(logits, tau=tau, hard=True, dim=-1)
+        # Straight-through hard argmax. Forward = one-hot, backward = softmax
+        # gradients. This is what we use both at train AND eval, so there's
+        # no train/eval mismatch.
+        idx = logits.argmax(dim=-1, keepdim=True)
+        hard = torch.zeros_like(logits).scatter_(-1, idx, 1.0)
+        soft = F.softmax(logits / max(tau, 1e-3), dim=-1)
+        code = hard.detach() - soft.detach() + soft
         return self.dec(code), code, logits
 
 
