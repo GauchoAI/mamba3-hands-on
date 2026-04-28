@@ -54,8 +54,8 @@ def generate_traces_for_ns(n_list, n_max_pad):
     return pairs
 
 
-N_SMALL = 8
-N_LARGE = 8
+N_SMALL = 10
+N_LARGE = 10
 
 
 def role_features(state, n_max_pad):
