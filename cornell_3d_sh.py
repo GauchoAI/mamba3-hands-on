@@ -332,7 +332,61 @@ def render_perspective(materials_np, outgoing_np, view_W=384, view_H=384,
                     ix_safe[hit_idx], iy_safe[hit_idx], iz_safe[hit_idx]
                 ]                                          # (n_hit, 4, 3)
                 back = -ray_dir[hit_idx]                   # (n_hit, 3)
-                img[hit_idx] = sh_evaluate_4(cell_sh, back)
+                hit_pos = pos[hit_idx]                     # (n_hit, 3)
+                hit_dir = ray_dir[hit_idx]                 # (n_hit, 3)
+                hit_mat = mat[hit_idx]
+
+                # Entry-face detection for sharp voxel rendering. The
+                # axis the ray crossed most recently (smallest depth into
+                # the new voxel along the ray direction) is the entry
+                # axis. The face normal is opposite to ray motion on
+                # that axis. This ignores the cell's stored composite
+                # normal, which would otherwise spread the SH l=1 contribution
+                # over multiple axes and dim edge cells visibly.
+                ipos = np.floor(hit_pos)
+                frac = hit_pos - ipos                       # (n_hit, 3) in [0, 1)
+                ray_signs = np.sign(hit_dir)
+                # depth-into-voxel along the entry direction:
+                #   ray going +axis: small frac == just crossed (low)
+                #   ray going -axis: 1-frac == just crossed
+                depths = np.where(ray_signs > 0, frac, 1.0 - frac)
+                # Pure-zero ray components shouldn't be selected.
+                depths = np.where(ray_signs == 0, np.inf, depths)
+                entry_axis = np.argmin(depths, axis=-1)     # (n_hit,)
+                face_n = np.zeros_like(hit_dir)
+                for ax in range(3):
+                    m = (entry_axis == ax)
+                    face_n[m, ax] = -ray_signs[m, ax]
+
+                # LIGHT cells: a ceiling lamp emits only in -Y, not
+                # sideways. If a ray grazes the lamp through a side
+                # face, entry-face detection would assign a sideways
+                # normal — which together with the lamp brightness
+                # formula would render an artifact. Override.
+                is_light_hit_mask = (hit_mat == LIGHT)
+                face_n[is_light_hit_mask] = np.array([0, -1, 0], dtype=np.float32)
+
+                # Front-hemisphere visibility against the face normal.
+                front_dot = (back * face_n).sum(axis=-1, keepdims=True)
+                visible = front_dot > 0
+
+                c0 = cell_sh[:, 0, :]                       # (n_hit, 3)
+
+                # SOLID: constant Lambertian radiance V = c_0 / sqrt(pi)
+                # in the hemisphere of the face normal.
+                solid_radiance = np.where(visible, c0 / SQRT_PI, 0.0)
+
+                # LIGHT: Lambertian emitter, peak at face-normal direction.
+                # E_max = 2·c_0 / sqrt(pi). L(back) = E_max · max(0, back·n).
+                e_max = 2.0 * c0 / SQRT_PI
+                light_radiance = np.where(visible,
+                                          e_max * np.maximum(0, front_dot),
+                                          0.0)
+
+                is_light_hit = (hit_mat == LIGHT)[:, None]
+                img[hit_idx] = np.where(
+                    is_light_hit, light_radiance, solid_radiance
+                )
                 alive &= ~hit
 
         pos += ray_dir * step
