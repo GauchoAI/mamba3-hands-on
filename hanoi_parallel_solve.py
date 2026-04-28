@@ -32,18 +32,23 @@ def load_gru(path: str, device: str):
 
 
 def optimal_count_from_state(pegs, n, target=2):
-    """Number of optimal moves to reach all-on-target from this state."""
+    """Number of optimal moves to reach all-on-target from this state.
+    O(n) recursive: largest disk not on target moves once via aux,
+    so cost = T(disks 0..k-1 to aux) + 1 + (2^k - 1).
+    """
     pegs = list(pegs)
-    count = 0
-    while True:
-        m = optimal_move_from_state(pegs, n, target=target)
-        if m is None:
-            return count
-        src, dst = m
-        # apply: smallest disk on src moves to dst
-        disk = next(i for i in range(n) if pegs[i] == src)
-        pegs[disk] = dst
-        count += 1
+
+    def cost_to(k, tgt):
+        # cost to put disks 0..k-1 onto peg tgt
+        if k == 0:
+            return 0
+        if pegs[k - 1] == tgt:
+            return cost_to(k - 1, tgt)
+        src = pegs[k - 1]
+        aux = 3 - src - tgt
+        return cost_to(k - 1, aux) + 1 + (1 << (k - 1)) - 1
+
+    return cost_to(n, target)
 
 
 def init_run(n, n_max_pad, rng):

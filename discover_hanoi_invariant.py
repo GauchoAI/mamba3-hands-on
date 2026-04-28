@@ -127,14 +127,33 @@ def main():
     ap.add_argument("--probe-ns", type=int, nargs="+",
                     default=[15, 16, 17, 18, 19, 20, 21, 22, 23])
     ap.add_argument("--save-to", type=str, default="checkpoints/hanoi_invariant_gru.pt")
+    ap.add_argument("--offtrace-per-n", type=int, default=0,
+                    help="if >0, also sample this many off-trace states per n")
+    ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
     print(f"Device: {args.device}")
     print(f"Building canonical traces for n={args.train_ns}...")
     train_pairs = generate_traces_for_ns(args.train_ns, args.n_max_pad)
-    train_states = np.array([p[0] for p in train_pairs], dtype=np.int64)
-    train_actions = np.array([p[2] for p in train_pairs], dtype=np.int64)
-    print(f"  train states: {len(train_states)}")
+    canonical_states = np.array([p[0] for p in train_pairs], dtype=np.int64)
+    canonical_actions = np.array([p[2] for p in train_pairs], dtype=np.int64)
+    print(f"  canonical states: {len(canonical_states)}")
+
+    if args.offtrace_per_n > 0:
+        from discover_hanoi_offtrace import sample_offtrace_states
+        rng_off = np.random.default_rng(args.seed)
+        print(f"  sampling {args.offtrace_per_n} off-trace states per n...")
+        off_states, off_actions = sample_offtrace_states(
+            args.train_ns, args.n_max_pad, args.offtrace_per_n, rng_off)
+        print(f"  off-trace states: {len(off_states)}")
+        train_states = np.concatenate([canonical_states, off_states], axis=0)
+        train_actions = np.concatenate([canonical_actions, off_actions], axis=0)
+        del off_states, off_actions
+    else:
+        train_states = canonical_states
+        train_actions = canonical_actions
+    del canonical_states, canonical_actions
+    print(f"  TOTAL train states: {len(train_states)}")
 
     test_pairs = generate_traces_for_ns(args.test_ns, args.n_max_pad)
     test_states = np.array([p[0] for p in test_pairs], dtype=np.int64)
