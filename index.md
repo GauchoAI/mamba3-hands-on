@@ -57,10 +57,22 @@ intelligence in software ought to look like:
   pretends to be intelligent because it has memorized all the patterns,
   we want a constellation of minimal experts — some on reasoning, some
   on language — collaborating at runtime via a harness. The current
-  name for this pattern in industry is **"super learners";** a startup
-  just raised $1B around it. We share the LeCun-style world-model
-  intuition: ground the system in compact, composable predictors and
-  let language emerge from them.
+  name for this pattern in industry is **"super-learner."** The clearest
+  recent public expression is **David Silver's new company** (the
+  AlphaGo creator), which raised $1B on exactly this thesis the week we
+  wrote this. The architecture is *orthogonal* to the LLM paradigm —
+  rather than training on a static human-generated corpus, a
+  super-learner interacts continuously with structured environments
+  (engineering simulations, formal systems, scientific sandboxes),
+  generates its own hypotheses, tests them, receives feedback signals
+  from the environment, and updates its beliefs accordingly. Our work
+  is in the same family: we don't try to memorize the world; we train
+  small specialists against environments where the answer is *checkable*
+  (a Hanoi state has an optimal next move, a Conway tick has a
+  deterministic successor, a sort step is byte-comparable). Validators
+  in this repo are byte-perfect oracles, not human-language judges. We
+  also share the LeCun-style world-model intuition: ground the system in
+  compact, composable predictors and let language emerge from them.
 
 - **The harness is a first-class citizen.** Tool-calling shouldn't be
   bolted on around a model. It should be an inner primitive — the
@@ -84,13 +96,13 @@ harness compose them at runtime.**
 |---|---|---|
 | 2026-04-20 | 19 | **Replicate the Mamba-3 parity result from the paper.** It worked. Trained in seconds on an M4 Mac mini — the speed was the first surprise. |
 | 2026-04-20 (cont.) | | **Bilingual char-level LM (EN+ES) from raw bytes.** Converged to recognizable Spanish + English in ~20 minutes on the same Mac mini, with no tokenizer. The second surprise; this is when we knew Mamba-3 was worth committing to. |
-| 2026-04-20–04-21 | 104 | **Curriculum with increasing-difficulty logical gates** + AugmentedMamba3 (registers, spike gates, persistent memory). Reasonable success on simple logic; the place where ProgressiveModel + ExplicitRegisters + LoopCounter got built. |
-| 2026-04-22 | 43 | **Three Populations architecture** + stateless orchestrator + diagnostician with typed prescriptions. Workers/Teachers/Students collaborate over Firebase; lineage tracked end-to-end. |
-| 2026-04-23–04-25 | 227 | **H100 disappointment → PTX engine.** Pushed to vast.ai H100s expecting a speedup; got training hiccups instead. Diagnosed as precision issues in upstream Mamba-3 code (a community-reported problem). The fix that worked: build our own PTX kernels DeepSeek-style. End result was ~60,000 tokens/sec on H100 (forward + backward) — but the M4 Mac mini was already at 16,000. Three machines × Mac mini ≈ H100 throughput, with no rental costs and no vast.ai instability. |
-| 2026-04-25 | 67 | **PTX engine production-grade:** Tetris slot scheduler, BTCH streaming protocol, pluggable Loss/Optimizer/Schedule, real-teacher knowledge distillation, hot-plug daemon, optimizer-state round-trip. The four-gate methodology shipped through Entries 39–54 in `findings.md`. |
-| 2026-04-26 | 29 | **The Mac-only split.** vast.ai instability tipped us toward betting on a local cluster: three Macs now, more coming. Multi-machine collaboration via Firebase was already in place. PTX engine archived to `pod-archive` for the day a local cluster of Mac minis re-justifies it. |
-| 2026-04-27 | 33 | **EOS-bias gating + parameter-free LoopCounter** unblock the bounded-counter ceiling that had stopped Mamba-3 on token-stream Hanoi. HANOIBIN to n=100,000 byte-perfect (5000× extrapolation). FIB-decimal F(40) 9-digit perfect. FIB-unary F=6765 (123× extrapolation). The "tool-use over neural memory" pattern emerges (Python tool owns the state, model proposes the move). |
-| 2026-04-28 | 41 | **Shallow MLPs converge in seconds for the right tasks.** Discretize the pattern into well-known steps, train a 1–3-layer MLP, run it inside a Python orchestrator. Works for Hanoi, GCD, sorting, Conway, WireWorld, Light-CA. The **Lego library** is born — 5 specialists totaling ~2.2k parameters, ~5 s combined training, composing at runtime with zero retraining. Same day, the **order-invariant GRU** closes the Hanoi story: 100 % on canonical traces n=15..23 (8.4M states) trained only on n=2..15. The 45k-param GRU + off-trace augmentation solves random off-canonical Hanoi starts at n=22 OPTIMALLY. |
+| 2026-04-20–04-21 | 104 | **Curriculum with increasing-difficulty logical gates** + AugmentedMamba3 — our extended Mamba-3 with side primitives the SSM doesn't have natively: a *register bank* (small discrete read/write memory), *spike gates* (sparse activation control), *persistent memory* (state that survives across sequences), and a *loop counter* (an explicit "how many times have I iterated" channel for unbounded computation). Reasonable success on simple logic; this is where `ProgressiveModel` + `ExplicitRegisters` + `LoopCounter` got built. |
+| 2026-04-22 | 43 | **"Three Populations" architecture** — three pools of models that train each other in a loop: **Workers** propose new candidate specialists (random GA-mutated configs), **Teachers** are the high-accuracy survivors of past rounds, and **Students** are new models distilled from the Teacher pool. Each population pushes results to Firebase; lineage is tracked end-to-end. Same day shipped a **stateless orchestrator** (the orchestrator reads the database rather than holding state, so it can crash and resume cleanly) and a **diagnostician** that watches training telemetry and emits *typed prescriptions* — concrete config mutations targeted at the specific failure mode it detects (e.g. plateau → bump LR by ×1.5; gradient noise → enable label smoothing). |
+| 2026-04-23–04-25 | 227 | **H100 disappointment → PTX engine.** Pushed to vast.ai H100s expecting a speedup; got training hiccups instead. Diagnosed as precision issues in upstream Mamba-3 code (a community-reported problem at the time). The fix that worked: write our own GPU kernels in **PTX** — NVIDIA's GPU intermediate assembly, the same low-level layer DeepSeek used to outperform PyTorch on their training runs. End result was ~60,000 tokens/sec on H100 (forward + backward) — but the M4 Mac mini was already doing 16,000. Three Mac minis ≈ one H100 in throughput, with no rental costs and no vast.ai instability. |
+| 2026-04-25 | 67 | **PTX engine production-grade**: a **Tetris-style slot scheduler** (packs concurrent training jobs onto one GPU's CUDA streams the way Tetris pieces fit together, instead of serializing them); a **BTCH** streaming batch protocol (a tiny binary format we defined so any task in Python can pipe its training data into the Rust trainer over stdin without bespoke glue); pluggable Loss / Optimizer / Schedule enums; real-teacher knowledge distillation; **hot-plug daemon mode** (jobs added without restarting the trainer); optimizer-state round-trip. The "four-gate methodology" — *parity, perplexity, training-curve match, end-to-end task PASS* — shipped through Entries 39–54 in `findings.md`. |
+| 2026-04-26 | 29 | **The Mac-only split.** vast.ai instability tipped us toward betting on a local cluster: three Macs now, more coming. Multi-machine collaboration via Firebase was already in place. PTX engine archived to a long-running git branch called `pod-archive` for the day a local cluster of Mac minis re-justifies it. |
+| 2026-04-27 | 33 | **EOS-bias gating + parameter-free `LoopCounter`** unblock the *bounded-counter ceiling* (a hard limit we'd hit where Mamba-3 couldn't extract n as an unbounded counter from a token stream). The two pieces: nudge the model's end-of-sequence-token logit upward exactly when the loop counter says it's done; and make the counter parameter-free by computing it as `torch.where(c >= 0, ...)` instead of learning an addition. With those: **HANOIBIN** (Tower of Hanoi rendered as binary token strings) to n=100,000 byte-perfect — 5000× the longest training length. **FIB-decimal F(40)** 9-digit perfect, **FIB-unary F=6765** (123× extrapolation). The "tool-use over neural memory" pattern also emerged (a Python tool owns the state, the model proposes the move) — the cleaner alternative to teaching the SSM to remember discrete state internally. |
+| 2026-04-28 | 41 | **Shallow MLPs converge in seconds for the right tasks.** Discretize the pattern into well-known steps, train a 1–3-layer MLP, run it inside a Python orchestrator. Works for Hanoi, GCD, sorting, Conway's Game of Life, WireWorld, light propagation. We started calling these models **"Legos"** — tiny snap-together specialists that compose for new tasks without retraining, the way Lego bricks compose for new shapes. The **Lego library** is the set of them: 5 specialists totaling ~2.2k parameters, ~5 s combined training, composing at runtime via a Python orchestrator. Same day, the **order-invariant GRU** closes the Hanoi story: 100 % on canonical traces n=15..23 (8.4M states) trained only on n=2..15. The 45k-param GRU + off-canonical augmentation solves arbitrary Hanoi starting positions at n=22 optimally. |
 
 **Where this leaves us:** the substrate is in place. Mamba-3 LM does
 language. The Lego library does reasoning. The Three Populations
@@ -149,10 +161,16 @@ Sequential scan; no fused kernels in the daily-driver path.
 
 ## 2. PTX engine — Rust + CUDA Mamba-3 (archived)
 
-Lives on the `pod-archive` branch, but its scaffolding stayed on `main`
-for the day a local cluster makes it useful again. Was the
-production-parity training engine before the Mac-only split. Built over
-~3 days (April 23–25).
+A from-scratch GPU training engine for Mamba-3, written in Rust and
+NVIDIA PTX (the low-level GPU assembly language that sits below CUDA
+C). Built over ~3 days (April 23–25) when the upstream PyTorch path
+hit precision issues on H100 that matched a community-reported bug.
+The ptxd "daemon" runs as a long-lived process: Python sends it
+training jobs over stdin as JSON, ptxd executes them on the GPU and
+streams loss / accuracy / lineage events back. It's archived on the
+`pod-archive` git branch (kept dormant but intact) since the
+April 26 split to a local Mac cluster, but its scaffolding stayed
+on `main` for the day a multi-Mac-mini cluster re-justifies it.
 
 **What's in there:**
 
@@ -197,9 +215,25 @@ on April 26.
 
 ## 3. Three Populations — Workers → Teachers → Students
 
-The architecture that orchestrates all the small models. Built on April
-21 (commit `f518e0d`). Reduces a "specialist zoo" to one general
-distillation pipeline.
+A genetic-algorithm-style training loop with three pools of models that
+feed into each other:
+
+- **Workers.** Newly-spawned candidate specialists, each running a
+  GA-mutated config (different LR, depth, regularization, etc.). They
+  train independently on the same task. Most don't converge well; a few
+  do.
+- **Teachers.** The high-accuracy survivors of past Worker rounds.
+  They're frozen and used as targets for knowledge distillation.
+- **Students.** New, smaller models distilled from the Teacher pool.
+  When a Student matches its Teachers' accuracy at lower cost, it
+  graduates and becomes a Teacher itself.
+
+The loop is: Workers → some succeed → become Teachers → distil to
+Students → best Students join the Teacher pool. The architecture means
+we're never running just one experiment; we're running a population of
+experiments and selecting the survivors. Built April 21 (commit
+`f518e0d`). Reduces a "specialist zoo" to one general distillation
+pipeline.
 
 **Files:**
 
@@ -226,11 +260,18 @@ distillation pipeline.
 
 ## 4. Step-function MLPs (the "Lego library")
 
-Tiny MLPs that learn one step of a discrete rule (a CA tick, one swap of
-bubble sort, one Hanoi move, one GCD reduction). The orchestrator runs
-them in a Python loop. This pattern decouples *structural correctness*
-(orchestrator owns the loop / state machine) from *parametric fit* (MLP
-owns the rule's parameters).
+We started calling these models **"Legos"** because, like Lego bricks,
+each one is a small specialist that snaps into a Python orchestrator and
+composes with other Legos for new tasks without retraining. Each Lego
+is a tiny MLP (200–1500 parameters, trains in 1–5 seconds) that learns
+*one step* of a discrete rule — a Conway's-Life tick, one swap of bubble
+sort, one Hanoi move, one GCD reduction. The orchestrator runs the
+loop; the MLP only learns the per-step transition. This pattern
+decouples **structural correctness** (orchestrator owns the loop and
+the state machine) from **parametric fit** (MLP owns the rule's
+parameters), which is how the same 1574-param Hanoi step Lego correctly
+extrapolates from training on n=2..6 to a perfect 4095-move rollout
+at n=12.
 
 **Specialists (each is a 200–1500 param MLP, trains in seconds):**
 
@@ -344,9 +385,15 @@ the function it learns is defined for any sequence length. Committed as
 
 ## 7. Synapse / AttendBridge (the ecology primitive)
 
-Tiny routers that reach into a frozen specialist and harvest its hidden
-state. The cheapest way to extend an existing organism with a new
-behavior — ~1.1k params per synapse on our scale.
+A **synapse** in this codebase is the small bridge module that lets one
+model query the *hidden state* of a frozen specialist — like an
+inter-neuron link in biology, but between models. The implementation
+(`AttendBridge`) is a tiny attention head: a router model produces a
+query, attends to the specialist's hidden state, and reads back a
+context vector. The router stays trainable; the specialist stays
+frozen. This is the cheapest way to extend an existing organism with a
+new behavior — about 1.1k parameters per synapse on our scale, vs.
+re-training a whole specialist.
 
 **Files:**
 
