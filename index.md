@@ -1,10 +1,12 @@
 # Index — what ML lives in this repo, where, and how well it works
 
-This repo started April 20, 2026 as a Mamba-3 implementation study
-(Lahoti et al., ICLR 2026) and grew, in 9 days and 496 commits, into an
-ecology of small specialists for algorithmic tasks. Below is a snapshot
-of what architectures are in here, what they're used for, and the
-empirical ceiling each one has hit.
+This repo started April 20, 2026 — two days after the Mamba-3 paper
+landed — as a "can we replicate this on a Mac mini?" study, and grew,
+in 9 days and 496 commits, into an ecology of small specialists for
+algorithmic tasks plus the substrate to host them. Below is the bet
+that drives the work, the 9-day arc as it actually unfolded, and a
+section-by-section snapshot of the architectures with their empirical
+ceilings.
 
 For deeper narrative on any line item, the lab notebook is `findings.md`
 (54+ entries from the engine era plus the recent Lego/GRU entries); the
@@ -13,19 +15,92 @@ long-form vision is `VISION.md`; per-file architectural notes are in
 
 ---
 
-## Project arc — 9 days, 496 commits
+## Why we're doing this — the bet
 
-| Date | Commits | Focus |
+Transformer-class models have **quadratic memory in context length**.
+The community spends large amounts of energy on context engineering —
+at 1M tokens, even the best frontier setups need expensive compaction
+strategies (e.g., calling a frontier model like Claude Haiku to track
+dependency graphs across a long session). That cost gets worse as
+conversations grow.
+
+When the **Mamba-3 paper** (Lahoti et al., ICLR 2026) landed in
+mid-April 2026 promising linear memory and improved precision via
+data-dependent RoPE on B and C, this project started two days later.
+The bet was that a linear-memory recurrent SSM, paired with the right
+composition layer, could replace the quadratic context window with
+something cheaper and more honest — a model whose state evolves with
+the work it's doing rather than ballooning with the inputs it's seen.
+
+Underneath the architectural bet are four convictions about what
+intelligence in software ought to look like:
+
+- **Overparameterized models memorize. Constraining size forces the
+  pattern to surface.** A model with enough capacity can always look up
+  the answer rather than learn the rule. We deliberately keep models
+  small so the gradient has nowhere to hide. Empirically, the minimal
+  model is the one that extends — n=12, n=20, n=100,000 — because it
+  has actually captured the rule, not pattern-matched to a training
+  shape. We've now proved this many times in this repo (HANOIBIN
+  n=100k, FIB-decimal F(40), the 45k-param Hanoi GRU at n=23).
+
+- **Language is the translation layer, not the reasoning substrate.**
+  We treat natural language as a thin layer between humans and machines
+  (and between machines), not as the medium reasoning happens in. The
+  reasoning is an inner computation; the language is the API. The next
+  step here — already in progress — is integrating reasoning
+  specialists with the Mamba-3 LM as forward-pass tools, so a sentence
+  is the output of an inner logical computation rather than the
+  computation itself.
+
+- **Composable, not monolithic.** Instead of one large model that
+  pretends to be intelligent because it has memorized all the patterns,
+  we want a constellation of minimal experts — some on reasoning, some
+  on language — collaborating at runtime via a harness. The current
+  name for this pattern in industry is **"super learners";** a startup
+  just raised $1B around it. We share the LeCun-style world-model
+  intuition: ground the system in compact, composable predictors and
+  let language emerge from them.
+
+- **The harness is a first-class citizen.** Tool-calling shouldn't be
+  bolted on around a model. It should be an inner primitive — the
+  model finds and *creates* new intelligence at runtime according to
+  the use case. Spawning a new specialist is itself a tool use.
+  Producing a sentence is a tool use (the translation tool). We're not
+  ideologically against transformers or diffusion models — we use the
+  minimum tool that solves the task at the highest precision and
+  smallest size, because small + precise is what converges to the
+  optimal representation in the first place.
+
+The point of this repo, in one line: **build the smallest possible
+substrate that can host reasoning and language separately, then let the
+harness compose them at runtime.**
+
+---
+
+## The 9-day arc — what we actually did
+
+| Date | Commits | What happened |
 |---|---|---|
-| 2026-04-20 | 19 | Mamba-3 minimal SISO block, parity solved, phase probe, modular counting fail logged |
-| 2026-04-21 | 104 | AugmentedMamba3 (registers, spike gates, persistent memory); Triton SSM scan; H100 deployment; Three Populations architecture; Firebase telemetry |
-| 2026-04-22 | 43 | Stateless orchestrator; diagnostician with typed prescriptions; provenance tracking; plateau-triggered mutations |
-| 2026-04-23 | 54 | PTX engine v3 — Layer 1 forward/backward kernels; cooperative multi-block persistent forward |
-| 2026-04-24 | 106 | PTX engine Layer 1 complete + L2 MVP; ptxd daemon (JSON stdin/stdout trainer); bit-parity to PyTorch |
-| 2026-04-25 | 67 | PTX scheduler (Tetris slot scheduler); streaming BTCH batch protocol; pluggable Loss/Optimizer/Schedule; real-teacher KD; hot-plug daemon |
-| 2026-04-26 | 29 | REPAIRS R-1 through R-4 (parity from scratch in 26s); Mac-only split — vast.ai instability pushed to MPS daily driver |
-| 2026-04-27 | 33 | Parameter-free LoopCounter (HANOIBIN n=100k byte-perfect); RegisterBank primitive; Hanoi-exec dual primitive; EOS-bias gating; FIB-decimal F(40) |
-| 2026-04-28 | 41 | Hanoi step function (perfect extension); Lego library (5 specialists, ~2.2k params); sort suite; 3D Cornell light-CA byte-perfect; Hanoi role-MLP arc → fingerprint diagnosis → order-invariant GRU |
+| 2026-04-20 | 19 | **Replicate the Mamba-3 parity result from the paper.** It worked. Trained in seconds on an M4 Mac mini — the speed was the first surprise. |
+| 2026-04-20 (cont.) | | **Bilingual char-level LM (EN+ES) from raw bytes.** Converged to recognizable Spanish + English in ~20 minutes on the same Mac mini, with no tokenizer. The second surprise; this is when we knew Mamba-3 was worth committing to. |
+| 2026-04-20–04-21 | 104 | **Curriculum with increasing-difficulty logical gates** + AugmentedMamba3 (registers, spike gates, persistent memory). Reasonable success on simple logic; the place where ProgressiveModel + ExplicitRegisters + LoopCounter got built. |
+| 2026-04-22 | 43 | **Three Populations architecture** + stateless orchestrator + diagnostician with typed prescriptions. Workers/Teachers/Students collaborate over Firebase; lineage tracked end-to-end. |
+| 2026-04-23–04-25 | 227 | **H100 disappointment → PTX engine.** Pushed to vast.ai H100s expecting a speedup; got training hiccups instead. Diagnosed as precision issues in upstream Mamba-3 code (a community-reported problem). The fix that worked: build our own PTX kernels DeepSeek-style. End result was ~60,000 tokens/sec on H100 (forward + backward) — but the M4 Mac mini was already at 16,000. Three machines × Mac mini ≈ H100 throughput, with no rental costs and no vast.ai instability. |
+| 2026-04-25 | 67 | **PTX engine production-grade:** Tetris slot scheduler, BTCH streaming protocol, pluggable Loss/Optimizer/Schedule, real-teacher knowledge distillation, hot-plug daemon, optimizer-state round-trip. The four-gate methodology shipped through Entries 39–54 in `findings.md`. |
+| 2026-04-26 | 29 | **The Mac-only split.** vast.ai instability tipped us toward betting on a local cluster: three Macs now, more coming. Multi-machine collaboration via Firebase was already in place. PTX engine archived to `pod-archive` for the day a local cluster of Mac minis re-justifies it. |
+| 2026-04-27 | 33 | **EOS-bias gating + parameter-free LoopCounter** unblock the bounded-counter ceiling that had stopped Mamba-3 on token-stream Hanoi. HANOIBIN to n=100,000 byte-perfect (5000× extrapolation). FIB-decimal F(40) 9-digit perfect. FIB-unary F=6765 (123× extrapolation). The "tool-use over neural memory" pattern emerges (Python tool owns the state, model proposes the move). |
+| 2026-04-28 | 41 | **Shallow MLPs converge in seconds for the right tasks.** Discretize the pattern into well-known steps, train a 1–3-layer MLP, run it inside a Python orchestrator. Works for Hanoi, GCD, sorting, Conway, WireWorld, Light-CA. The **Lego library** is born — 5 specialists totaling ~2.2k parameters, ~5 s combined training, composing at runtime with zero retraining. Same day, the **order-invariant GRU** closes the Hanoi story: 100 % on canonical traces n=15..23 (8.4M states) trained only on n=2..15. The 45k-param GRU + off-trace augmentation solves random off-canonical Hanoi starts at n=22 OPTIMALLY. |
+
+**Where this leaves us:** the substrate is in place. Mamba-3 LM does
+language. The Lego library does reasoning. The Three Populations
+pipeline trains on MPS. The PTX engine sits warm on `pod-archive` for
+the cluster that's coming. The next step — already in progress — is
+**integrating the specialists with the Mamba-3 LM as forward-pass
+tools**: language as the output of an inner logical computation, the
+LM calling into the right specialist for each sub-task and rendering
+the answer in the user's language. Eventually the LM finds *and
+creates* these specialists at runtime.
 
 ---
 
@@ -433,3 +508,12 @@ orchestrators, tool-use) is what lets these primitives be reused across
 tasks without retraining. The PTX engine is the production-grade
 training substrate for the model class, kept warm on `pod-archive` for
 the day a local Mac mini cluster re-justifies it.
+
+The thesis the work is building toward: **language is a tool the model
+uses, not the medium the model thinks in.** Reasoning happens in
+small, precise specialists; language is the translation layer that
+renders an answer for humans (or for another model). The harness that
+composes specialists at runtime — finding existing ones, eventually
+spawning new ones — is the first-class abstraction, not a wrapper
+around a monolith. We expect to keep publishing tiny models in this
+shape and let them constellate.
