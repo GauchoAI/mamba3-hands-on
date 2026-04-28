@@ -98,8 +98,9 @@ class DiscoveryHanoi(nn.Module):
         return self.dec(code), code, logits
 
 
-def train(K: int, n_max: int = 5, steps: int = 4000, batch: int = 256,
-          lr: float = 5e-3, device: str = "cpu", verbose: bool = True):
+def train(K: int, n_max: int = 7, steps: int = 8000, batch: int = 512,
+          lr: float = 5e-3, usage_weight: float = 0.1,
+          device: str = "cpu", verbose: bool = True):
     rng = np.random.default_rng(0)
     pairs = generate_traces(n_max)
     if verbose:
@@ -112,26 +113,36 @@ def train(K: int, n_max: int = 5, steps: int = 4000, batch: int = 256,
     model = DiscoveryHanoi(n_max=n_max, K=K).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     if verbose:
-        print(f"K={K}  params={n_params}")
+        print(f"K={K}  params={n_params}  (usage_weight={usage_weight})")
     opt = torch.optim.AdamW(model.parameters(), lr=lr)
 
+    log_K = float(np.log(K))    # max possible entropy of code usage
     for step in range(steps):
         idx = rng.integers(0, N, size=batch)
         s = torch.tensor(states[idx], device=device)
         nd = torch.tensor(n_disks[idx], device=device)
         y = torch.tensor(actions[idx], device=device)
-        tau = max(0.2, 1.0 * (1.0 - step / steps))
+        tau = max(0.3, 1.0 * (1.0 - step / steps))
         action_logits, code, _ = model(s, nd, tau=tau)
-        loss = F.cross_entropy(action_logits, y)
+        ce = F.cross_entropy(action_logits, y)
+        # Code-usage diversity: maximize entropy of average code distribution
+        # across the batch. Pushes the model to use more codes diversely
+        # rather than collapsing onto a few.
+        code_probs = code.mean(dim=0)                       # (K,)
+        usage_entropy = -(code_probs * torch.log(code_probs + 1e-10)).sum()
+        # Normalize: 0 (collapsed) → 1 (uniform).
+        usage_score = usage_entropy / log_K
+        loss = ce - usage_weight * usage_score
         opt.zero_grad(set_to_none=True); loss.backward(); opt.step()
 
-        if verbose and (step + 1) % 400 == 0:
+        if verbose and (step + 1) % 800 == 0:
             with torch.no_grad():
                 action_logits, code, _ = model(s, nd, tau=0.05)
                 acc = (action_logits.argmax(-1) == y).float().mean().item()
                 code_idx = code.argmax(-1)
                 n_used = int(torch.unique(code_idx).numel())
-            print(f"  step {step+1:>4}  loss={loss.item():.4f}  acc={acc:.1%}  codes_used={n_used}/{K}")
+            print(f"  step {step+1:>4}  ce={ce.item():.4f}  acc={acc:.1%}  "
+                  f"codes_used={n_used}/{K}  usage_score={usage_score.item():.3f}")
 
     # Eval on full dataset
     s = torch.tensor(states, device=device)
@@ -162,15 +173,17 @@ def train(K: int, n_max: int = 5, steps: int = 4000, batch: int = 256,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--K-list", type=int, nargs="+", default=[32, 48, 64])
-    ap.add_argument("--n-max", type=int, default=5)
-    ap.add_argument("--steps", type=int, default=4000)
+    ap.add_argument("--K-list", type=int, nargs="+", default=[36, 64])
+    ap.add_argument("--n-max", type=int, default=7)
+    ap.add_argument("--steps", type=int, default=8000)
+    ap.add_argument("--usage-weight", type=float, default=0.1)
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
     args = ap.parse_args()
     print(f"Device: {args.device}")
     for K in args.K_list:
         print(f"\n══════════ Codebook size K = {K} ══════════")
-        train(K=K, n_max=args.n_max, steps=args.steps, device=args.device)
+        train(K=K, n_max=args.n_max, steps=args.steps,
+              usage_weight=args.usage_weight, device=args.device)
 
 
 if __name__ == "__main__":
