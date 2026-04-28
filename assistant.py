@@ -192,13 +192,51 @@ def parse_args_for(tool: Tool, text: str) -> dict | None:
     return None
 
 
-def route(text: str) -> tuple[Tool | None, dict | None, str]:
-    """Pick the best-matching tool and parse its args.
-    Returns (tool, args, trace_string)."""
+_ROUTER_CACHE: dict[str, Any] = {}
+
+
+def _load_mamba_router(ckpt_path: str):
+    """Load the Mamba-3 router checkpoint once and cache it."""
+    if "model" in _ROUTER_CACHE:
+        return _ROUTER_CACHE["model"], _ROUTER_CACHE["tools"], _ROUTER_CACHE["max_len"]
+    import torch
+    from train_tool_router import ToolRouter, encode  # noqa: F401
+    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    cfg = ck["config"]
+    model = ToolRouter(d_model=cfg["d_model"], n_blocks=cfg["n_blocks"])
+    model.load_state_dict(ck["state_dict"])
+    model.eval()
+    _ROUTER_CACHE["model"] = model
+    _ROUTER_CACHE["tools"] = ck["tools"]
+    _ROUTER_CACHE["max_len"] = ck["max_len"]
+    _ROUTER_CACHE["best_val_acc"] = ck.get("best_val_acc")
+    return model, ck["tools"], ck["max_len"]
+
+
+def route_mamba(text: str, ckpt_path: str) -> tuple[Tool | None, dict | None, str]:
+    """Pick a tool via the trained Mamba-3 byte-level classifier."""
+    import torch
+    from train_tool_router import encode
+    model, tools, max_len = _load_mamba_router(ckpt_path)
+    x = encode(text, max_len=max_len).unsqueeze(0)
+    with torch.no_grad():
+        logits = model(x)[0]
+        probs = torch.softmax(logits, dim=-1)
+        idx = int(probs.argmax().item())
+    tool_name = tools[idx]
+    chosen = REGISTRY.get(tool_name)
+    args = parse_args_for(chosen, text) if chosen else None
+    probs_str = ", ".join(f"{tools[i]}={probs[i].item():.3f}" for i in range(len(tools)))
+    trace = f"router(mamba3): probs={{{probs_str}}}; chose={tool_name}; args={args}"
+    return chosen, args, trace
+
+
+def route_regex(text: str) -> tuple[Tool | None, dict | None, str]:
+    """Pick the best-matching tool by keyword score (the original stub)."""
     scored = [(t, t.matches(text)) for t in REGISTRY.values()]
     scored = [(t, s) for t, s in scored if s > 0]
     if not scored:
-        return None, None, "no specialist matched"
+        return None, None, "router(regex): no specialist matched"
     scored.sort(key=lambda ts: -ts[1])
     # Composite checks beat single tools when both keywords appear
     composite = next((t for t, _ in scored if t.name == "gcdhanoi"), None)
@@ -208,8 +246,16 @@ def route(text: str) -> tuple[Tool | None, dict | None, str]:
     else:
         chosen = scored[0][0]
     args = parse_args_for(chosen, text)
-    trace = f"router: scored={[(t.name, s) for t, s in scored]}; chose={chosen.name}; args={args}"
+    trace = f"router(regex): scored={[(t.name, s) for t, s in scored]}; chose={chosen.name}; args={args}"
     return chosen, args, trace
+
+
+# Default router; reassigned in main() based on flags.
+_ROUTER_FN: Callable[[str], tuple[Tool | None, dict | None, str]] = route_regex
+
+
+def route(text: str) -> tuple[Tool | None, dict | None, str]:
+    return _ROUTER_FN(text)
 
 
 # -------------------------------------------------------------- renderer ---
@@ -261,8 +307,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("query", nargs="*", help="single-shot prompt; if absent, interactive")
     ap.add_argument("--quiet", action="store_true", help="suppress trace output")
+    ap.add_argument("--router-checkpoint", type=str, default=None,
+                    help="path to a trained Mamba-3 ToolRouter checkpoint; if unset, regex router")
     args = ap.parse_args()
     verbose = not args.quiet
+
+    global _ROUTER_FN
+    if args.router_checkpoint:
+        ckpt = args.router_checkpoint
+        _ROUTER_FN = lambda text: route_mamba(text, ckpt)
+        # Force-load to surface errors early and report params.
+        model, tools, _ = _load_mamba_router(ckpt)
+        n_params = sum(p.numel() for p in model.parameters())
+        best = _ROUTER_CACHE.get("best_val_acc")
+        print(f"Router: Mamba-3 ({n_params:,} params, val_acc={best:.4%})  via {ckpt}")
+    else:
+        print("Router: regex (default; pass --router-checkpoint to use Mamba-3)")
 
     print("Mamba-3 specialist harness — type 'quit' to exit.")
     print("Registered tools:")
