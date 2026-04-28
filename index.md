@@ -104,16 +104,6 @@ harness compose them at runtime.**
 | 2026-04-27 | 33 | **EOS-bias gating + parameter-free `LoopCounter`** unblock the *bounded-counter ceiling* (a hard limit we'd hit where Mamba-3 couldn't extract n as an unbounded counter from a token stream). The two pieces: nudge the model's end-of-sequence-token logit upward exactly when the loop counter says it's done; and make the counter parameter-free by computing it as `torch.where(c >= 0, ...)` instead of learning an addition. With those: **HANOIBIN** (Tower of Hanoi rendered as binary token strings) to n=100,000 byte-perfect — 5000× the longest training length. **FIB-decimal F(40)** 9-digit perfect, **FIB-unary F=6765** (123× extrapolation). The "tool-use over neural memory" pattern also emerged (a Python tool owns the state, the model proposes the move) — the cleaner alternative to teaching the SSM to remember discrete state internally. |
 | 2026-04-28 | 41 | **Shallow MLPs converge in seconds for the right tasks.** Discretize the pattern into well-known steps, train a 1–3-layer MLP, run it inside a Python orchestrator. Works for Hanoi, GCD, sorting, Conway's Game of Life, WireWorld, light propagation. We started calling these models **"Legos"** — tiny snap-together specialists that compose for new tasks without retraining, the way Lego bricks compose for new shapes. The **Lego library** is the set of them: 5 specialists totaling ~2.2k parameters, ~5 s combined training, composing at runtime via a Python orchestrator. Same day, the **order-invariant GRU** closes the Hanoi story: 100 % on canonical traces n=15..23 (8.4M states) trained only on n=2..15. The 45k-param GRU + off-canonical augmentation solves arbitrary Hanoi starting positions at n=22 optimally. |
 
-**Where this leaves us:** the substrate is in place. Mamba-3 LM does
-language. The Lego library does reasoning. The Three Populations
-pipeline trains on MPS. The PTX engine sits warm on `pod-archive` for
-the cluster that's coming. The next step — already in progress — is
-**integrating the specialists with the Mamba-3 LM as forward-pass
-tools**: language as the output of an inner logical computation, the
-LM calling into the right specialist for each sub-task and rendering
-the answer in the user's language. Eventually the LM finds *and
-creates* these specialists at runtime.
-
 ---
 
 ## 1. Mamba-3 SSM (sequence model)

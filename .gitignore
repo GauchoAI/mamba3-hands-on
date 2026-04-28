@@ -22,6 +22,7 @@ Uachanger*
 Mamba\ Laboratory*
 image.png
 index.html
+!docs/**/index.html
 metrics.db
 survey*
 comparison.log
