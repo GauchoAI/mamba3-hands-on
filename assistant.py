@@ -261,9 +261,9 @@ def route(text: str) -> tuple[Tool | None, dict | None, str]:
 # -------------------------------------------------------------- renderer ---
 
 
-def render(tool: Tool, args: dict, result: ToolResult) -> str:
+def render_template(tool: Tool, args: dict, result: ToolResult) -> str:
     """Translate the structured tool result into a natural-language answer.
-    Template-based for now; replaceable with the bilingual char-LM later."""
+    Template-based stub; the Mamba-3 renderer below is the learned version."""
     if not result.ok:
         return f"The {tool.specialist_label} could not solve this: {result.payload.get('reason', 'unknown error')}."
     p = result.payload
@@ -283,6 +283,63 @@ def render(tool: Tool, args: dict, result: ToolResult) -> str:
             f"gcd of the two = {p['gcd_of_move_counts']:,}."
         )
     return f"({tool.name}) {p}"
+
+
+# ---- Mamba-3 renderer: structured payload → natural-language sentence ----
+
+_RENDERER_CACHE: dict[str, Any] = {}
+
+
+def _load_renderer(ckpt_path: str):
+    if "model" in _RENDERER_CACHE:
+        return _RENDERER_CACHE["model"], _RENDERER_CACHE["tokens"]
+    import torch
+    from mamba3_lm import Mamba3LM, LMConfig
+    ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    cfg = LMConfig(**ck["config"])
+    model = Mamba3LM(cfg)
+    model.load_state_dict(ck["state_dict"])
+    model.eval()
+    _RENDERER_CACHE["model"] = model
+    _RENDERER_CACHE["tokens"] = ck["tokens"]
+    _RENDERER_CACHE["max_len"] = ck["max_len"]
+    return model, ck["tokens"]
+
+
+def _payload_string(tool: Tool, result: ToolResult) -> str | None:
+    """Canonical pipe-delimited payload that matches the renderer's training format."""
+    p = result.payload
+    if tool.name == "hanoi_solver":
+        return f"hanoi_solver|n={p['n']}|optimal={p['optimal_moves']}|params={p['params']}|timing={int(result.timing_ms)}"
+    if tool.name == "gcd":
+        return f"gcd|a={p['a']}|b={p['b']}|gcd={p['gcd']}"
+    if tool.name == "gcdhanoi":
+        return f"gcdhanoi|a={p['a']}|b={p['b']}|moves_a={p['moves_a']}|moves_b={p['moves_b']}|gcd={p['gcd_of_move_counts']}"
+    return None
+
+
+def render_mamba(tool: Tool, args: dict, result: ToolResult, ckpt_path: str) -> str:
+    """Use the trained Mamba-3 LM to render the answer autoregressively."""
+    if not result.ok:
+        return f"The {tool.specialist_label} could not solve this: {result.payload.get('reason', 'unknown error')}."
+    payload_str = _payload_string(tool, result)
+    if payload_str is None:
+        return render_template(tool, args, result)
+    model, tokens = _load_renderer(ckpt_path)
+    prefix = list(payload_str.encode("utf-8")) + [tokens["BOA"]]
+    gen = model.generate(prefix, max_new=200, temperature=0.1, top_k=1)
+    eos = tokens["EOS"]
+    if eos in gen:
+        gen = gen[:gen.index(eos)]
+    text = bytes([b for b in gen if 32 <= b < 256]).decode("utf-8", errors="ignore")
+    return text
+
+
+_RENDER_FN: Callable[[Tool, dict, ToolResult], str] = render_template
+
+
+def render(tool: Tool, args: dict, result: ToolResult) -> str:
+    return _RENDER_FN(tool, args, result)
 
 
 # ------------------------------------------------------------------ run ---
@@ -309,10 +366,12 @@ def main():
     ap.add_argument("--quiet", action="store_true", help="suppress trace output")
     ap.add_argument("--router-checkpoint", type=str, default=None,
                     help="path to a trained Mamba-3 ToolRouter checkpoint; if unset, regex router")
+    ap.add_argument("--renderer-checkpoint", type=str, default=None,
+                    help="path to a trained Mamba-3 renderer checkpoint; if unset, template renderer")
     args = ap.parse_args()
     verbose = not args.quiet
 
-    global _ROUTER_FN
+    global _ROUTER_FN, _RENDER_FN
     if args.router_checkpoint:
         ckpt = args.router_checkpoint
         _ROUTER_FN = lambda text: route_mamba(text, ckpt)
@@ -320,9 +379,18 @@ def main():
         model, tools, _ = _load_mamba_router(ckpt)
         n_params = sum(p.numel() for p in model.parameters())
         best = _ROUTER_CACHE.get("best_val_acc")
-        print(f"Router: Mamba-3 ({n_params:,} params, val_acc={best:.4%})  via {ckpt}")
+        print(f"Router:   Mamba-3 ({n_params:,} params, val_acc={best:.4%})  via {ckpt}")
     else:
-        print("Router: regex (default; pass --router-checkpoint to use Mamba-3)")
+        print("Router:   regex (default; pass --router-checkpoint to use Mamba-3)")
+
+    if args.renderer_checkpoint:
+        rckpt = args.renderer_checkpoint
+        _RENDER_FN = lambda tool, args_, result: render_mamba(tool, args_, result, rckpt)
+        rmodel, _ = _load_renderer(rckpt)
+        n_params = sum(p.numel() for p in rmodel.parameters())
+        print(f"Renderer: Mamba-3 LM ({n_params:,} params, byte-level AR)  via {rckpt}")
+    else:
+        print("Renderer: templates (default; pass --renderer-checkpoint to use Mamba-3 LM)")
 
     print("Mamba-3 specialist harness — type 'quit' to exit.")
     print("Registered tools:")
