@@ -315,6 +315,59 @@ class LoopCounter(nn.Module):
                            torch.zeros_like(counter_values, dtype=self.iter_bias_zero.dtype)))
 
 
+class MultiChannelStateFeedback(nn.Module):
+    """K parallel state channels, each holding a small int.
+
+    For Hanoi: K = number of disks; each channel holds the peg of disk k
+    (in {0=A, 1=B, 2=C, 3=none}). Adding more disks = more channels at
+    runtime, no parameter change.
+
+    Architecture:
+        embed(channel k, value v) = value_emb(v) + sin_pos(k)
+        feedback(B, L) = sum_{k=0..K-1} embed(k, channel_value[k])
+        output = mix * read_proj(feedback)
+
+    `value_emb` is small (value_range × d_model). Channel-position is
+    sinusoidal — zero learned per-channel params. K can be anything at
+    inference; train uses the curriculum's max disk count.
+
+    Per-channel param cost: ZERO. Total module params: ~value_range *
+    d_model + d_model^2 + d_model + 1 = small.
+    """
+    def __init__(self, d_model: int, value_range: int = 4):
+        super().__init__()
+        self.d_model = d_model
+        self.value_range = value_range
+        self.value_emb = nn.Embedding(value_range, d_model)
+        nn.init.normal_(self.value_emb.weight, std=0.02)
+        self.read_proj = nn.Linear(d_model, d_model)
+        nn.init.normal_(self.read_proj.weight, std=0.01)
+        nn.init.zeros_(self.read_proj.bias)
+        self.mix = nn.Parameter(torch.tensor(0.1))
+
+    def _channel_pos_codes(self, K: int, device, dtype) -> torch.Tensor:
+        """Sinusoidal positional encoding for channel index. (K, d_model).
+        No learned parameters."""
+        positions = torch.arange(K, device=device, dtype=dtype).unsqueeze(1)
+        i = torch.arange(0, self.d_model, 2, device=device, dtype=dtype)
+        omega = 1.0 / (10000.0 ** (i / self.d_model))
+        angles = positions * omega.unsqueeze(0)  # (K, d_model/2)
+        codes = torch.zeros(K, self.d_model, device=device, dtype=dtype)
+        codes[:, 0::2] = torch.sin(angles)
+        codes[:, 1::2] = torch.cos(angles)
+        return codes
+
+    def forward(self, channels: torch.Tensor) -> torch.Tensor:
+        """channels: int64 (B, L, K). Returns (B, L, d_model)."""
+        B, L, K = channels.shape
+        clamped = channels.clamp(0, self.value_range - 1)
+        val_emb = self.value_emb(clamped)  # (B, L, K, d_model)
+        ch_pos = self._channel_pos_codes(K, channels.device, val_emb.dtype)  # (K, d_model)
+        combined = val_emb + ch_pos.view(1, 1, K, self.d_model)
+        feedback = combined.sum(dim=2)  # (B, L, d_model)
+        return self.mix * self.read_proj(feedback)
+
+
 class RegisterBank(nn.Module):
     """A discrete integer-register pathway with hard read/write semantics.
 
@@ -466,7 +519,9 @@ class ProgressiveModel(nn.Module):
                  use_loop_counter: bool = False, loop_counter_max: int = 1024,
                  lc_iteration_token: int = 49,
                  use_register_bank: bool = False,
-                 reg_n_registers: int = 16, reg_value_range: int = 16):
+                 reg_n_registers: int = 16, reg_value_range: int = 16,
+                 use_state_feedback: bool = False,
+                 sf_value_range: int = 4):
         super().__init__()
         self.d_model = d_model
         self.ssm_cfg = Mamba3Config(
@@ -513,6 +568,13 @@ class ProgressiveModel(nn.Module):
         self.register_bank = (RegisterBank(d_model, n_registers=reg_n_registers,
                                            value_range=reg_value_range)
                               if use_register_bank else None)
+
+        # MultiChannelStateFeedback: parameter-free in slot/channel count.
+        # Used by tool-use tasks (Hanoi-tool, etc.) where state is a list
+        # of small ints supplied per-step from a Python tool.
+        self.use_state_feedback = use_state_feedback
+        self.state_feedback = (MultiChannelStateFeedback(d_model, value_range=sf_value_range)
+                                if use_state_feedback else None)
 
         self.mode = "all"
 
@@ -648,7 +710,7 @@ class ProgressiveModel(nn.Module):
         return logits, new_states
 
     def forward(self, tokens, counter_values=None, iter_token_per_pos=None,
-                register_read_values=None):
+                register_read_values=None, state_channels=None):
         """
         register_read_values: int64 (B, L) or None. If the register
         bank is active and oracle-supplied (training), this is the
@@ -656,6 +718,11 @@ class ProgressiveModel(nn.Module):
         register read at the PREVIOUS step). It's embedded via the
         bank's value_emb and added to the token embedding so the
         SSM "sees" the register contents.
+
+        state_channels: int64 (B, L, K) or None. K parallel channels
+        of state — each channel is a small int (e.g., peg of disk k).
+        Used by tool-use tasks where state is multi-dimensional and
+        K can vary between examples.
 
         Return value:
           - if not use_register_bank: token logits (B, L, V) [unchanged]
@@ -669,6 +736,9 @@ class ProgressiveModel(nn.Module):
         # Inject register read-feedback as additive input embedding.
         if self.register_bank is not None and register_read_values is not None:
             x = x + self.register_bank.read_feedback(register_read_values)
+        # Inject multi-channel state feedback (tool-use tasks).
+        if self.state_feedback is not None and state_channels is not None:
+            x = x + self.state_feedback(state_channels)
 
         for layer in self.kernel_layers:
             scale = layer["scale"][0]

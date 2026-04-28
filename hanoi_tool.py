@@ -134,6 +134,18 @@ class HanoiTool:
             v += p * (3 ** i)
         return v
 
+    def feedback_channels(self, K: int = None) -> list[int]:
+        """Per-disk peg as a list of K small ints. K defaults to
+        len(self.peg). Pad with sentinel value 3 ('none') if K > n.
+        Each value is in {0=A, 1=B, 2=C, 3=none}.
+        """
+        if K is None:
+            K = self.n
+        out = list(self.peg[:K])
+        while len(out) < K:
+            out.append(3)
+        return out
+
 
 def precompute_feedback(n: int):
     """For training: compute the per-position feedback values that
@@ -146,18 +158,28 @@ def precompute_feedback(n: int):
     tool = HanoiTool(n)
     moves = tool.moves
     feedback_per_pos = []
-    # The model "sees" the feedback at position p that was produced
-    # AFTER the byte at position p-1 was emitted. So feedback[0]
-    # is the initial state (before any byte emitted).
     feedback_per_pos.append(tool.feedback_value())
-    bytes_emitted = []
     for k, src, dst in moves:
         s = f"{k} {PEG_NAMES[src]} {PEG_NAMES[dst]}\n"
         for ch in s:
             tool.step(ord(ch))
             feedback_per_pos.append(tool.feedback_value())
-    # Drop the very last one (post-final-byte feedback isn't used).
     return feedback_per_pos[:-1]
+
+
+def precompute_channels(n: int, K: int) -> list[list[int]]:
+    """Multi-channel feedback: per-position list of K small ints.
+    Each list is the per-disk peg state. Disk k > n channels are
+    padded with sentinel (3 = 'none')."""
+    tool = HanoiTool(n)
+    moves = tool.moves
+    out = [tool.feedback_channels(K)]
+    for k, src, dst in moves:
+        s = f"{k} {PEG_NAMES[src]} {PEG_NAMES[dst]}\n"
+        for ch in s:
+            tool.step(ord(ch))
+            out.append(tool.feedback_channels(K))
+    return out[:-1]
 
 
 # ───────────── Smoke test ─────────────
