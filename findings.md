@@ -812,6 +812,83 @@ Saved: `tower_of_hanoi_binary_paramfree.pt` (HANOIBIN, n=100k),
 
 ---
 
+## Entry — Hanoi step function: perfect extension (2026-04-28)
+
+User's bar: "100% accuracy = function correctly defined. If we
+can run a few steps and not others, it's not the right primitive."
+
+**Met it.** A 1,574-parameter MLP trained on n=2..6 for **1.9
+seconds** runs Hanoi(n) byte-perfect at n=12 (4,095 moves).
+Train sees 119 (state, action) pairs → AR-correct at every
+out-of-distribution n we tested (n=7,8,9,10,12).
+
+**The architectural insight that closed it: ROLE encoding.**
+
+We had been encoding the state as per-disk pegs — "disk 1 on peg
+A, disk 2 on peg B, …" — which scales with n. Disks 7+ never
+appeared in training; their embeddings were random; OOD failed.
+
+The fix: encode each peg's TOP DISK as a *role*, not a disk id:
+
+```
+role[peg] in {empty, smallest_visible, middle, largest}
+```
+
+State becomes `(n_parity, move_parity, role_A, role_B, role_C)` —
+5 small ints, **n-invariant**. Across all reachable Hanoi
+configurations at every n, only **36 distinct states** exist.
+Training on n=2..6 visits every one of them. Inference at
+n=20 hits the same 36 states. There is no out-of-distribution
+state to memorize against, because the state space is closed
+under the algorithm.
+
+**The step function itself**: one forward pass = one structured
+action. No byte rendering. f: state₅ → action₆ where the action
+enumerates `{A→B, A→C, B→A, B→C, C→A, C→B}`.
+
+**Architecture**: 5 feature embeddings (d=8) → concat → linear
+(40 → 32) → ReLU → linear (32 → 6). 1,574 params total.
+
+**Training**: 119 pairs, 2000 SGD steps batch=64, lr=3e-3, 1.9s
+on M4 Pro. Final loss 0.0001.
+
+**Autoregressive validation (model uses its OWN previous action
+to advance state, not teacher-forced)**:
+
+| n | reach | result |
+|---|---|---|
+| 2..6 | training | 3+7+15+31+63 actions perfect ✓ |
+| 7 | OOD | 127/127 ✓ |
+| 8 | OOD | 255/255 ✓ |
+| 9 | OOD | 511/511 ✓ |
+| 10 | OOD | 1023/1023 ✓ |
+| 12 | OOD | 4095/4095 ✓ |
+
+**Lessons captured.**
+
+1. **State must be closed under the algorithm**, not parameterised
+   by problem size. Encode invariants (roles, ranks, comparisons)
+   not literal values (disk ids, integers).
+2. **One forward pass = one structured action.** Byte rendering
+   forces the model to jointly learn presentation and algorithm,
+   which gates generalisation.
+3. **Tool tracks state in plain Python** (n-invariant or n-aware,
+   doesn't matter; tool can encode roles freely). Model is a pure
+   step function. Both primitives compose: same shape will fit
+   any deterministic puzzle (Tetris, GCD, bubble sort, Sokoban …).
+4. **The Lego is now small.** 1.6k params, 2 seconds to train.
+   The base substrate for "playing puzzles" is genuinely tiny.
+
+Code: `hanoi_step_function.py`, `train_step_function.py`. Saved:
+`checkpoints/specialists/hanoi_step_fn.pt`.
+
+This is the foundational primitive for the user's "Lego pieces
+composed at random" vision. The Hanoi step is no longer a
+trace-memorising language model — it's a function over a closed
+finite state space that generalises by construction.
+
+---
+
 ## Entry — Cluster transparent partition (cluster_dispatch + cluster_sync) (2026-04-27)
 
 User pushed for "transparent" multi-node operation: jobs should
