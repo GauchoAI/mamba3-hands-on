@@ -172,6 +172,11 @@ def gather_incoming_sh(outgoing_sh: torch.Tensor) -> torch.Tensor:
         F = (SQRT_PI / 2.0) * c0_nb + SQRT_PI_OVER_3 * (
             dfx * cx_nb + dfy * cy_nb + dfz * cz_nb
         )
+        # Clamp flux to non-negative. SH order-1 can produce negative
+        # cosine-integrals when l=1 dominates l=0; treating those as
+        # actual flux propagates "anti-light" which renders as the dark
+        # silhouette outlines. Physical flux is always >= 0.
+        F = torch.clamp(F, min=0.0)
 
         incoming[dst_x_lo:dst_x_hi, dst_y_lo:dst_y_hi, dst_z_lo:dst_z_hi, 0] += F * (LPV_PROJ * K0)
         incoming[dst_x_lo:dst_x_hi, dst_y_lo:dst_y_hi, dst_z_lo:dst_z_hi, 1] += F * (LPV_PROJ * K1 * dfy)
