@@ -464,6 +464,7 @@ class ProgressiveModel(nn.Module):
                  use_explicit_registers: bool = False,
                  n_registers: int = 8, d_register: int = 32,
                  use_loop_counter: bool = False, loop_counter_max: int = 1024,
+                 lc_iteration_token: int = 49,
                  use_register_bank: bool = False,
                  reg_n_registers: int = 16, reg_value_range: int = 16):
         super().__init__()
@@ -500,7 +501,8 @@ class ProgressiveModel(nn.Module):
         # Optional discrete loop counter — oracle-supervised integer
         # register the model reads at every output position.
         self.use_loop_counter = use_loop_counter
-        self.loop_counter = (LoopCounter(d_model, max_count=loop_counter_max)
+        self.loop_counter = (LoopCounter(d_model, max_count=loop_counter_max,
+                                          iteration_token=lc_iteration_token)
                              if use_loop_counter else None)
 
         # Optional discrete register bank — hard read/write semantics

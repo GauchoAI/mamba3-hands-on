@@ -120,6 +120,23 @@ def gen_exec_trace(n: int, n_registers: int = 16):
     return trace, moves
 
 
+def gen_loop_counter_trajectory(n: int, trace_len: int):
+    """Build a LoopCounter trajectory: at the SEP token the counter is
+    `total_bytes_remaining` = trace_len; decrements once per output
+    position; hits 0 at the EOS-target slot. Sentinel (-1) elsewhere.
+
+    Used to externalise "how many more bytes to emit?" from the SSM's
+    input-byte parsing — same trick as HANOIBIN. The SSM no longer has
+    to read n from "HANOI {n}"; the oracle hands it the byte budget
+    directly via the LoopCounter channel.
+
+    Returns a list[int] of length (trace_len + 1) covering positions
+    [SEP, SEP+1, ..., SEP+trace_len] inclusive. The trainer pads with
+    sentinel for input-span and post-EOS positions.
+    """
+    return [trace_len - i for i in range(trace_len + 1)]
+
+
 # ───────────────── Smoke test ─────────────────
 
 def _smoke():

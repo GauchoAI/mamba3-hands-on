@@ -31,15 +31,10 @@ from hanoi_exec_oracle import gen_exec_trace, hanoi_moves
 def build_example(n: int, n_registers: int, max_input_n: int = 99):
     """Build one full training example: input bytes + per-step trace.
 
-    Returns a dict:
-        tokens:      int64 (L,) full sequence [BOS, input bytes, SEP, answer bytes, EOS]
-        sep_pos:     int — position of SEP token
-        read_addr:   int64 (L,) ground-truth read at each position
-        write_addr:  int64 (L,) ground-truth write addr
-        write_val:   int64 (L,) ground-truth write val
-        read_input:  int64 (L,) the value the model SEES at each position
-                     (= register at the read addr from prev position;
-                      for input span and first answer position, 0)
+    Returns a dict with token labels, per-step register IO ground truth,
+    AND a LoopCounter trajectory (counter at SEP = total trace bytes,
+    decrementing per position, 0 at EOS slot). The LoopCounter
+    externalises termination from SSM-side n parsing.
     """
     NO_REG = n_registers
     inp_bytes = list(f"HANOI {n}".encode("utf-8"))
@@ -48,6 +43,7 @@ def build_example(n: int, n_registers: int, max_input_n: int = 99):
     seq = [BOS] + inp_bytes + [SEP] + [r["token"] for r in trace] + [EOS]
     L = len(seq)
     sep_pos = len(inp_bytes) + 1
+    trace_len = len(trace)
 
     # Build per-position labels. Indices align with positions in `seq`.
     # The input span (positions 0..sep_pos) has no ops; the answer
@@ -92,6 +88,14 @@ def build_example(n: int, n_registers: int, max_input_n: int = 99):
                     read_input[p + 1] = trace[k - 1]["registers_after"][ra]
             # else: no-read, read_input stays 0
 
+    # LoopCounter trajectory: at sep_pos+k the counter is (trace_len - k);
+    # input span and post-EOS positions get sentinel (-1).
+    counter_values = [-1] * L
+    for k in range(trace_len + 1):  # 0 ... trace_len inclusive
+        p = sep_pos + k
+        if 0 <= p < L:
+            counter_values[p] = trace_len - k
+
     return {
         "tokens": torch.tensor(seq, dtype=torch.long),
         "sep_pos": sep_pos,
@@ -99,6 +103,7 @@ def build_example(n: int, n_registers: int, max_input_n: int = 99):
         "write_addr": torch.tensor(write_addr, dtype=torch.long),
         "write_val": torch.tensor(write_val, dtype=torch.long),
         "read_input": torch.tensor(read_input, dtype=torch.long),
+        "counter_values": torch.tensor(counter_values, dtype=torch.long),
         "n": n,
     }
 
@@ -112,6 +117,7 @@ def collate(examples, pad_token=PAD):
     out_write_addr = torch.zeros(B, L, dtype=torch.long)
     out_write_val = torch.zeros(B, L, dtype=torch.long)
     out_read_input = torch.zeros(B, L, dtype=torch.long)
+    out_counter = torch.full((B, L), -1, dtype=torch.long)  # sentinel default
     seps = []
     for i, e in enumerate(examples):
         l = e["tokens"].shape[0]
@@ -120,6 +126,7 @@ def collate(examples, pad_token=PAD):
         out_write_addr[i, :l] = e["write_addr"]
         out_write_val[i, :l] = e["write_val"]
         out_read_input[i, :l] = e["read_input"]
+        out_counter[i, :l] = e["counter_values"]
         seps.append(e["sep_pos"])
     return {
         "tokens": out_tokens,
@@ -128,6 +135,7 @@ def collate(examples, pad_token=PAD):
         "write_addr": out_write_addr,
         "write_val": out_write_val,
         "read_input": out_read_input,
+        "counter_values": out_counter,
     }
 
 
@@ -180,7 +188,9 @@ def teacher_forced_eval(model, n, n_registers, device):
     batch = {k: v.to(device) if hasattr(v, "to") else v for k, v in batch.items()}
     model.eval()
     with torch.no_grad():
-        out = model(batch["tokens"], register_read_values=batch["read_input"])
+        out = model(batch["tokens"],
+                    counter_values=batch["counter_values"],
+                    register_read_values=batch["read_input"])
     L = batch["tokens"].shape[1]
     sep = batch["sep"][0].item()
     ans_pos = list(range(sep, L - 1))
@@ -228,12 +238,19 @@ def main():
     print(f"Curriculum n: {args.curriculum}")
     ns = [int(s) for s in args.curriculum.split(",")]
 
-    # Build model
+    # Build model with BOTH primitives:
+    # - RegisterBank: tracks per-disk peg state, decides reads/writes
+    # - LoopCounter:  oracle-supplied "moves remaining" counter,
+    #                 drives termination (EOS at counter=0). No iter_token
+    #                 (we set lc_iteration_token=None) so the LoopCounter
+    #                 only contributes the EOS-gating signal.
     model = ProgressiveModel(
         d_model=args.d_model, d_state=16, expand=2, headdim=16,
         use_register_bank=True,
         reg_n_registers=args.n_registers,
         reg_value_range=args.value_range,
+        use_loop_counter=True,
+        lc_iteration_token=None,  # disable iter_bias path
     ).to(args.device)
     for _ in range(args.layers):
         model.add_kernel_layer()
@@ -257,7 +274,9 @@ def main():
             batch = collate(examples)
             batch = {k: (v.to(args.device) if hasattr(v, "to") else v) for k, v in batch.items()}
 
-            out = model(batch["tokens"], register_read_values=batch["read_input"])
+            out = model(batch["tokens"],
+                        counter_values=batch["counter_values"],
+                        register_read_values=batch["read_input"])
             loss, components = loss_fn(out, batch, args.n_registers)
             opt.zero_grad(set_to_none=True)
             loss.backward()
