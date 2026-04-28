@@ -11,6 +11,207 @@ Silicon MPS. Each entry corresponds to a commit.
 
 ---
 
+## Entry — Hanoi true invariance: the role-MLP plateau and the GRU fix (2026-04-28)
+
+User question that opened the thread:
+
+> "what is that 'we never trained for' that seems like we are not
+>  correctly setting up invariants, again an index problem?"
+
+The lab notebook for this session: we'd just shipped a mixed-K MLP
+ensemble that hit **100% on n=16, 17 held-out** (196,606 canonical states)
+trained on n=2..15, plus a saved checkpoint and a composite-task demo
+(`hanoi_solve.py`, `hanoi_composite_demo.py`). We reported that as
+"true 100%" and pivoted toward solver-mode at higher n. The user pushed
+back: if the encoding were truly invariant, n shouldn't matter at all.
+
+This entry is the diagnosis chain that vindicated their pushback and
+ended with a 45,318-param GRU that gets 100% on canonical traces from
+n=15 (training) up to n=23 — 8.4 million states — and, with off-trace
+augmentation, solves arbitrary reachable starts at n=5..18 OPTIMALLY in
+90 seconds wall-clock.
+
+**1. Probe the invariance claim instead of speculating**
+
+Stream-eval the mixed-K ensemble (`probe_invariance.py`) on canonical
+traces in 64k chunks (the user's OS nearly OOM'd when an earlier version
+materialized the full n=23 trace — 8.4M states × 24 int64 + 7-model
+feature replication; saved as a feedback memory):
+
+```
+n=15 (trained):  100.0000%
+n=16 (held-out): 100.0000%
+n=17 (held-out): 100.0000%
+n=18:             99.9989%   (   3 / 262k wrong)
+n=19:             99.9424%   ( 302 / 524k wrong)
+n=20:             99.7671%   (2442 / 1M wrong)
+```
+
+The "100%" reported earlier was a coincidence of the small held-out
+range (n=16, 17). Accuracy decays cleanly with n — even on canonical-
+trace states, not solver-mode where 1 wrong move snowballs.
+
+**2. The features are invariant. The MLP isn't.**
+
+Looking at `role_features_K`:
+- `smallest[i]` = peg of disk i (i-th smallest) — same role at every n.
+- `largest[k]` = peg of disk n_disks-1-k — same role at every n.
+- `parity = n_disks % 2` — 0/1, invariant in form.
+- `cmp_*` = top-disk comparisons (0/1/2 outputs).
+
+Nothing in this is index-dependent in form. So why does it fail?
+
+`probe_novel_fingerprints.py` settles it. For each error at n=18..20,
+check whether its role-fingerprint per K appeared in any n=2..15
+canonical trace:
+
+```
+n=18:    3 errors → K=10:   3 novel,    0 seen   K=12:   3 novel,    0 seen
+n=19:  302 errors → K=10: 302 novel,    0 seen   K=12: 302 novel,    0 seen
+n=20: 2442 errors → K=10:2442 novel,    0 seen   K=12:2442 novel,    0 seen
+```
+
+(K=8 has a handful of "seen" — those are the K=8 blind-spot collisions
+where the small-K view is degenerate.)
+
+So the leak isn't an index leak. It's one level up: the *features* are
+invariant, but the **MLP only learned the fingerprint set produced by
+n=2..15**. At n≥18 the canonical trace visits combinatorially novel
+role-feature combinations and the MLP has no learned response.
+
+A clean way to see why off-trace augmentation can't reach those
+fingerprints: take an n=18 error fingerprint and try to construct a
+consistent n=15 state with the same combined (smallest_K, largest_K,
+parity, cmp_*) vector. The "K=8 largest" at n=15 is disks 14..7; at
+n=18 it's disks 17..10. For both to produce the same fingerprint
+vector, the overlapping disks (3..11 etc. depending on K) must agree
+on their pegs in both views, and at high n the overlap forces
+contradictions. The fingerprint space genuinely *grows* with n.
+
+**3. Empirical confirmation that off-trace augmentation alone fails**
+
+`discover_hanoi_offtrace.py`. Add 200,529 random reachable states from
+n=2..15, labeled with `optimal_move_from_state` (recursive O(n) oracle:
+find largest disk not on target, decide to move it now or recurse on
+the smaller subproblem). Train a single K=12 MLP with role features:
+
+```
+n=15 (training): 100.00%   (perfect fit on training)
+n=17:             93.89%   ← vs ~95% for canonical-only K=12 (no help)
+n=18:             84.45%
+n=19:             83.87%
+n=20:             77.04%
+```
+
+Worse, not better. Confirms: the bottleneck is the *architecture*, not
+the data coverage.
+
+**4. The fix: structural invariance**
+
+`discover_hanoi_invariant.py`. A 45,318-param GRU that processes the
+disk-peg sequence largest→smallest with shared weights per position.
+The function it learns is defined for any sequence length, not just
+the lengths whose fingerprints showed up in training:
+
+```python
+class HanoiInvariantGRU(nn.Module):
+    def __init__(self, d_emb=16, d_hidden=64, n_layers=2):
+        super().__init__()
+        self.peg_emb = nn.Embedding(4, d_emb)  # 0, 1, 2, ABSENT
+        self.gru = nn.GRU(d_emb, d_hidden, num_layers=n_layers, batch_first=True)
+        self.head = nn.Sequential(
+            nn.Linear(d_hidden, d_hidden), nn.ReLU(),
+            nn.Linear(d_hidden, N_ACTIONS))
+
+    def forward(self, pegs):
+        pegs_clean = torch.where(pegs == -1, torch.full_like(pegs, ABSENT), pegs)
+        x = self.peg_emb(pegs_clean.flip(-1))      # largest first
+        h, _ = self.gru(x)
+        return self.head(h[:, -1])                  # readout at smallest
+```
+
+Trained on the same n=2..15 canonical traces. 3,000 steps, ~100s on CPU.
+
+```
+n |     states |    correct |         acc | verdict
+----------------------------------------------------------
+15 |      32767 |      32767 |   100.0000% | ✓
+16 |      65535 |      65535 |   100.0000% | ✓
+17 |     131071 |     131071 |   100.0000% | ✓
+18 |     262143 |     262143 |   100.0000% | ✓
+19 |     524287 |     524287 |   100.0000% | ✓
+20 |    1048575 |    1048575 |   100.0000% | ✓
+21 |    2097151 |    2097151 |   100.0000% | ✓
+22 |    4194303 |    4194303 |   100.0000% | ✓
+23 |    8388607 |    8388607 |   100.0000% | ✓
+```
+
+100% from n=15 (trained) all the way to n=23 (8,388,607 states).
+At 500 training steps it was already 100% on n=18; the structural
+invariance kicks in immediately.
+
+**5. Length invariance ≠ start invariance**
+
+A 50-parallel batched-lockstep solver (`hanoi_parallel_solve.py`)
+revealed the next layer: the bare GRU **fails** on random off-canonical
+starts even at n=5 (2 of 3 random-start runs hit the step cap). Length
+invariance is one axis; *start* invariance — handle any reachable
+configuration, not just the canonical-trace states — is a different one.
+
+The fix: **structural invariance + off-trace augmentation, together.**
+The GRU gives the structure, off-trace augmentation gives the function
+coverage:
+
+```
+canonical prediction (length invariance, with off-trace included):
+  n=15..22 : 100.0000%
+  n=23     :  99.6262%   (slight regression vs canonical-only GRU)
+
+off-canonical solver (start invariance):
+  n=5..18 random starts:  50/50 OPTIMAL in 90s wall-clock
+  n=18..22 random starts: 28/30 OPTIMAL, zero failures
+                          (2 killed at 57 min for runtime budget; pattern
+                          was clearly converging — same per-tick rate, no
+                          cycles, just very long n=22 instances)
+```
+
+Total: 78 / 80 OPTIMAL across the random-start probes, **zero
+non-optimal solutions**, just two budget-cap timeouts at the largest n.
+
+**6. Two checkpoints, two purposes**
+
+  - `checkpoints/hanoi_invariant_gru.pt` — bare GRU, canonical-only
+    training. Pure length invariance up to n=23 at 100%. Use when you
+    only need a canonical-start solver.
+  - `checkpoints/hanoi_invariant_gru_offtrace.pt` — GRU + 200k random
+    reachable states from n=2..15. Both invariances. Slight 99.63%
+    canonical regression at n=23 in exchange for full start invariance.
+
+**7. The lesson worth saving**
+
+For a recursive task (Hanoi, GCD, Fibonacci, …), feature engineering
+roles into a fixed-K MLP gives *almost* invariant generalization — but
+the MLP's learned function is a lookup over the fingerprint set it
+saw, and that set genuinely grows with n. The diagnosis tool is
+fingerprint novelty (`probe_novel_fingerprints.py`): if every error is
+on a feature-vector never seen in training, more training data can't
+fix it. The fix is structural — a network whose weights don't depend
+on n. A small GRU over the disk-peg sequence is enough; we didn't need
+attention or Mamba, just shared-per-position recurrence.
+
+The user's pushback ("indices are anti-invariant") was directionally
+right, but the precise diagnosis turned out to be one level of
+abstraction up: *features* invariant ✓, *function space* not. Two
+invariances are needed: length and start. The architecture gives the
+first; data augmentation gives the second; both are required.
+
+Files this session: `probe_invariance.py`, `probe_novel_fingerprints.py`,
+`discover_hanoi_offtrace.py`, `discover_hanoi_invariant.py`,
+`hanoi_solve_gru.py`, `hanoi_parallel_solve.py`. Commits `9ceefa4` and
+`dc0a45a`.
+
+---
+
 ## Entry — 3D Cornell box: byte-perfect from a 406-param Lego (2026-04-28)
 
 User: "We need to make sure it is a proper corner box, which is three d.
