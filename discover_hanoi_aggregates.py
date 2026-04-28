@@ -57,33 +57,30 @@ def compute_aggregates(state: np.ndarray, n_max_pad: int) -> np.ndarray:
     """state: (B, n_max_pad). Returns (B, n_aggregates).
 
     Features:
-      [0] peg of disk 0   (smallest disk)
+      [0] peg of disk 0   (smallest)
       [1] peg of disk 1
-      [2] count of disks on peg 0
-      [3] count of disks on peg 1
-      [4] count of disks on peg 2
-      [5] top disk index on peg 0  (smallest index with peg==0, n_max if none)
-      [6] top disk index on peg 1
-      [7] top disk index on peg 2
+      [2..4] count of disks per peg
+      [5..7] top disk index per peg (n_max_pad if peg empty)
       [8] n_disks total
+      [9] peg of largest disk (disk N-1)
     """
-    B = state.shape[0]
+    big = n_max_pad
     peg0 = state[:, 0]
     peg1 = state[:, 1]
     count0 = (state == 0).sum(axis=1)
     count1 = (state == 1).sum(axis=1)
     count2 = (state == 2).sum(axis=1)
-    # Top disk on each peg = smallest index with state == p, else n_max_pad
-    big = n_max_pad
-    top_p0 = np.where(state == 0, np.arange(state.shape[1])[None, :], big)
-    top_p0 = top_p0.min(axis=1)
-    top_p1 = np.where(state == 1, np.arange(state.shape[1])[None, :], big)
-    top_p1 = top_p1.min(axis=1)
-    top_p2 = np.where(state == 2, np.arange(state.shape[1])[None, :], big)
-    top_p2 = top_p2.min(axis=1)
+    top_p0 = np.where(state == 0, np.arange(state.shape[1])[None, :], big).min(axis=1)
+    top_p1 = np.where(state == 1, np.arange(state.shape[1])[None, :], big).min(axis=1)
+    top_p2 = np.where(state == 2, np.arange(state.shape[1])[None, :], big).min(axis=1)
     n_disks = (state != -1).sum(axis=1)
+    # Peg of the largest existing disk (disk index n_disks-1).
+    # state[i, n_disks[i]-1] for each row. Use take_along_axis.
+    last_disk_idx = np.clip(n_disks - 1, 0, state.shape[1] - 1)
+    peg_largest = np.take_along_axis(state, last_disk_idx[:, None], axis=1).squeeze(-1)
     return np.stack([peg0, peg1, count0, count1, count2,
-                     top_p0, top_p1, top_p2, n_disks], axis=-1).astype(np.int64)
+                     top_p0, top_p1, top_p2, n_disks, peg_largest],
+                    axis=-1).astype(np.int64)
 
 
 class DiscoveryHanoiAgg(nn.Module):
@@ -97,8 +94,8 @@ class DiscoveryHanoiAgg(nn.Module):
         self.count_emb = nn.Embedding(n_max + 2, d_emb)
         self.top_emb = nn.Embedding(n_max + 1, d_emb)  # top disk idx (or n_max for empty)
 
-        # 9 aggregate features × d_emb + n_max raw state × d_emb
-        d_in = n_max * d_emb + 9 * d_emb
+        # 10 aggregate features × d_emb (no raw padded state — it's n-dependent)
+        d_in = 10 * d_emb
         self.enc = nn.Sequential(
             nn.Linear(d_in, d_hidden),
             nn.ReLU(),
@@ -110,21 +107,26 @@ class DiscoveryHanoiAgg(nn.Module):
         )
         self.dec = nn.Linear(K, N_ACTIONS)
 
-    def forward(self, state, aggregates, tau=1.0):
-        # state: (B, n_max_pad), aggregates: (B, 9)
-        peg_e = self.peg_emb(state + 1).flatten(1)
-        a0 = self.peg_p_emb(aggregates[:, 0])  # peg of disk 0
-        a1 = self.peg_p_emb(aggregates[:, 1])  # peg of disk 1
+    def forward(self, state, aggregates, tau=1.0, deterministic: bool = False):
+        # state is unused now — kept in signature for compatibility.
+        a0 = self.peg_p_emb(aggregates[:, 0])
+        a1 = self.peg_p_emb(aggregates[:, 1])
         c0 = self.count_emb(aggregates[:, 2])
         c1 = self.count_emb(aggregates[:, 3])
         c2 = self.count_emb(aggregates[:, 4])
-        t0 = self.top_emb(aggregates[:, 5])    # top on peg 0
-        t1 = self.top_emb(aggregates[:, 6])    # top on peg 1
-        t2 = self.top_emb(aggregates[:, 7])    # top on peg 2
-        nd = self.count_emb(aggregates[:, 8])  # n_disks
-        x = torch.cat([peg_e, a0, a1, c0, c1, c2, t0, t1, t2, nd], dim=-1)
+        t0 = self.top_emb(aggregates[:, 5])
+        t1 = self.top_emb(aggregates[:, 6])
+        t2 = self.top_emb(aggregates[:, 7])
+        nd = self.count_emb(aggregates[:, 8])
+        pl = self.peg_p_emb(aggregates[:, 9])
+        x = torch.cat([a0, a1, c0, c1, c2, t0, t1, t2, nd, pl], dim=-1)
         logits = self.enc(x)
-        code = F.gumbel_softmax(logits, tau=tau, hard=True, dim=-1)
+        if deterministic:
+            # Pure argmax — no Gumbel noise. Use straight-through one-hot.
+            idx = logits.argmax(dim=-1, keepdim=True)
+            code = torch.zeros_like(logits).scatter_(-1, idx, 1.0)
+        else:
+            code = F.gumbel_softmax(logits, tau=tau, hard=True, dim=-1)
         return self.dec(code), code, logits
 
 
@@ -183,7 +185,7 @@ def train_and_test(K: int, train_ns, test_ns, n_max_pad: int,
         # Periodically eval held-out and keep the best
         if (step + 1) % 500 == 0:
             with torch.no_grad():
-                action_logits_t, _, _ = model(test_states_t, test_aggs_t, tau=0.05)
+                action_logits_t, _, _ = model(test_states_t, test_aggs_t, tau=0.05, deterministic=True)
                 test_acc = (action_logits_t.argmax(-1) == test_y_t).float().mean().item()
             if test_acc > best_test_acc:
                 best_test_acc = test_acc
@@ -191,7 +193,7 @@ def train_and_test(K: int, train_ns, test_ns, n_max_pad: int,
 
         if verbose and (step + 1) % 1500 == 0:
             with torch.no_grad():
-                action_logits, code, _ = model(s, a, tau=0.05)
+                action_logits, code, _ = model(s, a, tau=0.05, deterministic=True)
                 acc = (action_logits.argmax(-1) == y).float().mean().item()
                 code_idx = code.argmax(-1)
                 n_used = int(torch.unique(code_idx).numel())
@@ -207,7 +209,7 @@ def train_and_test(K: int, train_ns, test_ns, n_max_pad: int,
     a = torch.tensor(train_aggs, device=device)
     y = torch.tensor(train_actions, device=device)
     with torch.no_grad():
-        action_logits, code, _ = model(s, a, tau=0.05)
+        action_logits, code, _ = model(s, a, tau=0.05, deterministic=True)
         train_acc = (action_logits.argmax(-1) == y).float().mean().item()
         n_used = len(torch.unique(code.argmax(-1)))
     print(f"  Train ({train_ns}): {train_acc:.2%}  codes_used={n_used}")
@@ -216,7 +218,7 @@ def train_and_test(K: int, train_ns, test_ns, n_max_pad: int,
     a = torch.tensor(test_aggs, device=device)
     y = torch.tensor(test_actions, device=device)
     with torch.no_grad():
-        action_logits, _, _ = model(s, a, tau=0.05)
+        action_logits, _, _ = model(s, a, tau=0.05, deterministic=True)
         test_acc = (action_logits.argmax(-1) == y).float().mean().item()
     print(f"  Held-out test ({test_ns}): {test_acc:.2%}")
     print("\n  Per-n breakdown:")
