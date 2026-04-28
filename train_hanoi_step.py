@@ -25,7 +25,11 @@ def encode_move(k, src, dst):
     return list(f"{k} {PEG_NAMES[src]} {PEG_NAMES[dst]}\n".encode("ascii"))
 
 
-def build_example(n: int, K: int):
+def state_mode_n_channels(K: int, mode: str) -> int:
+    return {"pegs": K, "pegs_npar": K + 1, "full": K + 3, "canonical": 6}[mode]
+
+
+def build_example(n: int, K: int, mode: str = "pegs"):
     inp_bytes = list(f"HANOI {n}".encode("utf-8"))
     moves = hanoi_moves(n)
     answer_bytes = []
@@ -43,9 +47,10 @@ def build_example(n: int, K: int):
         if 0 <= p < L:
             counter[p] = trace_len - k
 
-    # Per-position state channels: K-vector each
-    raw = precompute_channels(n, K)  # list of K-lists
-    channels = [[3] * K for _ in range(L)]  # default = sentinel
+    # Per-position state channels.
+    raw = precompute_channels(n, K, mode=mode)
+    n_ch = state_mode_n_channels(K, mode)
+    channels = [[3] * n_ch for _ in range(L)]  # sentinel default
     for k, vec in enumerate(raw):
         p = sep_pos + k
         if 0 <= p < L:
@@ -60,12 +65,12 @@ def build_example(n: int, K: int):
     }
 
 
-def collate(examples, K):
+def collate(examples, n_ch):
     L = max(e["tokens"].shape[0] for e in examples)
     B = len(examples)
     out_tokens = torch.full((B, L), PAD, dtype=torch.long)
     out_counter = torch.full((B, L), -1, dtype=torch.long)
-    out_channels = torch.full((B, L, K), 3, dtype=torch.long)  # sentinel default
+    out_channels = torch.full((B, L, n_ch), 3, dtype=torch.long)
     seps = []
     for i, e in enumerate(examples):
         l = e["tokens"].shape[0]
@@ -97,9 +102,10 @@ def loss_fn(out, batch):
     return (raw * flat_mask).sum() / (flat_mask.sum() + 1e-8)
 
 
-def teacher_forced_eval(model, n, K, device):
-    e = build_example(n, K)
-    batch = collate([e], K)
+def teacher_forced_eval(model, n, K, device, mode="pegs"):
+    e = build_example(n, K, mode=mode)
+    n_ch = state_mode_n_channels(K, mode)
+    batch = collate([e], n_ch)
     batch = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in batch.items()}
     model.eval()
     with torch.no_grad():
@@ -131,6 +137,12 @@ def main():
     ap.add_argument("--steps-per-cycle", type=int, default=30)
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--curriculum", default="2,3,4,5,6,7,8")
+    ap.add_argument("--state-mode", choices=["pegs", "pegs_npar", "full"],
+                    default="pegs",
+                    help="State channel layout. 'full' includes n_parity + "
+                         "move_parity + byte_pos + per-disk pegs — sufficient "
+                         "for the function f(state) -> next_byte to be "
+                         "deterministic.")
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
     ap.add_argument("--save-to", default="checkpoints/specialists/hanoi_step.pt")
     args = ap.parse_args()
@@ -138,10 +150,15 @@ def main():
     print(f"Device: {args.device}, K={args.K}, curriculum: {args.curriculum}", flush=True)
     ns = [int(s) for s in args.curriculum.split(",")]
 
+    # value_range needs to cover the largest channel value:
+    #   pegs:      0..3       (4)
+    #   pegs_npar: 0..3       (4)
+    #   full:      byte_pos in 0..5, peg in 0..3 -> max 5, use 8 for safety
+    sf_value_range = 8 if args.state_mode == "full" else 4
     model = ProgressiveModel(
         d_model=args.d_model, d_state=16, expand=2, headdim=16,
         use_loop_counter=True, lc_iteration_token=None,
-        use_state_feedback=True, sf_value_range=4,  # 0=A,1=B,2=C,3=none
+        use_state_feedback=True, sf_value_range=sf_value_range,
     ).to(args.device)
     for _ in range(args.layers):
         model.add_kernel_layer()
@@ -156,10 +173,12 @@ def main():
         t0 = time.time()
         model.train()
         cum = 0.0
+        n_ch = state_mode_n_channels(args.K, args.state_mode)
         for step in range(args.steps_per_cycle):
-            examples = [build_example(random.choice(ns), args.K)
+            examples = [build_example(random.choice(ns), args.K,
+                                      mode=args.state_mode)
                         for _ in range(args.batch_size)]
-            batch = collate(examples, args.K)
+            batch = collate(examples, n_ch)
             batch = {k: (v.to(args.device) if hasattr(v, "to") else v)
                      for k, v in batch.items()}
             out = model(batch["tokens"],
@@ -172,7 +191,9 @@ def main():
             opt.step()
             cum += loss.item()
         cum /= args.steps_per_cycle
-        accs = {n: teacher_forced_eval(model, n, args.K, args.device) for n in ns}
+        accs = {n: teacher_forced_eval(model, n, args.K, args.device,
+                                       mode=args.state_mode)
+                for n in ns}
         avg = sum(accs.values()) / len(accs)
         print(f"cycle {cycle+1:>3}  loss={cum:.3f}  acc={avg:.0%}  by_n={accs}  ({time.time()-t0:.1f}s)",
               flush=True)

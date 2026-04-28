@@ -29,10 +29,11 @@ def load_model(pt_path, device):
     has_lc = any(k.startswith("loop_counter.") for k in sd.keys())
     has_sf = any(k.startswith("state_feedback.") for k in sd.keys())
     K = cfg.get("K", 10)
+    sf_vr = sd["state_feedback.value_emb.weight"].shape[0] if has_sf else 4
     model = ProgressiveModel(
         d_model=cfg["d_model"], d_state=16, expand=2, headdim=16,
         use_loop_counter=has_lc, lc_iteration_token=None,
-        use_state_feedback=has_sf, sf_value_range=4,
+        use_state_feedback=has_sf, sf_value_range=sf_vr,
     )
     for _ in range(cfg["n_kernel_layers"]):
         model.add_kernel_layer()
@@ -41,7 +42,7 @@ def load_model(pt_path, device):
     return model, K
 
 
-def autoregressive_decode(model, n, K, device):
+def autoregressive_decode(model, n, K, device, mode="pegs"):
     inp_bytes = list(f"HANOI {n}".encode("utf-8"))
     prefix = [BOS] + inp_bytes + [SEP]
     sep_pos = len(prefix) - 1
@@ -50,15 +51,23 @@ def autoregressive_decode(model, n, K, device):
     tool = HanoiTool(n)
     cur = list(prefix)
     emitted = []
-    fb_history = [tool.feedback_channels(K)]
+    if mode == "pegs":
+        fb_fn = lambda: tool.feedback_channels(K)
+        n_ch = K
+    elif mode == "pegs_npar":
+        fb_fn = lambda: tool.feedback_channels_with_n(K)
+        n_ch = K + 1
+    else:  # full
+        fb_fn = lambda: tool.feedback_channels_full(K)
+        n_ch = K + 3
+    fb_history = [fb_fn()]
 
     max_steps = total_bytes + 8
     for step in range(max_steps):
         L = len(cur)
         toks = torch.tensor([cur], dtype=torch.long, device=device)
 
-        # Build state_channels tensor: (1, L, K). Default sentinel=3.
-        ch = torch.full((1, L, K), 3, dtype=torch.long, device=device)
+        ch = torch.full((1, L, n_ch), 3, dtype=torch.long, device=device)
         for k, vec in enumerate(fb_history):
             p = sep_pos + k
             if 0 <= p < L:
@@ -80,7 +89,7 @@ def autoregressive_decode(model, n, K, device):
         emitted.append(nxt)
         cur.append(nxt)
         tool.step(nxt)
-        fb_history.append(tool.feedback_channels(K))
+        fb_history.append(fb_fn())
 
     return bytes(b for b in emitted if b < 256)
 
@@ -89,6 +98,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pt", default="checkpoints/specialists/hanoi_step.pt")
     ap.add_argument("--ns", default="2,3,4,5,6,7,8,9,10")
+    ap.add_argument("--state-mode", choices=["pegs", "pegs_npar", "full"], default="pegs")
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
     args = ap.parse_args()
 
@@ -105,7 +115,7 @@ def main():
         n = int(s)
         expected = expected_trace(n)
         t0 = time.time()
-        got = autoregressive_decode(model, n, K, args.device)
+        got = autoregressive_decode(model, n, K, args.device, mode=args.state_mode)
         dt = time.time() - t0
         match = (got == expected)
         prefix = 0

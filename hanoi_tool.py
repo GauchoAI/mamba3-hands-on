@@ -146,6 +146,69 @@ class HanoiTool:
             out.append(3)
         return out
 
+    def feedback_channels_with_n(self, K: int) -> list[int]:
+        """Channel layout for the perfect-extension experiment:
+
+          channel 0      : n's parity (0 = even, 1 = odd) — controls
+                            the disk-1 cycle direction
+          channels 1..K  : peg of disk i (0=A, 1=B, 2=C, 3=none)
+
+        Total channels = K+1.
+        """
+        out = [self.n & 1]
+        out.extend(self.peg[:K])
+        while len(out) < K + 1:
+            out.append(3)
+        return out
+
+    def feedback_channels_full(self, K: int) -> list[int]:
+        """Complete state channel layout (per-disk):
+
+          channel 0      : n's parity (0 even, 1 odd)
+          channel 1      : current move-counter parity
+          channel 2      : byte position within current move (0..5)
+          channels 3..K+2: peg of disk i (0=A, 1=B, 2=C, 3=none)
+
+        Per-disk encoding scales with K and is OOD past trained K.
+        """
+        out = [self.n & 1, self.move_index & 1, len(self.partial)]
+        out.extend(self.peg[:K])
+        while len(out) < K + 3:
+            out.append(3)
+        return out
+
+    def feedback_channels_canonical(self) -> list[int]:
+        """Scale-invariant state: independent of n's value.
+
+          channel 0: n parity (cycle direction)
+          channel 1: move-counter parity (which kind of move)
+          channel 2: byte position within current move (0..5)
+          channel 3: top disk of peg A (smallest on it; 0 if empty)
+          channel 4: top disk of peg B
+          channel 5: top disk of peg C
+
+        FIXED 6 channels regardless of n. Top-of-peg is all the
+        Hanoi algorithm actually consults — every move is the top
+        of one peg moving to top of another.
+
+        Disk values use a small range: 0=empty, 1..n=disk id.
+        For n up to 15 we cap to 16. Sentinel = 0 (empty).
+        """
+        # Top of each peg = smallest disk index on it (1-indexed), or 0 if empty.
+        tops = [0, 0, 0]
+        for disk_idx, peg in enumerate(self.peg):
+            disk_id = disk_idx + 1
+            if tops[peg] == 0 or disk_id < tops[peg]:
+                tops[peg] = disk_id
+        return [
+            self.n & 1,
+            self.move_index & 1,
+            len(self.partial),
+            tops[0],
+            tops[1],
+            tops[2],
+        ]
+
 
 def precompute_feedback(n: int):
     """For training: compute the per-position feedback values that
@@ -167,18 +230,31 @@ def precompute_feedback(n: int):
     return feedback_per_pos[:-1]
 
 
-def precompute_channels(n: int, K: int) -> list[list[int]]:
-    """Multi-channel feedback: per-position list of K small ints.
-    Each list is the per-disk peg state. Disk k > n channels are
-    padded with sentinel (3 = 'none')."""
+def precompute_channels(n: int, K: int, mode: str = "pegs") -> list[list[int]]:
+    """Multi-channel feedback per position. mode in:
+      pegs:      per-disk pegs only (K channels)
+      pegs_npar: n's parity + per-disk pegs (K+1 channels)
+      full:      n_par + move_par + byte_pos + per-disk pegs (K+3 channels)
+      canonical: n_par + move_par + byte_pos + top-of-each-peg (6 channels, n-invariant)
+    """
     tool = HanoiTool(n)
     moves = tool.moves
-    out = [tool.feedback_channels(K)]
+    if mode == "pegs":
+        fb = lambda: tool.feedback_channels(K)
+    elif mode == "pegs_npar":
+        fb = lambda: tool.feedback_channels_with_n(K)
+    elif mode == "full":
+        fb = lambda: tool.feedback_channels_full(K)
+    elif mode == "canonical":
+        fb = lambda: tool.feedback_channels_canonical()
+    else:
+        raise ValueError(f"unknown mode {mode}")
+    out = [fb()]
     for k, src, dst in moves:
         s = f"{k} {PEG_NAMES[src]} {PEG_NAMES[dst]}\n"
         for ch in s:
             tool.step(ord(ch))
-            out.append(tool.feedback_channels(K))
+            out.append(fb())
     return out[:-1]
 
 
