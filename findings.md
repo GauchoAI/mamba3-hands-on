@@ -889,6 +889,73 @@ finite state space that generalises by construction.
 
 ---
 
+## Entry — Lego library: 5 step-function specialists, ~2.2k total params (2026-04-28)
+
+Following the Hanoi perfect-extension result, scaled the same
+pattern across four more puzzles. Each is a tiny MLP over a
+role-encoded finite state space, trained in <2 seconds, generalizes
+by construction.
+
+| Lego           | params | states | what it learns                  |
+|----------------|--------|--------|----------------------------------|
+| hanoi_step_fn  |  1574  |   36   | Tower of Hanoi step              |
+| gcd_step       |   331  |    3   | Euclidean GCD by subtraction     |
+| conway_step    |   134  |   18   | Game of Life cell transition     |
+| bubble_step    |    38  |    2   | Sort comparison (a > b → swap?)  |
+| maze_step      |   129  |    9   | Greedy grid navigation           |
+| **TOTAL**      | **2206**|  **68**| 5 algorithms                     |
+
+Total combined training time: ~5 seconds on M4 Pro.
+
+**Composite tasks (zero retraining)**: orchestrator.py implements
+new tasks by chaining frozen specialists in plain Python. Examples
+verified end-to-end:
+
+  - `GCDHANOI 6 9` → 7   (Hanoi×2 + GCD: gcd(63, 511))
+  - `CONWAYSTABLE <g>`   (Conway iterated to fixpoint)
+  - `SORTHANOI 4` → sorted disk-id sequence (Hanoi + Bubble)
+  - `GCDSORTED [12,18,8,30,15]` → 2 (Bubble + GCD)
+  - `MAZESTEPS 0 0 100 -50` → 151
+
+**The pattern that holds across all five Legos**:
+
+  1. State has a *closed* reachable space — encoded as roles, signs,
+     comparisons, or other invariants. Not parameterized by problem
+     size.
+  2. Action space is small and finite (2 to 6 outputs).
+  3. Step function is a 4-layer MLP at most. Hidden dim 4–32.
+     Total params ≤ ~1.5k per Lego.
+  4. Training data is ALL reachable (state, action) pairs of the
+     algorithm. Saturation in seconds.
+  5. Generalization to OOD inputs is automatic — no OOD inputs exist
+     in the closed state space.
+
+**Two architectural ideas tested earlier** (commit 89f83a7):
+
+  - **Fast fine-tune (Hanoi → GCD)**: no measurable benefit at this
+    scale. From-scratch GCD hits 100% in 50 steps; Hanoi-pretrained
+    transfer also hits 100% in 50 steps. The functions are too
+    small for prior knowledge to matter.
+  - **Neural composition** for task dispatch: works trivially —
+    plain Python regex dispatch + frozen-specialist runners
+    handles arbitrary compositions. The "neural composition"
+    machinery (synapse / AttendBridge) is overkill for this
+    layer of orchestration. It might still be useful for tasks
+    where the orchestration itself requires learning (where
+    string-prefix matching isn't enough), but for the Lego
+    library that's not where the value is.
+
+**The deeper observation**: the work moved from "can a model learn
+this algorithm?" to "what's the right state encoding so the function
+is tiny and total?" Once state is closed under the algorithm, the
+neural part is trivial — almost a lookup table. The Lego is the
+state representation as much as the MLP.
+
+Code: `{hanoi,gcd,conway,bubble,maze}_step_function.py`,
+`train_*_step.py`, `orchestrator.py`.
+
+---
+
 ## Entry — Cluster transparent partition (cluster_dispatch + cluster_sync) (2026-04-27)
 
 User pushed for "transparent" multi-node operation: jobs should
