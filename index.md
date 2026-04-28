@@ -109,9 +109,9 @@ creates* these specialists at runtime.
 The original target of the repo. Pure-PyTorch implementation of the
 three innovations from Lahoti et al. (ICLR 2026):
 
-- Trapezoidal (2nd-order) discretization via a data-dependent gate `trap`.
-- Complex-valued dynamics via data-dependent RoPE applied to B and C.
-- (MIMO omitted; SISO rank-1 version for clarity.)
+- **Trapezoidal (2nd-order) discretization via a data-dependent gate `trap`.** Mamba-2 turns the continuous-time recurrence into discrete steps with a 1st-order Euler-like rule. Mamba-3 uses the 2nd-order trapezoidal rule instead, blended per timestep by `trap` (a sigmoid the model predicts from the input). The blend is data-dependent: the model decides per token how much "current input" vs "previous derivative" to mix. Better numerical accuracy on long sequences without adding parameters.
+- **Complex-valued dynamics via data-dependent RoPE on B and C.** B and C are the SSM's input/output projections — **B** writes the current input into the hidden state, **C** reads the hidden state out. In Mamba-2 these are real-valued, so the hidden state can decay, accumulate, or gate, but it cannot *rotate*; anything periodic (parity, mod-counting, phase structure) is hard to learn. Mamba-3 predicts a small set of rotation angles from the input itself at every step and applies them to B and C as Rotary Position Embeddings *before* the scan. The result is complex-valued dynamics: the hidden state evolves through phase rotations the model controls based on what it just saw. This is what made parity at L=16 jump from ~56 % (Mamba-2-like) to 99.9 % (Mamba-3); the phase probe in `findings.md` Entry 3 caught the model learning exactly −π on one component for bit=1 — a textbook signature of "I'm using rotation to encode parity."
+- (MIMO is omitted in our reference; we use the SISO rank-1 version for clarity.)
 
 Sequential scan; no fused kernels in the daily-driver path.
 
