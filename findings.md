@@ -11,6 +11,61 @@ Silicon MPS. Each entry corresponds to a commit.
 
 ---
 
+## Entry — Tool routing inside Mamba-3: regex stub replaced by a 45k-param byte classifier (2026-04-28)
+
+Took the next step on yesterday's harness: the router that picks which
+specialist to call is now a Mamba-3 forward pass over hidden state, not
+keyword scoring. `train_tool_router.py` generates synthetic prompts
+(many phrasings per tool, mixed casing/punctuation/Spanish/English/
+decoys), trains a 45,459-param Mamba-3 byte-level classifier (1 block,
+d=64) over 96-byte prompts, mean-pools over non-pad positions, and
+softmaxes over `{hanoi_solver, gcd, gcdhanoi}`.
+
+Trained on `m4-mini` via `cluster_dispatch.py`, 1500 steps in 1322 s
+(~22 min). Best val acc 100.0000 % on a 1024-example held-out synthetic
+split, reached at step 200 and stable through step 1500.
+
+`assistant.py` now takes `--router-checkpoint`. With it, the trace line
+shows the per-tool softmax probabilities instead of keyword scores:
+
+```
+> Solve Tower of Hanoi with 12 disks
+  [trace] router(mamba3): probs={hanoi_solver=1.000, gcd=0.000, gcdhanoi=0.000};
+          chose=hanoi_solver; args={'n': 12}
+The optimal solution to Tower of Hanoi with 12 disks requires 4,095 moves.
+The Hanoi GRU (45,318 parameters) reproduced this in 2,849 ms.
+```
+
+**The harness is now two Mamba-3-class models in series, both ~45k
+params:** the byte-level router decides *which* specialist to call;
+the order-invariant GRU specialist does the recursive computation.
+The combined system answers natural-language Hanoi prompts at any n
+within `n_max_pad`, with a fully auditable trace.
+
+**Out-of-distribution paraphrase check.** Phrasings the router never
+saw during training, picked correctly:
+
+  - "I'd like the move count for an 8-disk tower puzzle" → hanoi_solver
+  - "common divisor of 144 and 60 please" → gcd
+
+The router generalizes beyond the literal training templates, which is
+the property we needed it to have for the Mamba-3-as-router substitution
+to be honest. Argument extraction (the `n`, the `(a, b)` pair) stays
+as regex on purpose — pulling integers out of text is not the part
+that benefits from a learned head.
+
+**What's next on this thread.** The renderer is still templates. The
+substitution path is the same shape: replace `render(tool, args, result)`
+with a forward pass through the bilingual char-LM, conditioned on the
+structured payload. That demonstrates the third leg of the thesis:
+language is the *output translator* of the inner computation, not the
+medium it happens in.
+
+Files: `train_tool_router.py`, `assistant.py` updates. Checkpoint:
+`checkpoints/tool_router_mamba3.pt` (182 KB). Commit `af99190`.
+
+---
+
 ## Entry — First-class harness: language as translation layer, demoed end-to-end (2026-04-28)
 
 Wired the thesis up as a working artifact. `assistant.py` is a 220-line
