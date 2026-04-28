@@ -58,6 +58,26 @@ N_SMALL = 10
 N_LARGE = 10
 
 
+def legal_action_mask(state, n_max_pad):
+    """For each (src, dst) action, returns True if that move is legal.
+    Returns shape (B, N_ACTIONS). Mask out at inference to forbid the
+    model from predicting impossible moves.
+    """
+    big = n_max_pad + 100
+    top_p0 = np.where(state == 0, np.arange(state.shape[1])[None, :], big).min(axis=1)
+    top_p1 = np.where(state == 1, np.arange(state.shape[1])[None, :], big).min(axis=1)
+    top_p2 = np.where(state == 2, np.arange(state.shape[1])[None, :], big).min(axis=1)
+    top = np.stack([top_p0, top_p1, top_p2], axis=-1)        # (B, 3)
+    B = state.shape[0]
+    mask = np.zeros((B, N_ACTIONS), dtype=np.bool_)
+    for i, (src, dst) in enumerate(ACTION_PAIRS):
+        # legal iff src has a disk AND dst has empty or larger top
+        src_has = top[:, src] < big
+        dst_ok = (top[:, dst] == big) | (top[:, dst] > top[:, src])
+        mask[:, i] = src_has & dst_ok
+    return mask
+
+
 def role_features(state, n_max_pad):
     """Role-based features. For n <= N_SMALL+N_LARGE the smallest+largest
     rolls cover all disks (with overlap). For n > N_SMALL+N_LARGE there's
@@ -167,6 +187,8 @@ def train_and_test(train_ns, test_ns, n_max_pad, steps,
     best_state = None
     test_a_t = torch.tensor(test_feats, device=device)
     test_y_t = torch.tensor(test_actions, device=device)
+    # Pre-compute legal-action masks for held-out (used at inference)
+    test_legal_t = torch.tensor(legal_action_mask(test_states, n_max_pad), device=device)
 
     for step in range(steps):
         idx = rng.integers(0, N, size=batch)
@@ -179,7 +201,9 @@ def train_and_test(train_ns, test_ns, n_max_pad, steps,
         opt.step(); sched.step()
         if (step + 1) % 500 == 0:
             with torch.no_grad():
-                test_acc = (model(test_a_t).argmax(-1) == test_y_t).float().mean().item()
+                # Apply legal-move mask: forbid predicting impossible moves
+                logits = model(test_a_t).masked_fill(~test_legal_t, -1e9)
+                test_acc = (logits.argmax(-1) == test_y_t).float().mean().item()
             if test_acc > best_test_acc:
                 best_test_acc = test_acc
                 best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
@@ -192,11 +216,11 @@ def train_and_test(train_ns, test_ns, n_max_pad, steps,
 
     if best_state is not None:
         model.load_state_dict(best_state)
-    print("\nFinal eval:")
+    print("\nFinal eval (with legal-move mask at inference):")
     with torch.no_grad():
         train_acc = (model(torch.tensor(train_feats, device=device)).argmax(-1)
                      == torch.tensor(train_actions, device=device)).float().mean().item()
-        t_logits = model(test_a_t)
+        t_logits = model(test_a_t).masked_fill(~test_legal_t, -1e9)
         test_acc = (t_logits.argmax(-1) == test_y_t).float().mean().item()
     print(f"  Train: {train_acc:.4%}")
     print(f"  Held-out test: {test_acc:.4%}")
