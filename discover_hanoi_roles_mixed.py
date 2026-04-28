@@ -169,6 +169,7 @@ def main():
                     default="8x3,10x3,12x3",
                     help="comma-sep KxS, e.g. '8x3,10x3,12x3' = 3 seeds at K=8, 3 at K=10, 3 at K=12")
     ap.add_argument("--device", default="mps" if torch.backends.mps.is_available() else "cpu")
+    ap.add_argument("--save-to", type=str, default="checkpoints/hanoi_role_ensemble.pt")
     args = ap.parse_args()
     print(f"Device: {args.device}")
 
@@ -228,6 +229,18 @@ def main():
         nc = int((pred_np[mask] == test_actions[mask]).sum())
         nt = int(mask.sum())
         print(f"    n={n}: {nc}/{nt} ({100*nc/nt:.6f}%)")
+
+    # Save the ensemble for later use by hanoi_solve.py
+    if args.save_to:
+        from pathlib import Path
+        Path(args.save_to).parent.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            "models": [(model.state_dict(), K) for model, K, _ in models],
+            "n_max_pad": args.n_max_pad,
+            "config": [(K, S) for K, S in config],
+            "train_ns": args.train_ns,
+        }, args.save_to)
+        print(f"\nSaved ensemble → {args.save_to}")
 
 
 if __name__ == "__main__":
