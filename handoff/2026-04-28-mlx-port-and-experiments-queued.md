@@ -146,6 +146,17 @@ Tatoeba/OpenSubtitles — a real question even if non-textbook.
 
 ---
 
+## Parallel JEPA-Cortex work (already in tree)
+
+Discovered in `jepa/` after sign-off: a substantial parallel experiment
+ships with its own copy of `cortex_counting.py` + `mamba3_minimal.py`
+to isolate edits, plus `arch.py` (ThoughtHead, jepa_loss, sigreg
+Cramér-Wold isotropy regularizer), `make_teacher_thoughts.py`,
+`data_loader.py`, `train.py`, `eval_daemon.py`, `talk.py`. Designed
+to run on a rented CUDA box with hidden-state-trajectory distillation
+from Qwen-2.5-1.5B-Instruct. **Do not duplicate this work** — it's
+the rigorous distillation path the README edit was anchoring to.
+
 ## Risks and unknowns
 
 - **Counter-attach generalization.** The actual research question:
