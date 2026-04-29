@@ -120,6 +120,26 @@ class LMTrainConfig:
     d_state: int = 16
     expand: int = 2
     headdim: int = 16
+    dtype: str = "float32"   # "float32" | "bfloat16"
+
+
+def _cast_tree(tree, dtype):
+    """Recursively cast all mx.array leaves to `dtype`."""
+    if isinstance(tree, dict):
+        return {k: _cast_tree(v, dtype) for k, v in tree.items()}
+    if isinstance(tree, list):
+        return [_cast_tree(v, dtype) for v in tree]
+    if isinstance(tree, mx.array):
+        return tree.astype(dtype)
+    return tree
+
+
+_DTYPE_MAP = {
+    "float32": mx.float32,
+    "fp32": mx.float32,
+    "bfloat16": mx.bfloat16,
+    "bf16": mx.bfloat16,
+}
 
 
 def lr_at(step, warmup, total):
@@ -170,6 +190,12 @@ def train(cfg: LMTrainConfig, resume: str | None = None):
         vocab_size=256, max_seq_len=cfg.seq_len,
     )
     model = CortexLM(lm_cfg)
+    if cfg.dtype not in _DTYPE_MAP:
+        raise ValueError(f"unknown dtype: {cfg.dtype}")
+    dtype = _DTYPE_MAP[cfg.dtype]
+    if dtype != mx.float32:
+        model.update(_cast_tree(model.parameters(), dtype))
+        print(f"cast model parameters -> {cfg.dtype}")
     mx.eval(model.parameters())
 
     opt = optim.AdamW(learning_rate=cfg.lr, weight_decay=cfg.weight_decay,
@@ -268,6 +294,8 @@ def main():
     ap.add_argument("--log-every", type=int, default=100)
     ap.add_argument("--resume", default=None)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--dtype", default="float32",
+                    choices=["float32", "fp32", "bfloat16", "bf16"])
     args = ap.parse_args()
 
     cfg = LMTrainConfig(
@@ -275,6 +303,7 @@ def main():
         total_steps=args.steps, seq_len=args.seq_len, batch_size=args.batch_size,
         lr=args.lr, n_layers=args.n_layers, d_model=args.d_model,
         ckpt_every=args.ckpt_every, log_every=args.log_every, seed=args.seed,
+        dtype=args.dtype,
     )
     train(cfg, resume=args.resume)
 
