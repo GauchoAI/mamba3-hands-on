@@ -5,7 +5,8 @@ official-mamba/
 *.pt
 *.pth
 .DS_Store
-data/
+data/*
+!data/README.md
 .env
 *.db
 *.db-shm
