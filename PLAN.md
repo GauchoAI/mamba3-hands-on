@@ -67,15 +67,29 @@ in place.
 
 ### Workstream E — Distillation (the meta-lever)
 
+**Reality check: tokenizer mismatch (byte-level student, BPE teacher)
+ruled out direct logit KL distillation.** Pivoted to Path A —
+pseudo-label distillation: generate text from teacher, train student
+on it as plain corpus.
+
 | # | Commit | Validation gate | Status |
 |---|---|---|---|
-| 12 | `distill_teacher.py`: cache teacher per-token logits to sharded `.npz` | shard files load, distribution sums to 1, top tokens sane | **planned** |
-| 13 | KL distillation loss in MLX trainer (`α·CE + (1-α)·KL`) | KL decreases monotonically | **planned** |
-| 14 | Distillation training run (~5000 steps) | sample comparison vs from-scratch baseline | **planned** |
+| 12 | `make_teacher_corpus.py`: Qwen-2.5-1.5B-4bit on m4-mini via mlx-lm; produces `<en> :: <es>\n` pairs + cortex unary mixin | smoke parses cleanly, samples are real bilingual text | **done** (`6d9bbc9`) |
+| 13 | (no new script) `train_bilingual_mlx.py --corpus data/teacher_corpus.txt` | n/a — existing trainer is corpus-agnostic | **ready** |
+| 14 | Run student training on teacher corpus, compare to Tatoeba baseline at same step count | sample-quality A/B at fixed steps | **awaiting teacher corpus** |
 
-**Teacher candidate:** Llama-3.2-1B (multilingual, ~2.5 GB) or
-Bloom-560M (smaller, multilingual). Run on m4-mini's 4 TB disk
-overnight via `cluster_dispatch.py` (M4 Pro has only 50 GB free).
+**Teacher run live state:** PID 27750 on m4-mini, nohup'd.
+Target 20 MB, generation rate ~9-15 KB/min (smoke-test measured at
+~9 KB/min, will be a touch faster with bigger pairs-per-prompt).
+ETA: ~24-37 hours to fill the target.
+
+Corpus accumulates incrementally; usable from ~5 MB (~7 hours) for
+preliminary student training. Full 20 MB is overnight + day.
+
+Sync when ready:
+```bash
+rsync -av miguel_lemos@192.168.0.170:~/mamba3-hands-on/data/teacher_corpus.txt data/
+```
 
 ### Workstream F — The headline experiment
 
