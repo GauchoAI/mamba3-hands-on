@@ -81,7 +81,29 @@ gets translated to the user's language by a fourth.
 The honest inventory the user asked for, after today's work:
 
 **Closed today:**
-- ~~`gcdhanoi` doesn't actually invoke the Hanoi GRU.~~ Done.
+- ~~`gcdhanoi` doesn't actually invoke the Hanoi GRU.~~ Done (commit `429c2c5`).
+- ~~`gcd` is `math.gcd`, not the GCD Lego.~~ Done. Wired the trained 331-param `GCDStepMLP` from `checkpoints/specialists/gcd_step.pt`. Trace shows real iter-count per call, e.g. `gcd(1729, 1001)` = 6 subtraction steps via the Lego (commit `38ed910`).
+- ~~Language picked randomly.~~ Done. Heuristic `_detect_lang()` in the orchestrator + `|lang=XX` field at the end of every structured payload + renderer retrained with lang-conditional templates. val_loss collapsed to 0.0000 — the LM perfectly learned to switch templates on the lang field. 8/8 EN/ES paired prompts in the demo produce matching-language outputs (commit `6cee41f`).
+
+**Side-by-side EN/ES demo, same content both languages:**
+
+```
+> Solve Tower of Hanoi with 12 disks
+The optimal solution to Tower of Hanoi with 12 disks requires 4,095 moves.
+
+> Resuelve la Torre de Hanoi con 12 discos
+La solución óptima de la Torre de Hanoi con 12 discos requiere 4,095 movimientos.
+
+> Compute the gcd of Hanoi 6 and Hanoi 9
+Hanoi(6) needs 63 moves; Hanoi(9) needs 511 moves; their gcd is 7.
+
+> Calcula el mcd de Hanoi 6 y Hanoi 9
+Hanoi(6) requiere 63 movimientos; Hanoi(9) requiere 511 movimientos; su mcd es 7.
+```
+
+Five learned models in the composite case:
+router (45,589 params) → 2× Hanoi GRU (45,318 params each) → GCD Lego (331 params) → renderer (74,400 params).
+~210k learned parameters total in the chain.
 
 **Still scaffolding (deliberate, with upgrade paths):**
 - **`gcd`, `fibonacci`, `factorial` are Python stdlib.** The Lego library
