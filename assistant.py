@@ -470,19 +470,45 @@ def _load_renderer(ckpt_path: str):
     return model, ck["tokens"], kind
 
 
+# Simple Spanish-trigger heuristic. Not learned; that's a future thing — for
+# now this is enough to pass language matching through to the renderer as a
+# payload field, and the renderer learns to emit in the matched language.
+_ES_TRIGGERS = {
+    "qué", "que", "es", "el", "la", "los", "las", "máximo", "comun", "común",
+    "ésimo", "ésima", "factorial de", "número", "divisor", "discos",
+    "torre", "movimientos", "mcd", "fibonacci de",
+}
+
+
+def _detect_lang(text: str) -> str:
+    """Return 'es' if the prompt looks Spanish, else 'en'."""
+    lo = text.lower()
+    for trig in _ES_TRIGGERS:
+        if trig in lo:
+            return "es"
+    return "en"
+
+
+# Set by main(): the prompt's detected language is captured here so payload
+# strings can include it without threading the prompt through every call.
+_CURRENT_LANG = "en"
+
+
 def _payload_string(tool: Tool, result: ToolResult) -> str | None:
-    """Canonical pipe-delimited payload that matches the renderer's training format."""
+    """Canonical pipe-delimited payload that matches the renderer's training format.
+    The trailing |lang=XX field tells the renderer which output language to use."""
     p = result.payload
+    lang = _CURRENT_LANG
     if tool.name == "hanoi_solver":
-        return f"hanoi_solver|n={p['n']}|optimal={p['optimal_moves']}|params={p['params']}|timing={int(result.timing_ms)}"
+        return f"hanoi_solver|n={p['n']}|optimal={p['optimal_moves']}|params={p['params']}|timing={int(result.timing_ms)}|lang={lang}"
     if tool.name == "gcd":
-        return f"gcd|a={p['a']}|b={p['b']}|gcd={p['gcd']}"
+        return f"gcd|a={p['a']}|b={p['b']}|gcd={p['gcd']}|lang={lang}"
     if tool.name == "gcdhanoi":
-        return f"gcdhanoi|a={p['a']}|b={p['b']}|moves_a={p['moves_a']}|moves_b={p['moves_b']}|gcd={p['gcd_of_move_counts']}"
+        return f"gcdhanoi|a={p['a']}|b={p['b']}|moves_a={p['moves_a']}|moves_b={p['moves_b']}|gcd={p['gcd_of_move_counts']}|lang={lang}"
     if tool.name == "fibonacci":
-        return f"fibonacci|n={p['n']}|fibonacci={p['fibonacci']}"
+        return f"fibonacci|n={p['n']}|fibonacci={p['fibonacci']}|lang={lang}"
     if tool.name == "factorial":
-        return f"factorial|n={p['n']}|factorial={p['factorial']}"
+        return f"factorial|n={p['n']}|factorial={p['factorial']}|lang={lang}"
     return None
 
 
@@ -620,9 +646,11 @@ def render(tool: Tool, args: dict, result: ToolResult) -> str:
 
 def answer(text: str, verbose: bool = True) -> str:
     """End-to-end: text in, language out."""
+    global _CURRENT_LANG
+    _CURRENT_LANG = _detect_lang(text)
     tool, args, trace = route(text)
     if verbose:
-        print(f"  [trace] {trace}")
+        print(f"  [trace] {trace}  lang={_CURRENT_LANG}")
     if tool is None or args is None:
         return "I don't have a specialist for that yet."
     if verbose:

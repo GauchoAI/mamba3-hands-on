@@ -71,20 +71,23 @@ MAX_LEN = 256
 # ---------------------------------------------------- synthetic targets ---
 
 
+def _pick_lang(rng: random.Random) -> str:
+    return rng.choice(["en", "es"])
+
+
 def hanoi_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     n = rng.randint(2, 23)
     optimal = (1 << n) - 1
     params = 45318
     timing = rng.randint(50, 5000)
-    payload = f"hanoi_solver|n={n}|optimal={optimal}|params={params}|timing={timing}"
-    # Templates with named placeholders + bilingual phrasings. The LM
-    # produces the language form; the orchestrator substitutes from the
-    # payload. Multiple phrasings (EN + ES) test the literal "language as
-    # translation layer" thesis — same payload, two output languages.
-    sentences = [
-        "The optimal solution to Tower of Hanoi with $N disks requires $OPTIMAL moves.",
-        "La solución óptima de la Torre de Hanoi con $N discos requiere $OPTIMAL movimientos.",
-    ]
+    lang = _pick_lang(rng)
+    payload = f"hanoi_solver|n={n}|optimal={optimal}|params={params}|timing={timing}|lang={lang}"
+    # Templates per language. The trailing lang field in the payload tells
+    # the renderer which output language to emit. Same content, two forms.
+    if lang == "en":
+        sentences = ["The optimal solution to Tower of Hanoi with $N disks requires $OPTIMAL moves."]
+    else:
+        sentences = ["La solución óptima de la Torre de Hanoi con $N discos requiere $OPTIMAL movimientos."]
     return payload, sentences
 
 
@@ -92,11 +95,12 @@ def gcd_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     a = rng.randint(2, 9999)
     b = rng.randint(2, 9999)
     g = math.gcd(a, b)
-    payload = f"gcd|a={a}|b={b}|gcd={g}"
-    sentences = [
-        "The greatest common divisor of $A and $B is $GCD.",
-        "El máximo común divisor de $A y $B es $GCD.",
-    ]
+    lang = _pick_lang(rng)
+    payload = f"gcd|a={a}|b={b}|gcd={g}|lang={lang}"
+    if lang == "en":
+        sentences = ["The greatest common divisor of $A and $B is $GCD."]
+    else:
+        sentences = ["El máximo común divisor de $A y $B es $GCD."]
     return payload, sentences
 
 
@@ -106,11 +110,12 @@ def gcdhanoi_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     ma = (1 << a) - 1
     mb = (1 << b) - 1
     g = math.gcd(ma, mb)
-    payload = f"gcdhanoi|a={a}|b={b}|moves_a={ma}|moves_b={mb}|gcd={g}"
-    sentences = [
-        "Hanoi($A) needs $MOVES_A moves; Hanoi($B) needs $MOVES_B moves; their gcd is $GCD.",
-        "Hanoi($A) requiere $MOVES_A movimientos; Hanoi($B) requiere $MOVES_B movimientos; su mcd es $GCD.",
-    ]
+    lang = _pick_lang(rng)
+    payload = f"gcdhanoi|a={a}|b={b}|moves_a={ma}|moves_b={mb}|gcd={g}|lang={lang}"
+    if lang == "en":
+        sentences = ["Hanoi($A) needs $MOVES_A moves; Hanoi($B) needs $MOVES_B moves; their gcd is $GCD."]
+    else:
+        sentences = ["Hanoi($A) requiere $MOVES_A movimientos; Hanoi($B) requiere $MOVES_B movimientos; su mcd es $GCD."]
     return payload, sentences
 
 
@@ -119,12 +124,12 @@ def fibonacci_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]
     a, b = 0, 1
     for _ in range(n):
         a, b = b, a + b
-    payload = f"fibonacci|n={n}|fibonacci={a}"
-    sentences = [
-        "The $N-th Fibonacci number is $RESULT.",
-        "F($N) = $RESULT.",
-        "El $N-ésimo número de Fibonacci es $RESULT.",
-    ]
+    lang = _pick_lang(rng)
+    payload = f"fibonacci|n={n}|fibonacci={a}|lang={lang}"
+    if lang == "en":
+        sentences = ["The $N-th Fibonacci number is $RESULT."]
+    else:
+        sentences = ["El $N-ésimo número de Fibonacci es $RESULT."]
     return payload, sentences
 
 
@@ -133,12 +138,12 @@ def factorial_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]
     r = 1
     for i in range(2, n + 1):
         r *= i
-    payload = f"factorial|n={n}|factorial={r}"
-    sentences = [
-        "$N! = $RESULT.",
-        "The factorial of $N is $RESULT.",
-        "El factorial de $N es $RESULT.",
-    ]
+    lang = _pick_lang(rng)
+    payload = f"factorial|n={n}|factorial={r}|lang={lang}"
+    if lang == "en":
+        sentences = ["The factorial of $N is $RESULT."]
+    else:
+        sentences = ["El factorial de $N es $RESULT."]
     return payload, sentences
 
 
