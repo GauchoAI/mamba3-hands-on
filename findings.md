@@ -11,6 +11,132 @@ Silicon MPS. Each entry corresponds to a commit.
 
 ---
 
+## Entry — Counter primitive on a frozen bilingual LM: partial composition (2026-04-29)
+
+The cortex thesis stress-tested on a real, language-trained host LM
+rather than the synthetic counting-only LM that produced the
+byte-perfect existence proof on 2026-04-28.
+
+**Setup.** A 472,960-param byte-level Mamba-3 LM (4 layers, d_model=128)
+trained for 10,000 steps on the 17.7 MB Tatoeba en-es corpus + 5%
+unary cortex mixin. Loss settled at ~1.0 bpc 1.45 bpc-by-the-end.
+Then froze every weight, attached a fresh `CounterPrimitive` sized
+to d_model=128 (1,028 trainable params), and fine-tuned only those
+adapters for 1000 steps on a 50/50 mix of bilingual and unary
+batches. λ_aux=0.5 BCE on inc_logits, lr=3e-3. Aux loss converged
+crisply (0.354 → 0.0001) — the gates fire correctly on `*` and
+`a` bytes through the bilingual LM's hidden state.
+
+Eval at hard_gates_inference=True. Side-by-side vs the same LM
+without the counter:
+
+```
+N      baseline                cortex+counter
+3      FAIL → 7                OK ✓                    ← cortex helps at small N
+10     FAIL → 14               FAIL → 9                ← off by 1
+30     FAIL → 31               FAIL → 29               ← off by 1, IN-DISTRIBUTION
+50     FAIL → 54               FAIL → 48
+100    FAIL → None             FAIL → None             ← both drop out of unary
+200    FAIL → 65               FAIL → 34               ← cortex worse here
+500    FAIL → 33               FAIL → 33
+```
+
+Counter-attached samples at training-distribution prompts:
+- `*****:` → 4 a's (should be 5) ← off by one
+- `**********:` → 9 a's (should be 10) ← off by one
+- `***************:` → 16 a's (should be 15) ← off by one in the other direction
+
+**The honest read.**
+
+This is *not* the byte-perfect demo the synthetic-LM cortex experiment
+produced. It is also *not* a null result — three concrete things
+are validated and three are not.
+
+What the experiment validated:
+1. **The plugin interface holds.** A 1,028-param adapter (0.22% of LM
+   params) attached to a fully frozen 472k-param language-trained LM,
+   trained against the same aux-supervision recipe, learns to fire on
+   the right bytes. The pluggable `Primitive` class works as designed
+   on a non-toy host.
+2. **The bilingual LM is not destabilised.** Bilingual probes
+   (`'The cat '`, `'¿Dónde '`, etc.) produce the same family of
+   outputs whether the counter is attached or not. The counter
+   contributes additively without trampling the LM's language
+   ability.
+3. **Counter helps at small N.** At N=3 the baseline overshoots to
+   7 a's (it pattern-matches "in unary mode emit ~7 things"); the
+   cortex version emits exactly 3. The counter's signal *is* getting
+   through and is affecting the right decision.
+
+What the experiment *did not* validate:
+1. **Byte-perfect counting at training-distribution N.** Even at N=30
+   the cortex version is off by one, emitting 29 a's. The synthetic-LM
+   experiment was byte-perfect at every N up to 500.
+2. **Strong OOD extension.** At N=200 the cortex version produces 34
+   a's (not 200); at N=500 it produces 33. The synthetic-LM cortex
+   produced 500 of 500 byte-perfect at the same N.
+3. **Train-free composition in the strong sense.** The plugin needed
+   1000 fine-tune steps; that's "small adapter fine-tune", not
+   "frozen plugin attaches and works". A pre-trained CounterPrimitive
+   from the synthetic experiment did not transfer (different d_model,
+   different hidden-state distribution at unary positions).
+
+**Diagnosis: distribution-shift on the counter readout.**
+
+The systematic off-by-one pattern is the smoking gun. The bilingual
+LM's hidden state at `*` and `a` byte positions encodes "I am
+reading the unary form" — that's the signal `inc_proj` learned
+to read, and aux loss confirms gates fire correctly. But the
+read_proj has to convert the counter state into a residual injection
+that the *frozen, pre-trained* head will read as "emit `a`" vs
+"emit `\n`". On the synthetic LM this was learnable end-to-end. On
+this frozen bilingual LM, the head's natural disposition (trained
+on `*N:aN\n` lines where N≤30, average ~15) carries a strong
+bias toward emitting `\n` near the end of unary runs. The counter's
+"still counting" signal isn't dominant enough to overcome it; the
+LM emits `\n` one position early.
+
+Things that would likely fix the off-by-one:
+- Higher `injection_scale` (currently 10) — loud the counter more.
+- Aux supervision on `\n` emission too (predict newline target),
+  not just `inc` gates.
+- Train at more diverse N values so the LM doesn't have such a
+  strong "newline by ~15-30" prior.
+- Or: the right architectural change is to give the counter a path
+  that bypasses the head's tied-embedding bottleneck — but Phase 4
+  of the synthetic experiment showed direct head-bias paths regress
+  via capacity-splitting.
+
+**The actual position this leaves us in.**
+
+The cortex thesis survives but with a sharper statement: forward-pass
+primitives extend a language-trained LM's reasoning capability *with
+fine-tuning of small adapters*, but the strong claim ("primitive
+attaches and works without LM-side adaptation") is unproven and the
+off-by-one suggests the more honest framing is "small-adapter
+fine-tune, not adapter-free plug-in."
+
+This points at the JEPA-Cortex direction (jepa/) the user was
+preparing in parallel: rigorous hidden-state distillation gives
+the student LM a more *informationally rich* hidden state than
+plain byte-CE training, which in turn should give residual-stream
+primitives a cleaner attachment surface. That is the experiment
+that would actually validate the strong plug-and-play claim.
+
+Reproduction:
+```bash
+python train_counter_attach.py \
+    --lm-ckpt checkpoints/lm/step_FINAL.pt \
+    --steps 1000 --unary-p 0.5 --lambda-aux 0.5 --lr 3e-3
+python demo_cortex.py
+```
+
+Both checkpoints under `checkpoints/lm/` (frozen bilingual LM) and
+`checkpoints/lm_counter/` (LM + trained counter adapter) — ~5.5 MB
+each. ~26 min total on M4 Pro MPS (training + eval).
+
+---
+
 ## Entry — Renderer LM + the digit-copy failure (2026-04-28)
 
 Closed the third leg of the harness: a tiny Mamba-3 conditional LM that
