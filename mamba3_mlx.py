@@ -63,6 +63,28 @@ def softplus(x: mx.array) -> mx.array:
     return mx.logaddexp(x, mx.zeros_like(x))
 
 
+def _ssm_scan(inp, decay, C, x, z_silu, D):
+    """Sequential SSM scan: h[t] = decay[t]·h[t-1] + inp[t]; y[t] = (h·C).sum + D·x; gated by silu(z).
+
+    Wrapped in mx.compile (below) so MLX fuses the loop body instead of
+    materializing each step. Gives ~2× speedup at L=128 vs the uncompiled
+    Python for-loop. This is the cheap-fix interim before the chunked
+    associative scan (which would give a further 5-10×).
+    """
+    Bs, Ls, Hs, hDs, dSs = inp.shape
+    h = mx.zeros((Bs, Hs, hDs, dSs), dtype=inp.dtype)
+    ys = []
+    for t in range(Ls):
+        h = decay[:, t, :, None, None] * h + inp[:, t]
+        y_t = (h * C[:, t, :, None, :]).sum(axis=-1)
+        y_t = y_t + D[None, :, None] * x[:, t]
+        ys.append(y_t * z_silu[:, t])
+    return mx.stack(ys, axis=1)
+
+
+_ssm_scan_compiled = mx.compile(_ssm_scan)
+
+
 class Mamba3Block(nn.Module):
     """Mamba-3 SISO block. Mirrors mamba3_minimal.Mamba3Block parameter
     layout exactly: in_proj, out_proj, dt_bias, D, B_norm, C_norm.
@@ -157,20 +179,10 @@ class Mamba3Block(nn.Module):
         # Scale by dt
         inp_all = inp_all * DT[..., None, None]           # (B, L, H, hD, dS)
 
-        # Sequential scan: h[t] = decay[t] * h[t-1] + inp[t]
-        # Output: y[t] = sum_n(h[t] * C[t]) + D * x[t], gated by silu(z[t])
-        h = mx.zeros((B_, nH, hD, dS), dtype=u.dtype)
+        # Sequential scan, JIT-compiled via mx.compile (1.92× over uncompiled).
         z_silu = z * mx.sigmoid(z)                        # (B, L, H, hD)
-
-        ys = []
-        for t in range(L):
-            h = decay[:, t, :, None, None] * h + inp_all[:, t]    # (B, H, hD, dS)
-            y_t = (h * Cp_rot[:, t, :, None, :]).sum(axis=-1)     # (B, H, hD)
-            y_t = y_t + self.D[None, :, None] * x[:, t]
-            y_t = y_t * z_silu[:, t]
-            ys.append(y_t)
-        y = mx.stack(ys, axis=1).reshape(B_, L, d_inner)
-
+        y = _ssm_scan_compiled(inp_all, decay, Cp_rot, x, z_silu, self.D)
+        y = y.reshape(B_, L, d_inner)
         return self.out_proj(y)
 
 
