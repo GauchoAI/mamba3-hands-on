@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from mamba3_minimal import Mamba3Block, Mamba3Config
 
 
-TOOLS = ["hanoi_solver", "gcd", "gcdhanoi"]
+TOOLS = ["hanoi_solver", "gcd", "gcdhanoi", "fibonacci", "factorial"]
 TOOL_TO_IDX = {t: i for i, t in enumerate(TOOLS)}
 N_TOOLS = len(TOOLS)
 VOCAB = 256
@@ -92,6 +92,37 @@ GCDHANOI_TEMPLATES = [
     "mcd de hanoi {a} y hanoi {b}",
 ]
 
+FIBONACCI_TEMPLATES = [
+    "what is fibonacci {n}?",
+    "fibonacci {n}",
+    "compute F({n})",
+    "what is F({n})?",
+    "the {n}th fibonacci number",
+    "fib({n})",
+    "fib {n}",
+    "give me F({n})",
+    "{n}th fibonacci",
+    "Fibonacci of {n}",
+    "el {n}-ésimo número de fibonacci",
+    "número de fibonacci {n}",
+    "fibonacci de {n}",
+]
+
+FACTORIAL_TEMPLATES = [
+    "what is {n}!?",
+    "{n}!",
+    "compute {n}!",
+    "factorial of {n}",
+    "the factorial of {n}",
+    "{n} factorial",
+    "{n}-factorial",
+    "compute the factorial of {n}",
+    "what is the factorial of {n}?",
+    "factorial({n})",
+    "factorial de {n}",
+    "el factorial de {n}",
+]
+
 # Decoys — phrases that contain the keywords but with different intent.
 # Adding these lets the model learn it's not just keyword matching.
 DECOY_TEMPLATES = [
@@ -135,9 +166,15 @@ def gen_example(rng: random.Random) -> tuple[str, int]:
     elif tool == "gcd":
         tpl = rng.choice(GCD_TEMPLATES)
         text = tpl.format(a=random_int(), b=random_int())
-    else:  # gcdhanoi
+    elif tool == "gcdhanoi":
         tpl = rng.choice(GCDHANOI_TEMPLATES)
         text = tpl.format(a=random_n(), b=random_n())
+    elif tool == "fibonacci":
+        tpl = rng.choice(FIBONACCI_TEMPLATES)
+        text = tpl.format(n=rng.randint(0, 30))
+    else:  # factorial
+        tpl = rng.choice(FACTORIAL_TEMPLATES)
+        text = tpl.format(n=rng.randint(0, 12))
     text = random_case(text)
     text = maybe_punct(text)
     return text, TOOL_TO_IDX[tool]

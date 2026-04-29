@@ -31,6 +31,36 @@ import torch.nn.functional as F
 from mamba3_lm import Mamba3LM, LMConfig
 
 
+# ---- Lion optimizer (Chen et al. 2023) — sign-of-momentum updates ----
+# Faster convergence than AdamW on many language tasks at lower compute.
+# Inline implementation, no extra dep. ~15 lines.
+class Lion(torch.optim.Optimizer):
+    def __init__(self, params, lr=1e-4, betas=(0.9, 0.99), weight_decay=0.0):
+        defaults = dict(lr=lr, betas=betas, weight_decay=weight_decay)
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = closure() if closure is not None else None
+        for group in self.param_groups:
+            lr = group["lr"]; b1, b2 = group["betas"]; wd = group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None: continue
+                g = p.grad
+                state = self.state[p]
+                if "exp_avg" not in state:
+                    state["exp_avg"] = torch.zeros_like(p)
+                m = state["exp_avg"]
+                # update direction = sign(b1 * m + (1 - b1) * g)
+                update = (m.mul(b1).add(g, alpha=1 - b1)).sign_()
+                # decoupled weight decay
+                if wd != 0: p.mul_(1 - lr * wd)
+                p.add_(update, alpha=-lr)
+                # momentum: m = b2 * m + (1 - b2) * g
+                m.mul_(b2).add_(g, alpha=1 - b2)
+        return loss
+
+
 PAD = 0
 BOA = 1
 EOS = 2
@@ -47,13 +77,13 @@ def hanoi_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     params = 45318
     timing = rng.randint(50, 5000)
     payload = f"hanoi_solver|n={n}|optimal={optimal}|params={params}|timing={timing}"
-    # Templates with named placeholders. The LM produces the language form;
-    # the orchestrator substitutes the actual values from the payload by
-    # deterministic post-processing. This sidesteps the canonical Mamba
-    # selective-copy weakness — the SSM never has to copy specific digits
-    # from arbitrary prefix positions, only emit a stable template skeleton.
+    # Templates with named placeholders + bilingual phrasings. The LM
+    # produces the language form; the orchestrator substitutes from the
+    # payload. Multiple phrasings (EN + ES) test the literal "language as
+    # translation layer" thesis — same payload, two output languages.
     sentences = [
         "The optimal solution to Tower of Hanoi with $N disks requires $OPTIMAL moves.",
+        "La solución óptima de la Torre de Hanoi con $N discos requiere $OPTIMAL movimientos.",
     ]
     return payload, sentences
 
@@ -65,6 +95,7 @@ def gcd_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     payload = f"gcd|a={a}|b={b}|gcd={g}"
     sentences = [
         "The greatest common divisor of $A and $B is $GCD.",
+        "El máximo común divisor de $A y $B es $GCD.",
     ]
     return payload, sentences
 
@@ -78,11 +109,43 @@ def gcdhanoi_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     payload = f"gcdhanoi|a={a}|b={b}|moves_a={ma}|moves_b={mb}|gcd={g}"
     sentences = [
         "Hanoi($A) needs $MOVES_A moves; Hanoi($B) needs $MOVES_B moves; their gcd is $GCD.",
+        "Hanoi($A) requiere $MOVES_A movimientos; Hanoi($B) requiere $MOVES_B movimientos; su mcd es $GCD.",
     ]
     return payload, sentences
 
 
-GENERATORS = [hanoi_payload_and_sentences, gcd_payload_and_sentences, gcdhanoi_payload_and_sentences]
+def fibonacci_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
+    n = rng.randint(0, 30)
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    payload = f"fibonacci|n={n}|fibonacci={a}"
+    sentences = [
+        "The $N-th Fibonacci number is $RESULT.",
+        "F($N) = $RESULT.",
+        "El $N-ésimo número de Fibonacci es $RESULT.",
+    ]
+    return payload, sentences
+
+
+def factorial_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
+    n = rng.randint(0, 12)
+    r = 1
+    for i in range(2, n + 1):
+        r *= i
+    payload = f"factorial|n={n}|factorial={r}"
+    sentences = [
+        "$N! = $RESULT.",
+        "The factorial of $N is $RESULT.",
+        "El factorial de $N es $RESULT.",
+    ]
+    return payload, sentences
+
+
+GENERATORS = [
+    hanoi_payload_and_sentences, gcd_payload_and_sentences, gcdhanoi_payload_and_sentences,
+    fibonacci_payload_and_sentences, factorial_payload_and_sentences,
+]
 
 
 def gen_example(rng: random.Random) -> tuple[bytes, bytes]:
@@ -118,7 +181,8 @@ def build_target_mask(tokens: torch.Tensor) -> torch.Tensor:
 
 
 def train(steps: int, batch: int, lr: float, device: str, seed: int = 42,
-          val_size: int = 256, save_to: str = "checkpoints/tool_renderer_mamba3.pt"):
+          val_size: int = 256, save_to: str = "checkpoints/tool_renderer_mamba3.pt",
+          optimizer: str = "lion"):
     rng = random.Random(seed)
     torch.manual_seed(seed)
 
@@ -131,7 +195,14 @@ def train(steps: int, batch: int, lr: float, device: str, seed: int = 42,
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Mamba3LM renderer params: {n_params}")
 
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.1)
+    if optimizer == "lion":
+        # Lion's effective LR is ~3-10× lower than AdamW for the same training
+        # dynamics; the paper recommends scaling lr down proportionally.
+        opt = Lion(model.parameters(), lr=lr / 3.0, weight_decay=0.1)
+        print(f"Optimizer: Lion (lr={lr/3.0:.4f})")
+    else:
+        opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.1)
+        print(f"Optimizer: AdamW (lr={lr:.4f})")
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=steps, eta_min=lr * 0.05)
 
     val_pairs = [gen_example(rng) for _ in range(val_size)]
@@ -217,9 +288,11 @@ def main():
     ap.add_argument("--lr", type=float, default=3e-3)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--save-to", default="checkpoints/tool_renderer_mamba3.pt")
+    ap.add_argument("--optimizer", default="lion", choices=["lion", "adamw"])
     args = ap.parse_args()
     print(f"Device: {args.device}")
-    train(args.steps, args.batch, args.lr, args.device, save_to=args.save_to)
+    train(args.steps, args.batch, args.lr, args.device, save_to=args.save_to,
+          optimizer=args.optimizer)
 
 
 if __name__ == "__main__":

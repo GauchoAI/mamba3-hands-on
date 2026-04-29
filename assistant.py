@@ -171,6 +171,60 @@ register(Tool(
 ))
 
 
+# ----------------------------------------------------- specialist: fibonacci ---
+
+
+def fibonacci_run(args: dict) -> ToolResult:
+    """args: {"n": int}. Returns F(n) (0-indexed: F(0)=0, F(1)=1)."""
+    n = int(args["n"])
+    t0 = time.time()
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    return ToolResult(
+        ok=True,
+        payload={"n": n, "fibonacci": a},
+        timing_ms=(time.time() - t0) * 1000,
+        specialist="fibonacci tool (Python iterative; placeholder for the FIB Mamba-3 LM)",
+    )
+
+
+register(Tool(
+    name="fibonacci",
+    description="Nth Fibonacci number (F(0)=0, F(1)=1).",
+    keywords=["fibonacci", "fib(", "fib ", "ésimo de fibonacci", "número de fibonacci"],
+    run=fibonacci_run,
+    specialist_label="Fibonacci tool",
+))
+
+
+# ----------------------------------------------------- specialist: factorial ---
+
+
+def factorial_run(args: dict) -> ToolResult:
+    """args: {"n": int}. Returns n!."""
+    n = int(args["n"])
+    t0 = time.time()
+    r = 1
+    for i in range(2, n + 1):
+        r *= i
+    return ToolResult(
+        ok=True,
+        payload={"n": n, "factorial": r},
+        timing_ms=(time.time() - t0) * 1000,
+        specialist="factorial tool (Python iterative)",
+    )
+
+
+register(Tool(
+    name="factorial",
+    description="Factorial n! of a non-negative integer.",
+    keywords=["factorial", "!", "factorial de"],
+    run=factorial_run,
+    specialist_label="Factorial tool",
+))
+
+
 # --------------------------------------------------------------- router ---
 
 
@@ -189,6 +243,14 @@ def parse_args_for(tool: Tool, text: str) -> dict | None:
         nums = re.findall(r"\b(\d+)\b", text)
         if len(nums) >= 2:
             return {"a": int(nums[0]), "b": int(nums[1])}
+    elif tool.name == "fibonacci":
+        m = re.search(r"\b(\d+)\b", text)
+        if m:
+            return {"n": int(m.group(1))}
+    elif tool.name == "factorial":
+        m = re.search(r"\b(\d+)\b", text)
+        if m:
+            return {"n": int(m.group(1))}
     return None
 
 
@@ -282,6 +344,10 @@ def render_template(tool: Tool, args: dict, result: ToolResult) -> str:
             f"Hanoi({p['b']}) needs {p['moves_b']:,} moves; "
             f"gcd of the two = {p['gcd_of_move_counts']:,}."
         )
+    if tool.name == "fibonacci":
+        return f"F({p['n']}) = {p['fibonacci']:,}."
+    if tool.name == "factorial":
+        return f"{p['n']}! = {p['factorial']:,}."
     return f"({tool.name}) {p}"
 
 
@@ -326,6 +392,10 @@ def _payload_string(tool: Tool, result: ToolResult) -> str | None:
         return f"gcd|a={p['a']}|b={p['b']}|gcd={p['gcd']}"
     if tool.name == "gcdhanoi":
         return f"gcdhanoi|a={p['a']}|b={p['b']}|moves_a={p['moves_a']}|moves_b={p['moves_b']}|gcd={p['gcd_of_move_counts']}"
+    if tool.name == "fibonacci":
+        return f"fibonacci|n={p['n']}|fibonacci={p['fibonacci']}"
+    if tool.name == "factorial":
+        return f"factorial|n={p['n']}|factorial={p['factorial']}"
     return None
 
 
@@ -353,6 +423,14 @@ SLOT_MAP: dict[str, dict[str, tuple[str, str]]] = {
         "$MOVES_A": ("moves_a",            ","),
         "$MOVES_B": ("moves_b",            ","),
         "$GCD":     ("gcd_of_move_counts", ","),
+    },
+    "fibonacci": {
+        "$N":      ("n",         ""),
+        "$RESULT": ("fibonacci", ","),
+    },
+    "factorial": {
+        "$N":      ("n",         ""),
+        "$RESULT": ("factorial", ","),
     },
 }
 
