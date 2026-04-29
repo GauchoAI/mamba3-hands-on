@@ -102,9 +102,37 @@ to point*. val_loss at 100 is still 2.6 because pointer training is
 notoriously slow (chicken-and-egg between gate and attention) — 3000
 steps required for real quality.
 
-**Status.** Training on m4-mini at batch=64 / 3000 steps via
-`cluster_dispatch.py`. Partial result at step 300/3000 already shows
-the experiment succeeding qualitatively — the copy mechanism works:
+**Status (updated 2026-04-29 ~01:11).** First run got stuck at
+val_loss 0.305 — the gate had collapsed into a degenerate "copy
+anything available in the prefix" mode (every language byte 'o', 'p',
+'t' etc. was being copied because copy is too easy when the answer
+contains common letters). Standard pointer-mechanism trick from the
+literature: bias the gate head toward vocab at init (`bias = +2.0`
+gives initial gate ≈ 0.88, mostly vocab). The model now starts by
+generating from vocab and learns copy as a deliberate deviation.
+
+After the fix, val_loss collapsed cleanly: 0.515 (step 100) → 0.263
+(step 200) → **0.0099** (step 300). Three demo prompts run through
+the copy LM via `assistant.py`:
+
+```
+> Solve Tower of Hanoi with 12 disks
+The optimal solution to Tower of Hanoi with 12 disks requires 4,095 moves.
+
+> Compute the gcd of Hanoi 6 and Hanoi 9
+Hanoi(6) needs 63 moves; Hanoi(9) needs 511 moves; their gcd is 7.
+
+> What is the gcd of 462 and 252?
+gcd(462, 252) = 42.  [renderer-guard: copy LM dropped ['42']; used template]
+```
+
+Two-of-three render cleanly through pure copy. The third hits a
+"when-to-stop-copying" bug on 3-digit numbers (the model appends an
+extra '2' from the same prefix position) and the payload-fidelity
+guard catches it. Architecture validated. Commit `606b5a5`.
+
+Earlier partial-result snapshot (before gate-bias fix), kept for the
+record:
 
 ```
 payload : gcd|a=462|b=252|gcd=42
