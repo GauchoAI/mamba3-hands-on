@@ -119,30 +119,33 @@ def thought_positions(response_token_ids: list[int],
     """Map response tokens to byte offsets, then pick every stride_bytes mark.
 
     Returns:
-        token_indices: list[int] — token indices within the response whose
-            decoded prefix crosses each stride mark
-        byte_positions: list[int] — the byte offset that each captured token
-            sits at (cumulative, after that token)
+        token_indices: list[int] — for each stride mark, the index of the
+            FIRST token whose decoded prefix covers that mark
+        byte_positions: list[int] — the stride mark itself (k * stride_bytes)
+            for each captured thought, NOT the token-end byte. Aligning on
+            the mark keeps the trainer's predict-the-next-thought shift
+            (`src = byte_pos - stride`) well-defined and on a regular grid.
 
     Why incremental decode: BPE tokens may merge subwords / multi-byte UTF-8
     characters, so token-i's byte length is only well-defined as
     `len(decode(ids[:i+1])) - len(decode(ids[:i]))`. Accents, em-dashes, and
     em-spaces in Spanish output are the most common offenders.
+
+    A single long token can cross multiple stride marks; we emit one capture
+    per mark, all pointing at the same teacher token, so the student is
+    trained to predict that single hidden from multiple consecutive byte
+    positions in its own residual stream.
     """
     token_indices, byte_positions = [], []
     prev_bytes = 0
     next_mark = stride_bytes
     for i in range(len(response_token_ids)):
-        # decode prefix; cumulative byte length grows monotonically
         prefix = tokenizer.decode(response_token_ids[: i + 1],
                                   skip_special_tokens=True)
         cur_bytes = len(prefix.encode("utf-8"))
-        # Pick the FIRST token that crosses or reaches each stride mark.
-        # Multiple stride marks may be crossed by a single token if it's a
-        # long multi-byte token; emit one capture per mark crossed.
         while cur_bytes >= next_mark and prev_bytes < next_mark:
             token_indices.append(i)
-            byte_positions.append(cur_bytes)
+            byte_positions.append(next_mark)
             next_mark += stride_bytes
         prev_bytes = cur_bytes
     return token_indices, byte_positions
