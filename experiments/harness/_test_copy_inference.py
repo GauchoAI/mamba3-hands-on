@@ -1,4 +1,5 @@
 """Quick inference test of the partial CopyMamba3LM checkpoint."""
+import _path_shim  # noqa: F401  (adds repo root to sys.path)
 import torch
 from train_tool_renderer_copy import CopyMamba3LM, BOA, EOS
 

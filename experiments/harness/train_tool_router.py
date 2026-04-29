@@ -15,6 +15,7 @@ punctuation, decoy words. Should reach >99 % on a held-out split with
 ~5k synthesized examples and ~3000 steps on CPU.
 """
 from __future__ import annotations
+import _path_shim  # noqa: F401  (adds repo root to sys.path)
 import argparse, random, time
 from pathlib import Path
 import torch

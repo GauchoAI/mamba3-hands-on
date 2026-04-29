@@ -16,6 +16,7 @@ This is the linear-memory probe: a transformer of the same size would
 need O(L²) attention memory to process the same prefix and would OOM
 or slow to a crawl. Mamba should keep the same per-step cost.
 """
+import _path_shim  # noqa: F401  (adds repo root to sys.path)
 import math, random, resource, time
 import torch
 

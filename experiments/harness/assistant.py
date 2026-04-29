@@ -10,11 +10,12 @@ hidden state, replace the renderer with the bilingual char-LM. The
 specialists themselves are real — the Hanoi tool calls the 45,318-param
 order-invariant GRU we trained earlier.
 
-Run:
-    python assistant.py                    # interactive prompt
-    python assistant.py "Solve Hanoi 22"   # one-shot
+Run from the repo root so checkpoint paths (checkpoints/...) resolve:
+    python experiments/harness/assistant.py                    # interactive prompt
+    python experiments/harness/assistant.py "Solve Hanoi 22"   # one-shot
 """
 from __future__ import annotations
+import _path_shim  # noqa: F401  (adds repo root to sys.path)
 import argparse, math, re, sys, time
 from dataclasses import dataclass, field
 from typing import Any, Callable

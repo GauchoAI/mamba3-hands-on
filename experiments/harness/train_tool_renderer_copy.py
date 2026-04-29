@@ -39,6 +39,7 @@ Training format and special tokens are the same as train_tool_renderer.py:
   <payload>\\x01<concrete_sentence>\\x02
 """
 from __future__ import annotations
+import _path_shim  # noqa: F401  (adds repo root to sys.path)
 import argparse, math, random, time
 from pathlib import Path
 import torch
