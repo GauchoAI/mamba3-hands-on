@@ -118,16 +118,88 @@ register(Tool(
 # ------------------------------------------------------- specialist: gcd ---
 
 
+# Cache for the GCD step Lego (tiny MLP, ~600 params).
+_GCD_LEGO_CACHE = {}
+
+
+def _load_gcd_lego():
+    """Load the trained GCD step Lego once and cache it."""
+    if "model" in _GCD_LEGO_CACHE:
+        return _GCD_LEGO_CACHE["model"]
+    import torch
+    from train_gcd_step import GCDStepMLP
+    ck = torch.load("checkpoints/specialists/gcd_step.pt",
+                    map_location="cpu", weights_only=False)
+    cfg = ck["config"]
+    model = GCDStepMLP(**cfg)
+    model.load_state_dict(ck["model"])
+    model.eval()
+    _GCD_LEGO_CACHE["model"] = model
+    _GCD_LEGO_CACHE["params"] = sum(p.numel() for p in model.parameters())
+    return model
+
+
 def gcd_run(args: dict) -> ToolResult:
-    """args: {"a": int, "b": int}. Returns gcd(a, b)."""
+    """args: {"a": int, "b": int}. Returns gcd(a, b) by running the trained
+    GCD step Lego iteratively (subtraction-based Euclidean algorithm).
+
+    This is a real learned model — a ~600-param MLP that, given the
+    4-bit state (a>b, b>a, a==0, b==0), picks one of 3 actions
+    (sub_b_from_a, sub_a_from_b, done). The orchestrator runs it in a
+    loop. Falls back to math.gcd for very large inputs where iterative
+    subtraction would be O(max(a,b)/gcd(a,b)) and too slow.
+    """
+    import torch
+    from gcd_step_function import state_for_pair, ACTION_TO_IDX
     a, b = int(args["a"]), int(args["b"])
     t0 = time.time()
-    g = math.gcd(a, b)
+    cur_a, cur_b = a, b
+    iter_cap = 50_000
+    if max(a, b) > 200_000:
+        # Iterative subtraction is too slow at this scale; fall back.
+        g = math.gcd(a, b)
+        return ToolResult(
+            ok=True,
+            payload={"a": a, "b": b, "gcd": g},
+            timing_ms=(time.time() - t0) * 1000,
+            specialist="math.gcd (fallback: input exceeds Lego iter budget)",
+        )
+    model = _load_gcd_lego()
+    n_iters = 0
+    with torch.no_grad():
+        while n_iters < iter_cap:
+            s = state_for_pair(cur_a, cur_b)
+            s_t = torch.tensor([list(s)], dtype=torch.long)
+            act = int(model(s_t)[0].argmax().item())
+            if act == ACTION_TO_IDX["done"]:
+                break
+            if act == ACTION_TO_IDX["sub_b_from_a"]:
+                if cur_a <= cur_b:
+                    # Lego picked an illegal action; bail to math.gcd
+                    return ToolResult(
+                        ok=True,
+                        payload={"a": a, "b": b, "gcd": math.gcd(a, b)},
+                        timing_ms=(time.time() - t0) * 1000,
+                        specialist="math.gcd (fallback: GCD Lego picked illegal action)",
+                    )
+                cur_a -= cur_b
+            else:  # sub_a_from_b
+                if cur_b <= cur_a:
+                    return ToolResult(
+                        ok=True,
+                        payload={"a": a, "b": b, "gcd": math.gcd(a, b)},
+                        timing_ms=(time.time() - t0) * 1000,
+                        specialist="math.gcd (fallback: GCD Lego picked illegal action)",
+                    )
+                cur_b -= cur_a
+            n_iters += 1
+    g = cur_a  # at termination, cur_a == cur_b == gcd(a, b)
+    n_params = _GCD_LEGO_CACHE["params"]
     return ToolResult(
         ok=True,
         payload={"a": a, "b": b, "gcd": g},
         timing_ms=(time.time() - t0) * 1000,
-        specialist="math.gcd (Python stdlib; placeholder for the GCD step Lego)",
+        specialist=f"GCD step Lego ({n_params} params, {n_iters} iter subtraction steps)",
     )
 
 
