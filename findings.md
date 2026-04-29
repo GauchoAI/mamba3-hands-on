@@ -11,6 +11,188 @@ Silicon MPS. Each entry corresponds to a commit.
 
 ---
 
+## Entry — Renderer LM + the digit-copy failure (2026-04-28)
+
+Closed the third leg of the harness: a tiny Mamba-3 conditional LM that
+renders structured tool results as natural-language sentences. Trained
+on synthetic prefix-LM pairs:
+
+```
+<payload>\x01<sentence>\x02
+e.g.  hanoi_solver|n=12|optimal=4095|params=45318|timing=2864 \x01 The optimal solution to Tower of Hanoi with 12 disks requires 4,095 moves. \x02
+```
+
+74,400 params (2 layers, d=64), 600 training steps on M4 Pro CPU,
+best val loss 0.189. **It doesn't work cleanly** — and the failure is
+informative.
+
+**The failure mode that surfaced.** On every test prompt, the renderer
+produces fluent template text but **drops or substitutes the specific
+digits**:
+
+```
+input  : "Solve Tower of Hanoi with 12 disks"
+payload: hanoi_solver|n=12|optimal=4095|...
+output : "The optimal solution to Tower of Hanoi with 18 disks requires 2,047 moves."
+```
+
+The LM has clearly learned the *shape* of the answer ("The optimal
+solution to Tower of Hanoi with K disks requires M moves") but it
+hasn't learned to *copy* the specific K and M from arbitrary
+positions in the byte prefix. It guesses globally-common values.
+
+**Why this is the right family of failure to expect.** A small Mamba
+SSM compresses the prefix into a fixed-size hidden state. Specific
+digits at arbitrary prefix positions are exactly what SSMs without
+attention struggle to copy out — the canonical Mamba selective-copy
+result. We've seen this throughout this repo: token-stream Hanoi was
+unblocked only when we added EOS-bias gating + parameter-free
+LoopCounter; HANOIBIN n=100k worked once we stopped trying to make
+the SSM count and let the orchestrator count instead.
+
+**Mitigation: a payload-fidelity guard.** `render_mamba` now checks
+that every canonical numeric from the payload appears verbatim in the
+LM's output. If anything is missing, fall back to `render_template`
+and log what got dropped:
+
+```
+> Solve Tower of Hanoi with 12 disks
+The optimal solution to Tower of Hanoi with 12 disks requires 4,095 moves.
+The Hanoi GRU (45,318 parameters) reproduced this in 2864 ms.
+[renderer-guard: LM dropped ['12', '4,095']; used template]
+```
+
+The pipeline never publishes a corrupted number. The guard is honest:
+the trace shows that the LM failed and the template did the work.
+
+**The thesis-aligned fix (next, not now).** The right shape is
+**templates with placeholders**: the LM emits a skeleton like
+
+```
+The optimal solution to Tower of Hanoi with $N disks requires $OPTIMAL moves.
+```
+
+…and the orchestrator substitutes the actual values from the payload.
+That removes the small-SSM copy failure entirely. The LM only has to
+produce *language form*, which it's already doing fluently. The
+specifics come from the payload via deterministic substitution. This
+is the cleanest realization of "language as translation layer" — the
+LM owns the shape of the sentence, the orchestrator owns the values,
+neither tries to do the other's job.
+
+**State of the harness.** Three Mamba-3-class stages totaling ~165k
+parameters plus the 45,318-param GRU specialist:
+
+  - **Router**: 45,459-param Mamba-3 byte classifier, val_acc 100 %.
+  - **Specialist**: 45,318-param order-invariant GRU.
+  - **Renderer**: 74,400-param Mamba-3 LM, val_loss 0.189, guarded.
+
+Three demoable prompts work end-to-end with auditable per-stage
+traces. Files: `train_tool_renderer.py`, `assistant.py` updates.
+Checkpoint: `checkpoints/tool_renderer_mamba3.pt` (363 KB). Commit
+`afa4dd2`.
+
+---
+
+## Entry — Cortex: a 772-param counter primitive lets a 151k Mamba LM count byte-perfect to N=500 (2026-04-28)
+
+Tested the **cortex thesis** end-to-end: rather than a small LM emitting
+tool-call tokens that an external Python loop dispatches, treat
+algorithmic primitives as **forward-pass modules in the residual
+stream**. The LM emits gates from its hidden state; the primitive runs
+its own arithmetic; its output re-enters the residual as a learned
+embedding. No tokens, no parser, no Python loop outside the forward pass.
+
+Single file: `cortex_counting.py`. Task: unary copy-the-length
+(`*N:aN\n`). Train on N ∈ [1, 30], eval at N ∈ {3, 15, 30, 50, 100, 200,
+500}. Six phases, all on the same byte-level Mamba-3 LM (2 layers,
+d_model=96, ~150k params).
+
+**Headline:**
+
+```
+              baseline      Phase 1     Phase 2     Phase 3.2    Phase 6+hard
+N=3..30           OK            OK          OK            OK           OK
+N=50              OK      FAIL(13)    FAIL(33)      FAIL(48)           OK
+N=100       FAIL(72)       FAIL(3)    FAIL(29)      FAIL(88)           OK
+N=200        FAIL(3)      FAIL(12)    FAIL(31)     FAIL(128)           OK
+N=500       FAIL(67)    FAIL(None)    FAIL(29)     FAIL(183)           OK
+```
+
+A 772-param counter (`CounterPrimitive`) wired into the residual stream
+of an otherwise unchanged 150,704-param Mamba-3 LM extends counting to
+N = 500 — **16.7× past the longest training example** — byte-perfect.
+Same architecture without the counter caps at N = 72.
+
+**The four ingredients that mattered**, in order of impact:
+
+1. **Aux BCE supervision on `inc_logits`** from byte-conditional targets
+   (`inc[A]` should fire on `*`, `inc[B]` on `a`). Without this the
+   counter sits unused — Phase 1 was *worse* than baseline at OOD.
+2. **Tanh-saturated readout** with temperature k=8: `[tanh(c/k),
+   tanh(diff/k)]`, no raw features. Bounded in (-1, 1) regardless of N.
+   The `tanh(diff/k)` channel is the decisive "is c[A] ahead of c[B]"
+   signal — same value at N=30 and N=500.
+3. **Injection scale ≥ 3** on the `read_proj` output. Below 3, the
+   counter contribution can't outvote the SSM's positional-OOD logits
+   at long sequence positions, and the model under-counts proportionally.
+4. **Hard-gate threshold at inference** — replace `sigmoid(inc_logit)`
+   with `(inc_logit > 0).float()` when not training. Applied as a flag
+   on the trained checkpoint, no retraining required. Diagnosis: at OOD
+   positions the SSM hidden state has drifted, so sigmoid gates that
+   fire at 0.999 in-distribution settle near 0.95; over hundreds of
+   increments the slippage compounds to tens of missing counts.
+
+**Cautionary tale (Phase 4):** adding a direct `Linear(read_in →
+vocab)` from counter readout straight to LM logits — a "side channel" —
+*regressed* OOD scaling from 88 to 40 at N=100. The model offloaded the
+emit-a-vs-newline decision onto the cheap shortcut and trained the
+residual injection less, leaving smaller total override authority.
+Don't add side channels to a path that already works.
+
+**Plugin/adapter refactor:** after the existence proof landed, the
+architecture was generalised from hard-coded counter wiring to a
+`Primitive` base class. `CortexLM(cfg, primitives=[...])` accepts any
+list of `Primitive` subclasses; `CortexLM.forward` and
+`CortexLM.aux_loss` are primitive-agnostic. Adding a new primitive is
+now: subclass `Primitive`, implement `forward(x, tokens)` and
+`aux_loss(...)`, append. Pre-refactor checkpoints (v3..v6) load via
+state-dict key migration (`counter.*` → `primitives.0.*`).
+
+**What this does NOT yet provide:** train-free composition. Each
+primitive's adapter (gate Linears + read_proj) still co-trains with the
+LM. The plug *interface* is plug-and-play; the *training story* is
+still co-training. The next architectural gate is either a frozen-LM +
+per-primitive adapter fine-tune, or a pre-trained "plugin port" — a
+generic socket the LM is shaped to drive through a fixed protocol so
+any conforming primitive slots in.
+
+**What this does NOT cover:** language. The LM was trained on a single
+synthetic task. Whether the same pattern works when the LM also has to
+do English/Spanish next-byte prediction is the next experiment, and the
+natural setup for testing whether primitives can attach to a
+*language-trained* LM (the actual goal: a small LM that both speaks and
+reasons).
+
+Reproduction:
+```bash
+python cortex_counting.py train          # baseline + cortex (Phase 1)
+python cortex_counting.py train_phase2   # + aux supervision
+python cortex_counting.py train_phase3   # + tanh-only readout
+python cortex_counting.py train_phase4   # + head-bias side channel  (regression)
+python cortex_counting.py train_phase5   # + 3× injection scale
+python cortex_counting.py train_phase6   # + 10× injection scale
+python cortex_counting.py eval           # full 7-way comparison table
+python cortex_counting.py demo           # baseline vs cortex side-by-side
+```
+
+Each phase ~12 min on M4 Pro MPS. Checkpoints under `checkpoints/cortex/`
+(~150-160 KB each). The byte-perfect existence proof is on the v5 / v6
+checkpoint with `counter.hard_gates_inference = True` (default in `eval`
+and `demo`).
+
+---
+
 ## Entry — Tool routing inside Mamba-3: regex stub replaced by a 45k-param byte classifier (2026-04-28)
 
 Took the next step on yesterday's harness: the router that picks which
