@@ -292,18 +292,29 @@ _RENDERER_CACHE: dict[str, Any] = {}
 
 def _load_renderer(ckpt_path: str):
     if "model" in _RENDERER_CACHE:
-        return _RENDERER_CACHE["model"], _RENDERER_CACHE["tokens"]
+        return (_RENDERER_CACHE["model"], _RENDERER_CACHE["tokens"],
+                _RENDERER_CACHE["kind"])
     import torch
-    from mamba3_lm import Mamba3LM, LMConfig
     ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    cfg = LMConfig(**ck["config"])
-    model = Mamba3LM(cfg)
+    cfg = ck["config"]
+    # Detect which renderer architecture this checkpoint is for:
+    # CopyMamba3LM has 'attn_dim'; plain Mamba3LM has 'd_state', 'expand', etc.
+    if "attn_dim" in cfg:
+        from train_tool_renderer_copy import CopyMamba3LM
+        model = CopyMamba3LM(**cfg)
+        kind = "copy"
+    else:
+        from mamba3_lm import Mamba3LM, LMConfig
+        model = Mamba3LM(LMConfig(**cfg))
+        kind = "lm"
     model.load_state_dict(ck["state_dict"])
     model.eval()
     _RENDERER_CACHE["model"] = model
     _RENDERER_CACHE["tokens"] = ck["tokens"]
     _RENDERER_CACHE["max_len"] = ck["max_len"]
-    return model, ck["tokens"]
+    _RENDERER_CACHE["kind"] = kind
+    _RENDERER_CACHE["best_val_loss"] = ck.get("best_val_loss")
+    return model, ck["tokens"], kind
 
 
 def _payload_string(tool: Tool, result: ToolResult) -> str | None:
@@ -382,8 +393,35 @@ def render_mamba(tool: Tool, args: dict, result: ToolResult, ckpt_path: str) -> 
     payload_str = _payload_string(tool, result)
     if payload_str is None:
         return render_template(tool, args, result)
-    model, tokens = _load_renderer(ckpt_path)
+    model, tokens, kind = _load_renderer(ckpt_path)
     prefix = list(payload_str.encode("utf-8")) + [tokens["BOA"]]
+
+    if kind == "copy":
+        # CopyMamba3LM: model handles digit-copy internally via the pointer
+        # mechanism. Output is the final natural-language sentence — no slot
+        # substitution needed. Apply payload-fidelity guard against the raw
+        # required numerics; fall back to template if the LM dropped any.
+        gen, trace = model.generate(prefix, max_new=200, temperature=0.1, top_k=1, return_trace=True)
+        eos = tokens["EOS"]
+        if eos in gen:
+            gen = gen[:gen.index(eos)]
+        text = bytes([b for b in gen if 32 <= b < 256]).decode("utf-8", errors="ignore")
+        # Guard: required numbers must appear verbatim
+        required = []
+        p = result.payload
+        if tool.name == "hanoi_solver":
+            required = [str(p["n"]), f"{p['optimal_moves']:,}"]
+        elif tool.name == "gcd":
+            required = [str(p["a"]), str(p["b"]), str(p["gcd"])]
+        elif tool.name == "gcdhanoi":
+            required = [str(p["a"]), str(p["b"]), f"{p['moves_a']:,}",
+                        f"{p['moves_b']:,}", str(p["gcd_of_move_counts"])]
+        missing = [n for n in required if n not in text]
+        if missing:
+            fallback = render_template(tool, args, result)
+            return f"{fallback}  [renderer-guard: copy LM dropped {missing}; used template]"
+        return text
+    # Plain LM: template-with-placeholders path (kind == "lm")
     gen = model.generate(prefix, max_new=200, temperature=0.1, top_k=1)
     eos = tokens["EOS"]
     if eos in gen:
@@ -456,9 +494,12 @@ def main():
     if args.renderer_checkpoint:
         rckpt = args.renderer_checkpoint
         _RENDER_FN = lambda tool, args_, result: render_mamba(tool, args_, result, rckpt)
-        rmodel, _ = _load_renderer(rckpt)
+        rmodel, _, kind = _load_renderer(rckpt)
         n_params = sum(p.numel() for p in rmodel.parameters())
-        print(f"Renderer: Mamba-3 LM ({n_params:,} params, byte-level AR)  via {rckpt}")
+        if kind == "copy":
+            print(f"Renderer: CopyMamba3LM ({n_params:,} params, byte-level AR with copy mechanism)  via {rckpt}")
+        else:
+            print(f"Renderer: Mamba-3 LM ({n_params:,} params, byte-level AR)  via {rckpt}")
     else:
         print("Renderer: templates (default; pass --renderer-checkpoint to use Mamba-3 LM)")
 
