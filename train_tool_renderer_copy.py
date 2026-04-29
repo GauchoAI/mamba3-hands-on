@@ -137,8 +137,16 @@ class CopyMamba3LM(nn.Module):
         # Copy attention: query from output position, key from prefix position
         self.q_proj = nn.Linear(d_model, attn_dim)
         self.k_proj = nn.Linear(d_model, attn_dim)
-        # Gate head: scalar in [0, 1], 1 = generate from vocab, 0 = copy
+        # Gate head: scalar in [0, 1], 1 = generate from vocab, 0 = copy.
+        # Bias init to +2.0 so initial gate ≈ sigmoid(2) ≈ 0.88 (mostly vocab).
+        # The previous run got stuck at val_loss ~0.31 with gate near 0 on
+        # language bytes — degenerate "copy everything that's available in
+        # the prefix" mode. Biasing toward vocab at init breaks that local
+        # minimum: the model learns to use copy as a deliberate deviation
+        # for digits, not as the default for any matching byte.
         self.gate_head = nn.Linear(d_model, 1)
+        with torch.no_grad():
+            self.gate_head.bias.fill_(2.0)
 
     def encode(self, tokens: torch.Tensor) -> torch.Tensor:
         """Run the SSM stack over the full sequence, return hidden states."""
