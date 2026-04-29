@@ -1,8 +1,13 @@
-# experiments/harness
+# experiments/harness_3stage_mamba3
 
-A first-class harness over a registry of specialist tools — the
-"language as translation layer, not reasoning substrate" thesis made
-concrete. Three Mamba-3-class models in series:
+A first-class harness over a registry of specialist tools — three
+Mamba-3-class models composed in series, embodying the "language as
+translation layer, not reasoning substrate" thesis.
+
+The naming convention is `experiments/harness_<distinctive>/` so future
+harness variants (different routing strategy, different specialist
+composition, retrieval-augmented, voting ensembles, etc.) slot in as
+siblings. This one is the **3-stage Mamba-3** baseline:
 
   natural language → router → specialist → renderer → natural language
 
@@ -41,28 +46,28 @@ Always **from the repo root** so the `checkpoints/...` paths resolve:
 
 ```bash
 # Demo with all three Mamba-3 stages active:
-.venv/bin/python experiments/harness/assistant.py \
+.venv/bin/python experiments/harness_3stage_mamba3/assistant.py \
     --router-checkpoint   checkpoints/tool_router_mamba3.pt \
     --renderer-checkpoint checkpoints/tool_renderer_mamba3.pt \
     "Solve Tower of Hanoi with 12 disks"
 
 # Spanish input → Spanish output via _detect_lang() heuristic:
-.venv/bin/python experiments/harness/assistant.py \
+.venv/bin/python experiments/harness_3stage_mamba3/assistant.py \
     --router-checkpoint   checkpoints/tool_router_mamba3.pt \
     --renderer-checkpoint checkpoints/tool_renderer_mamba3.pt \
     "Resuelve la Torre de Hanoi con 12 discos"
 
 # Train a fresh router:
-.venv/bin/python experiments/harness/train_tool_router.py --steps 1500 --device cpu
+.venv/bin/python experiments/harness_3stage_mamba3/train_tool_router.py --steps 1500 --device cpu
 
 # Train a fresh renderer (slot-fill, with Lion):
-.venv/bin/python experiments/harness/train_tool_renderer.py --steps 600 --optimizer lion --device cpu
+.venv/bin/python experiments/harness_3stage_mamba3/train_tool_renderer.py --steps 600 --optimizer lion --device cpu
 
 # Train the copy-mechanism alternative:
-.venv/bin/python experiments/harness/train_tool_renderer_copy.py --steps 2000 --device cpu
+.venv/bin/python experiments/harness_3stage_mamba3/train_tool_renderer_copy.py --steps 2000 --device cpu
 
 # Inspect what the copy LM is actually doing:
-.venv/bin/python experiments/harness/_test_copy_inference.py
+.venv/bin/python experiments/harness_3stage_mamba3/_test_copy_inference.py
 ```
 
 ## Where this came from
