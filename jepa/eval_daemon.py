@@ -109,11 +109,19 @@ class RunWatcher:
 
     @property
     def manifest(self) -> Path:
-        # Manifest is in the *checkpoint* root, not the run dir. The trainer
-        # is configured so checkpoints/<run>/MANIFEST.jsonl pairs with
-        # runs/<run>/metrics.jsonl by name.
-        ckpt_root = Path(str(self.run_dir).replace("/runs/", "/checkpoints/"))
-        return ckpt_root / "MANIFEST.jsonl"
+        # Manifest lives next to checkpoints, not next to metrics. We rewrite
+        # the first occurrence of a 'runs' path component to 'checkpoints'.
+        # Operating on path *components* (not a substring) makes this work
+        # for both relative ('runs/jepa_cortex/...') and absolute
+        # ('/workspace/.../runs/...') run directories — the previous version
+        # used `str(p).replace('/runs/', '/checkpoints/')` which silently
+        # no-op'd on relative paths and watched the wrong directory.
+        parts = list(self.run_dir.parts)
+        for i, p in enumerate(parts):
+            if p == "runs":
+                parts[i] = "checkpoints"
+                break
+        return Path(*parts) / "MANIFEST.jsonl"
 
     def poll_once(self) -> int:
         """Read any new manifest entries and evaluate the light ones."""
