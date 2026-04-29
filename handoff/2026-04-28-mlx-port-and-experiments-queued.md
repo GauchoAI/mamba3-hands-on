@@ -1,10 +1,20 @@
-# Session handoff — 2026-04-28
+# Session handoff — 2026-04-28 → 29
 
 End-of-session state for the cortex + language + MLX work. Whoever
 picks up next: this is the snapshot. `PLAN.md` is the strategic
 document and stays canonical; this file is the situation report.
 
 **Branch:** `main` (tracking `origin/main`).
+
+**Update 2026-04-29 (autonomous block):** the in-flight bilingual
+training finished. F16 + F17 ran. Findings: PARTIAL composition —
+plugin interface holds and LM is not destabilised, but the counter
+is off-by-one even in-distribution; full byte-perfect did not
+transfer to the language-trained host. See findings.md entry
+"Counter primitive on a frozen bilingual LM" for the full read.
+
+A scale=30 diagnostic (3× louder counter signal) is currently
+running to test whether the off-by-one is purely signal-magnitude.
 
 ---
 
