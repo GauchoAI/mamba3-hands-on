@@ -107,6 +107,35 @@ Things that would likely fix the off-by-one:
   of the synthetic experiment showed direct head-bias paths regress
   via capacity-splitting.
 
+**Diagnostic: re-ran with `--injection-scale 30`** (3× louder).
+Aux convergence identical (it's gate-only supervision). Result:
+
+```
+            scale=10 (original)    scale=30 (diagnostic)
+N=3         OK ✓ → 3              OK ✓ → 3
+N=30        FAIL → 29             OK ✓ → 30        ← off-by-one fixed
+N=50        FAIL → 48             FAIL → 51        ← oscillates by 1
+N=100..500  drops out of unary    drops out of unary  (same)
+```
+
+The in-distribution off-by-one **was** purely signal-magnitude-bound;
+louder counter resolves it. That confirms the mechanism diagnosed
+above. But OOD failure is unchanged: at N ≳ 80 stars the LM exits
+unary mode entirely and emits dominant Spanish phrases (`'ér es el
+problema...'`). This is **not** a counter-readout problem and not a
+magnitude problem — it's the LM's implicit `stars→short→switch out`
+prior, learned because training only saw `*N:aN` lines with N≤30.
+
+The fix shape is therefore *upstream* of the counter:
+- Train the bilingual LM with a wider N distribution (e.g., 1..200)
+  so it doesn't acquire a "stars are short" prior, OR
+- Distill from a stronger teacher (the JEPA direction in `jepa/`)
+  so the student LM's hidden state at long unary runs is clean
+  and the counter's signal can dominate it.
+
+That's the actual next experiment to validate the strong cortex
+composition claim.
+
 **The actual position this leaves us in.**
 
 The cortex thesis survives but with a sharper statement: forward-pass
