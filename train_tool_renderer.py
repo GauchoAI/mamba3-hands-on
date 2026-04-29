@@ -47,12 +47,13 @@ def hanoi_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     params = 45318
     timing = rng.randint(50, 5000)
     payload = f"hanoi_solver|n={n}|optimal={optimal}|params={params}|timing={timing}"
-    # One canonical phrasing per tool. The Mamba-3 LM is small (74k params)
-    # and synthetic data is easy; ambiguity over phrasings was the dominant
-    # source of irreducible loss. Single template → near-zero loss → clean
-    # numeric copy at greedy decoding.
+    # Templates with named placeholders. The LM produces the language form;
+    # the orchestrator substitutes the actual values from the payload by
+    # deterministic post-processing. This sidesteps the canonical Mamba
+    # selective-copy weakness — the SSM never has to copy specific digits
+    # from arbitrary prefix positions, only emit a stable template skeleton.
     sentences = [
-        f"The optimal solution to Tower of Hanoi with {n} disks requires {optimal:,} moves.",
+        "The optimal solution to Tower of Hanoi with $N disks requires $OPTIMAL moves.",
     ]
     return payload, sentences
 
@@ -63,7 +64,7 @@ def gcd_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     g = math.gcd(a, b)
     payload = f"gcd|a={a}|b={b}|gcd={g}"
     sentences = [
-        f"The greatest common divisor of {a} and {b} is {g}.",
+        "The greatest common divisor of $A and $B is $GCD.",
     ]
     return payload, sentences
 
@@ -76,7 +77,7 @@ def gcdhanoi_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     g = math.gcd(ma, mb)
     payload = f"gcdhanoi|a={a}|b={b}|moves_a={ma}|moves_b={mb}|gcd={g}"
     sentences = [
-        f"Hanoi({a}) needs {ma:,} moves; Hanoi({b}) needs {mb:,} moves; their gcd is {g}.",
+        "Hanoi($A) needs $MOVES_A moves; Hanoi($B) needs $MOVES_B moves; their gcd is $GCD.",
     ]
     return payload, sentences
 

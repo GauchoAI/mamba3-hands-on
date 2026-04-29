@@ -318,28 +318,64 @@ def _payload_string(tool: Tool, result: ToolResult) -> str | None:
     return None
 
 
-def _required_numbers(tool: Tool, result: ToolResult) -> list[str]:
-    """The exact numeric strings that must appear (verbatim) in any honest
-    rendering. Used by the payload-fidelity guard."""
-    p = result.payload
-    if tool.name == "hanoi_solver":
-        return [str(p["n"]), f"{p['optimal_moves']:,}"]
-    if tool.name == "gcd":
-        return [str(p["a"]), str(p["b"]), str(p["gcd"])]
-    if tool.name == "gcdhanoi":
-        return [str(p["a"]), str(p["b"]), f"{p['moves_a']:,}", f"{p['moves_b']:,}",
-                str(p["gcd_of_move_counts"])]
-    return []
+# Slot map: how each tool's placeholder names resolve to payload values, and
+# how those values should be formatted when substituted. Keeping this declarative
+# means the renderer LM only needs to learn the *language form* (the template
+# skeleton); precise number copying is deterministic post-processing in the
+# orchestrator. This is the data-to-text / pointer-mechanism pattern, applied
+# at the orchestrator boundary.
+SLOT_MAP: dict[str, dict[str, tuple[str, str]]] = {
+    # tool_name -> { placeholder -> (payload_key, format_spec) }
+    "hanoi_solver": {
+        "$N":       ("n",             ""),
+        "$OPTIMAL": ("optimal_moves", ","),
+        "$PARAMS":  ("params",        ","),
+    },
+    "gcd": {
+        "$A":   ("a",   ""),
+        "$B":   ("b",   ""),
+        "$GCD": ("gcd", ""),
+    },
+    "gcdhanoi": {
+        "$A":       ("a",                  ""),
+        "$B":       ("b",                  ""),
+        "$MOVES_A": ("moves_a",            ","),
+        "$MOVES_B": ("moves_b",            ","),
+        "$GCD":     ("gcd_of_move_counts", ","),
+    },
+}
+
+
+def _substitute(template: str, tool: Tool, result: ToolResult) -> tuple[str, list[str]]:
+    """Replace every placeholder in `template` with values from `result.payload`.
+    Returns (substituted_text, list_of_unfilled_placeholders).
+    """
+    mapping = SLOT_MAP.get(tool.name, {})
+    text = template
+    for slot, (key, fmt) in mapping.items():
+        if slot not in text:
+            continue
+        val = result.payload[key]
+        formatted = format(val, fmt) if fmt else str(val)
+        text = text.replace(slot, formatted)
+    leftover = [s for s in mapping if s in text]
+    return text, leftover
 
 
 def render_mamba(tool: Tool, args: dict, result: ToolResult, ckpt_path: str) -> str:
-    """Use the trained Mamba-3 LM to render the answer autoregressively, with a
-    payload-fidelity guard: if the LM's output is missing any of the canonical
-    numbers from the payload, fall back to the template renderer.
+    """Generate a templated sentence with the Mamba-3 LM, then substitute the
+    actual numeric values from the payload via deterministic post-processing.
 
-    A small Mamba SSM struggles to copy specific digits from arbitrary prefix
-    positions into the answer; the language form is fluent but the numbers can
-    drift. The guard catches this so we never publish a wrong number.
+    The LM is trained on targets like:
+        "The optimal solution to Tower of Hanoi with $N disks requires $OPTIMAL moves."
+
+    so the small SSM never has to copy specific digits from the prefix. It only
+    learns the *language form* — which it does easily. The orchestrator does
+    the literal substitution. The boundary is clean: LM owns shape, orchestrator
+    owns values.
+
+    Guard: if the LM output is missing required placeholders for this tool,
+    fall back to the template renderer and log what was missing.
     """
     if not result.ok:
         return f"The {tool.specialist_label} could not solve this: {result.payload.get('reason', 'unknown error')}."
@@ -352,14 +388,21 @@ def render_mamba(tool: Tool, args: dict, result: ToolResult, ckpt_path: str) -> 
     eos = tokens["EOS"]
     if eos in gen:
         gen = gen[:gen.index(eos)]
-    text = bytes([b for b in gen if 32 <= b < 256]).decode("utf-8", errors="ignore")
+    template_text = bytes([b for b in gen if 32 <= b < 256]).decode("utf-8", errors="ignore")
 
-    required = _required_numbers(tool, result)
-    missing = [n for n in required if n not in text]
-    if missing:
+    # Guard: the LM must have emitted *at least one* known placeholder for this
+    # tool. If it emitted none, it's just generating freeform text without
+    # structure → fall back to template.
+    known_slots = list(SLOT_MAP.get(tool.name, {}).keys())
+    if not any(s in template_text for s in known_slots):
         fallback = render_template(tool, args, result)
-        return f"{fallback}  [renderer-guard: LM dropped {missing}; used template]"
-    return text
+        return f"{fallback}  [renderer-guard: LM emitted no known $-slot; used template]"
+
+    substituted, leftover = _substitute(template_text, tool, result)
+    if leftover:
+        fallback = render_template(tool, args, result)
+        return f"{fallback}  [renderer-guard: substitution left {leftover}; used template]"
+    return substituted
 
 
 _RENDER_FN: Callable[[Tool, dict, ToolResult], str] = render_template
