@@ -14,6 +14,12 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = ["triton>=2.0"]
+jepa = [
+    "transformers>=4.40",
+    "accelerate>=0.30",
+    "sentencepiece>=0.2",
+    "numpy>=1.24",
+]
 
 [project.scripts]
 mamba = "cli.main:main"
