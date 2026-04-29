@@ -318,8 +318,29 @@ def _payload_string(tool: Tool, result: ToolResult) -> str | None:
     return None
 
 
+def _required_numbers(tool: Tool, result: ToolResult) -> list[str]:
+    """The exact numeric strings that must appear (verbatim) in any honest
+    rendering. Used by the payload-fidelity guard."""
+    p = result.payload
+    if tool.name == "hanoi_solver":
+        return [str(p["n"]), f"{p['optimal_moves']:,}"]
+    if tool.name == "gcd":
+        return [str(p["a"]), str(p["b"]), str(p["gcd"])]
+    if tool.name == "gcdhanoi":
+        return [str(p["a"]), str(p["b"]), f"{p['moves_a']:,}", f"{p['moves_b']:,}",
+                str(p["gcd_of_move_counts"])]
+    return []
+
+
 def render_mamba(tool: Tool, args: dict, result: ToolResult, ckpt_path: str) -> str:
-    """Use the trained Mamba-3 LM to render the answer autoregressively."""
+    """Use the trained Mamba-3 LM to render the answer autoregressively, with a
+    payload-fidelity guard: if the LM's output is missing any of the canonical
+    numbers from the payload, fall back to the template renderer.
+
+    A small Mamba SSM struggles to copy specific digits from arbitrary prefix
+    positions into the answer; the language form is fluent but the numbers can
+    drift. The guard catches this so we never publish a wrong number.
+    """
     if not result.ok:
         return f"The {tool.specialist_label} could not solve this: {result.payload.get('reason', 'unknown error')}."
     payload_str = _payload_string(tool, result)
@@ -332,6 +353,12 @@ def render_mamba(tool: Tool, args: dict, result: ToolResult, ckpt_path: str) -> 
     if eos in gen:
         gen = gen[:gen.index(eos)]
     text = bytes([b for b in gen if 32 <= b < 256]).decode("utf-8", errors="ignore")
+
+    required = _required_numbers(tool, result)
+    missing = [n for n in required if n not in text]
+    if missing:
+        fallback = render_template(tool, args, result)
+        return f"{fallback}  [renderer-guard: LM dropped {missing}; used template]"
     return text
 
 

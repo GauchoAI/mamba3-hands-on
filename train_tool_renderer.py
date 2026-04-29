@@ -47,15 +47,12 @@ def hanoi_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     params = 45318
     timing = rng.randint(50, 5000)
     payload = f"hanoi_solver|n={n}|optimal={optimal}|params={params}|timing={timing}"
+    # One canonical phrasing per tool. The Mamba-3 LM is small (74k params)
+    # and synthetic data is easy; ambiguity over phrasings was the dominant
+    # source of irreducible loss. Single template → near-zero loss → clean
+    # numeric copy at greedy decoding.
     sentences = [
         f"The optimal solution to Tower of Hanoi with {n} disks requires {optimal:,} moves.",
-        f"Tower of Hanoi with {n} disks needs {optimal:,} moves to solve optimally.",
-        f"Solving Tower of Hanoi for {n} disks takes {optimal:,} moves at minimum.",
-        f"With {n} disks, the optimal Hanoi solution is {optimal:,} moves.",
-        f"The {n}-disk Tower of Hanoi requires exactly {optimal:,} moves.",
-        f"Hanoi({n}) = {optimal:,} optimal moves; the GRU specialist confirmed it in {timing} ms.",
-        f"{n} disks → {optimal:,} moves (optimal). Computed by the order-invariant GRU.",
-        f"For Tower of Hanoi at n={n}, the minimum move count is {optimal:,}.",
     ]
     return payload, sentences
 
@@ -66,12 +63,7 @@ def gcd_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     g = math.gcd(a, b)
     payload = f"gcd|a={a}|b={b}|gcd={g}"
     sentences = [
-        f"gcd({a}, {b}) = {g}.",
         f"The greatest common divisor of {a} and {b} is {g}.",
-        f"{a} and {b} share a greatest common divisor of {g}.",
-        f"For {a} and {b}, the gcd is {g}.",
-        f"GCD({a}, {b}) is {g}.",
-        f"The common divisor of {a} and {b} comes out to {g}.",
     ]
     return payload, sentences
 
@@ -84,11 +76,7 @@ def gcdhanoi_payload_and_sentences(rng: random.Random) -> tuple[str, list[str]]:
     g = math.gcd(ma, mb)
     payload = f"gcdhanoi|a={a}|b={b}|moves_a={ma}|moves_b={mb}|gcd={g}"
     sentences = [
-        f"Hanoi({a}) needs {ma:,} moves; Hanoi({b}) needs {mb:,} moves; gcd of the two is {g}.",
-        f"The {a}-disk Hanoi takes {ma:,} moves, the {b}-disk takes {mb:,}, and their gcd is {g}.",
-        f"For Hanoi({a}) = {ma:,} and Hanoi({b}) = {mb:,}, the greatest common divisor is {g}.",
-        f"Hanoi at n={a} requires {ma:,} moves; Hanoi at n={b} requires {mb:,}; gcd = {g}.",
-        f"Composite result: {ma:,} (n={a}) and {mb:,} (n={b}), with gcd {g}.",
+        f"Hanoi({a}) needs {ma:,} moves; Hanoi({b}) needs {mb:,} moves; their gcd is {g}.",
     ]
     return payload, sentences
 
@@ -171,7 +159,7 @@ def train(steps: int, batch: int, lr: float, device: str, seed: int = 42,
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         opt.step(); sched.step()
 
-        if (step + 1) % 200 == 0:
+        if (step + 1) % 100 == 0:
             with torch.no_grad():
                 vx, vy = val_tokens[:, :-1], val_tokens[:, 1:]
                 vm = val_masks[:, 1:]
@@ -180,6 +168,15 @@ def train(steps: int, batch: int, lr: float, device: str, seed: int = 42,
             if vloss < best_loss:
                 best_loss = vloss
                 best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+                # Periodic save: never lose work to a kill mid-training.
+                Path(save_to).parent.mkdir(parents=True, exist_ok=True)
+                torch.save({
+                    "state_dict": best_state,
+                    "config": cfg.__dict__,
+                    "max_len": MAX_LEN,
+                    "best_val_loss": best_loss,
+                    "tokens": {"PAD": PAD, "BOA": BOA, "EOS": EOS},
+                }, save_to)
             print(f"  step {step+1}/{steps}  train_loss={loss.item():.4f}  "
                   f"val_loss={vloss:.4f}  best_val={best_loss:.4f}  "
                   f"elapsed={time.time()-t0:.0f}s")
