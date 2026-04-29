@@ -144,12 +144,26 @@ register(Tool(
 
 
 def gcdhanoi_run(args: dict) -> ToolResult:
-    """args: {"a": int, "b": int}. Composes hanoi(a) + hanoi(b) + gcd."""
+    """args: {"a": int, "b": int}. Honest composite: invoke the Hanoi GRU
+    twice (one call per disk count) then pass the two move counts to the
+    GCD specialist. The orchestrator chains real specialists; the trace
+    now actually shows two GRU invocations and a GCD call.
+    """
     a, b = int(args["a"]), int(args["b"])
     t0 = time.time()
-    moves_a = (1 << a) - 1
-    moves_b = (1 << b) - 1
-    g = math.gcd(moves_a, moves_b)
+    res_a = hanoi_run({"n": a})
+    res_b = hanoi_run({"n": b})
+    if not (res_a.ok and res_b.ok):
+        return ToolResult(
+            ok=False,
+            payload={"reason": f"Hanoi GRU failed at composite (a={a}, b={b})"},
+            timing_ms=(time.time() - t0) * 1000,
+            specialist="composite: gcdhanoi (one of the inner Hanoi calls failed)",
+        )
+    moves_a = res_a.payload["optimal_moves"]
+    moves_b = res_b.payload["optimal_moves"]
+    res_gcd = gcd_run({"a": moves_a, "b": moves_b})
+    g = res_gcd.payload["gcd"]
     return ToolResult(
         ok=True,
         payload={
@@ -158,7 +172,8 @@ def gcdhanoi_run(args: dict) -> ToolResult:
             "gcd_of_move_counts": g,
         },
         timing_ms=(time.time() - t0) * 1000,
-        specialist="composite: hanoi_solver + gcd (orchestrator chains specialists)",
+        specialist=(f"composite: hanoi_solver(a={a}, {res_a.timing_ms:.0f}ms) + "
+                    f"hanoi_solver(b={b}, {res_b.timing_ms:.0f}ms) + gcd"),
     )
 
 
