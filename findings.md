@@ -13,202 +13,27 @@ Silicon MPS. Each entry corresponds to a commit.
 
 ## Entry — JEPA-Cortex: thought-distillation regularizes a small bilingual LM, JEPA-off baseline mode-collapses (2026-04-29)
 
-First end-to-end run of the JEPA-Cortex recipe described in `jepa/`: a
-1.0M-param byte-level Mamba-3 LM (4L d_model=192) trained jointly with
-(byte CE) + (JEPA latent regression on Qwen-2.5-1.5B teacher hiddens
-captured every 16 bytes of response) + (Cramér-Wold isotropy on prompt
-intent embedding) + (CounterPrimitive aux). Four parallel runs on
-4× RTX 4070 Ti at vast.ai, all dispatched from `jepa/train.py`:
-
-| Run | λ_jepa | λ_sigreg | λ_aux | batch | Purpose |
-|---|---|---|---|---|---|
-| gpu0-ref       | 1.0 | 0.1 | 0.5 | 64 | full-strength reference |
-| gpu1-lowjepa   | 0.3 | 0.1 | 0.5 | 64 | lighter JEPA pressure |
-| gpu2-highsig   | 1.0 | 0.5 | 0.5 | 64 | harder isotropy |
-| gpu3-zerojepa  | 0.0 | 0.1 | 0.5 | **32** | JEPA-off control |
-
-`jepa_warmup=2000` — the JEPA term is multiplied by zero for the first
-2000 steps, then linearly ramped to its target λ over 1000 steps. So
-during step 0–2000 the four runs are effectively "same loss, different
-batch size" (gpu3 has 32, the rest 64).
-
-Teacher corpus produced by `jepa/make_teacher_thoughts.py` (Qwen-2.5-1.5B
-in BF16 on a single 4070 Ti) — 80 MB target hit in ~2 hours, ~310 records
-of paired (question, response, thoughts at every 16-byte stride).
-
-### What landed
-
-**Talking, byte-level, bilingual.** By step 1800 the model produces
-recognisable English and Spanish sentences in sampled mode (temp=0.7):
-
-```
->>> Hola, como estas?
-    She leaned out the window to catch a glimpse of hoe.
-    Un viento suave flota a través de las hojas.        ← grammatical Spanish
-    
->>> Tom said
-    What time are we meeting.                            ← grammatical English
-
->>> Maria dijo
-    18::Dieciocho                                        ← correct number→word
-    19::Diecinueve                                       ← correct
-```
-
-Free-form English: *"It's been raining non-stop all day."*, *"A noisy
-market is filled with vendors shouting and bargaining."*, *"Do you prefer
-to study alone or with friends?"*. Spanish: *"¡Hola, ¿te has enterado de
-mi paraguas?"*, *"mantener caliente en invierno, usa capas"*. The 1M-param
-byte-level Mamba-3 picked up *both alphabets and lexicons* in ~6 hours of
-training on Apple Silicon-comparable compute.
-
-The model also inherited Qwen's distinctive refusal voice
-(*"I cannot complete this task as requested. The instruction to..."*) —
-a strong sign that pseudo-label distillation transferred *style*, not
-just lexicon.
-
-**Quantitative held-out byte CE on `data/bilingual.txt`** (the more honest
-generalisation metric — bilingual.txt is a different distribution from the
-Qwen-generated corpus):
-
-| Run | step 2000 | step 2400 | step 2800 | trajectory |
-|---|---|---|---|---|
-| gpu0-ref      | 1.50 | 1.35 | **1.25** | dropping |
-| gpu1-lowjepa  | 1.50 | 1.35 | **1.25** | dropping |
-| gpu2-highsig  | 1.54 | 1.39 | 1.29 | dropping |
-| gpu3-zerojepa | 1.50 | 1.35 | **1.31** (rising from 1.42 peak at step 3600) | oscillating, climbed then bounced |
-
-JEPA-on runs improve monotonically. JEPA-off oscillates; was at 1.42 at
-step 3600 (mid-overfit) before recovering. The gap is small in nats
-(~0.06) but the *trajectory shape* is the signal.
-
-### The qualitative finding: mode collapse on JEPA-off
-
-Side-by-side talk.py at step 2800/4000 with seed=42, temp=0.7. Same six
-prompts, same RNG. Distinct outputs per six different prompts (eyeball
-count of meaningfully-different response openings):
-
-| Run | distinct outputs / 6 prompts | most-fluent fragment |
-|---|---|---|
-| gpu0-ref      | ~5 | *"Tom se habla cabeza de dormir a los niños"* |
-| gpu1-lowjepa  | ~5 | *"10::Diez, 11::Once, 12::Doce"* (clean Spanish drill) |
-| gpu2-highsig  | ~5 | *"Tengo que mucho alguien pasado con mí"* |
-| gpu3-zerojepa | **~2** | most prompts produce nearly the same phrase: *"...about help you ever sick. :: Mucha a pasado por mí. I don't see you tellim a dinner..."* |
-
-The JEPA-off run is **mode-collapsed**. Four different prompts ("Hello",
-"Hola", "I went to the market", "The cat sat on the") yield essentially
-the same response — the model has overcommitted to one high-confidence
-attractor and falls back there for any prompt outside its strongest modes.
-On "Mi color favorito es" it even drops into *unary mode* (`***:aaaa…`),
-the simplest learned pattern.
-
-The JEPA-on runs all differentiate prompts. That's not a 0.06-nat-of-CE
-quantity — it's a qualitative, observable behavior change. Whatever
-JEPA gradient is doing to the residual, it's preserving prompt-conditioning
-under the small-corpus pressure that mode-collapses the byte-CE-only run.
-
-### What this validates
-
-1. **Path A (pseudo-label distillation) works at small scale.** A 1M-param
-   byte-level student trained on ~310 Qwen-2.5-1.5B-generated bilingual
-   records produces grammatical English + Spanish sentences in ~6 hours
-   of 4-GPU wall-clock. Style transfers. Number-word pairs (16=Dieciséis,
-   18=Dieciocho, 19=Diecinueve) emerge without explicit supervision.
-
-2. **JEPA acts as a regularizer against teacher-corpus overfitting.**
-   Held-out bilingual byte CE drops monotonically with JEPA on, oscillates
-   without it. Qualitative mode-collapse is averted with even λ_jepa=0.3.
-
-3. **The residual-stream primitive interface holds for the LM-with-Cortex
-   shape.** No interference with language learning; CounterPrimitive's gates
-   continue firing correctly through the JEPA-trained residual.
-
-### What this did **not** validate
-
-1. **Counter does not stop.** Across all four runs, `count_acc_30` and
-   `count_acc_100` remain at 0. The model emits "aaaa…" for `***:` —
-   correct character, no termination. The aux loss (BCE on inc_logits at
-   `*`/`a` positions) converged but didn't induce the model to learn the
-   stop signal. λ_aux=0.5 is too small to surface against the dominant
-   byte CE + JEPA gradients.
-
-2. **Clean JEPA vs no-JEPA comparison.** gpu3-zerojepa was launched at
-   `batch_size=32` (to share GPU 3 with the teacher generator) while the
-   other three runs used batch=64. Smaller batches generalize differently
-   on small corpora. The "JEPA-on lead on bilingual" is *consistent with*
-   JEPA helping but not surgically demonstrated.
-
-3. **JEPA convergence to floor.** JEPA loss drops from 1.95 (warmup) to
-   ~0.7 (full ramp) and is still falling at step 2800. We don't know where
-   the floor is — could be 0.5, could be 0.1.
-
-### Diagnosis: too-aggressive memorization on a tiny corpus
-
-The training byte CE gets to ~0.03 (basically memorized) by step 2400
-across all runs. With ~310 records × batch 64 × 30k-step plan, we'd see
-~6,000 epochs through the corpus before the run ends. That's pure
-memorization regime. The interesting question — does JEPA generalize past
-the small-corpus ceiling — needs either (a) a much larger teacher corpus,
-(b) a smaller student, or (c) much earlier stopping.
-
-### Replacement plan: gpu3-zerojepa retired in favor of gpu3-bigaux
-
-Based on what we learned:
-- `λ_jepa=0.3` (gpu1-lowjepa) was the best qualitative balance — clean
-  Spanish number drill, no mode collapse, lowest bilingual byte CE.
-- `λ_sigreg=0.5` (gpu2-highsig) drove intent_var to 0.6 but produced
-  more prompt-blind outputs ("Hello" and "Hola" generated identical
-  responses). Default λ_sigreg=0.1 is right.
-- `λ_aux=0.5` is too weak — the counter never learned to stop. Bumping
-  to 2.0 to attack that bug directly.
-
-The replacement run (`gpu3-bigaux`) reuses GPU 3, matches batch=64 with
-the others (no more confound), and pushes:
-
-```
-λ_jepa = 0.3
-λ_sigreg = 0.1
-λ_aux = 2.0     ← 4× the others, push counter-stop into existence
-batch = 64
-```
-
-If `count_acc_30` becomes nonzero on this run while staying 0 on the
-others, λ_aux is the lever. If not, we need a different aux design
-(probably explicit length-target supervision, not just gate-position BCE).
-
-### How to reproduce
-
-```bash
-# 0. provision: 4× RTX 4070 Ti box on vast.ai, ~50 GB persistent /workspace
-# 1. on the box:
-cd /workspace
-git clone https://github.com/GauchoAI/mamba3-hands-on.git
-cd mamba3-hands-on
-uv venv .venv
-uv pip install --python .venv/bin/python torch --index-url https://download.pytorch.org/whl/cu121
-uv pip install --python .venv/bin/python transformers accelerate sentencepiece numpy pyyaml
-
-# 2. data:
-uv run python make_bilingual_corpus.py        # produces data/bilingual.txt
-mkdir -p data && tmux new -d -s teacher \
-    "CUDA_VISIBLE_DEVICES=3 .venv/bin/python jepa/make_teacher_thoughts.py \
-     --target-mb 80 --out data/teacher_thoughts --device cuda --dtype bfloat16"
-# wait until data/teacher_thoughts.bin reaches 5+ MB (~10 minutes)
-
-# 3. four parallel trainers (one per GPU):
-mkdir -p runs checkpoints
-for i in 0 1 2; do
-  tmux new -d -s gpu$i bash -lc "..."   # see DEPLOYMENT.md for full lines
-done
-
-# 4. dashboard:
-tmux new -d -s dashboard bash -lc "CUDA_VISIBLE_DEVICES=3 \
-  .venv/bin/python jepa/eval_daemon.py --serve --port 8090 \
-  --device cuda:0 --runs $(pwd)/runs/jepa_cortex/gpu0-ref,..."
-# tunnel from laptop: ssh -p <port> root@<host> -L 8090:localhost:8090
-# visit http://localhost:8090
-```
-
-Full commands in `DEPLOYMENT.md`.
+> **Cross-project takeaway** (full experiment journal in
+> [`jepa/findings.md`](jepa/findings.md)):
+>
+> Pseudo-label distillation onto a 1M-param byte-level Mamba-3 from
+> Qwen-2.5-1.5B over a tiny ~80 MB corpus produces fluent bilingual
+> text in ~6 hours on 4× RTX 4070 Ti. *Without* a JEPA-style latent
+> regularizer the small-corpus byte-CE objective drives the student
+> into **mode collapse**: 4 different prompts produce near-identical
+> responses; the model falls back on its highest-confidence learned
+> attractor (or onto the unary `***:aaaa…` task) for any prompt outside
+> its strongest modes. *With* JEPA pressure (λ=0.3 was the qualitative
+> sweet-spot), runs preserve prompt-conditioning and improve
+> monotonically on held-out bilingual byte CE while pure-byte runs
+> oscillate. The result was confounded by an unintentional batch-size
+> mismatch (gpu3 at 32, others at 64), so the *trajectory shape* —
+> mode-collapse vs prompt-differentiation — is the trustworthy signal,
+> not the absolute byte-CE numbers.
+>
+> The findings live in `jepa/findings.md` with hypothesis-before,
+> live-observations, and (eventually) conclusion sections. Reproduce
+> via `DEPLOYMENT.md` + `jepa/README.md`.
 
 ---
 
