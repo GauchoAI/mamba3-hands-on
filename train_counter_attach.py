@@ -88,7 +88,8 @@ class MixedBatchDataset:
 # Build attached model: load frozen LM + fresh counter
 # ---------------------------------------------------------------------------
 
-def build_attached_lm(lm_ckpt_path: str, device: str) -> CortexLM:
+def build_attached_lm(lm_ckpt_path: str, device: str,
+                      injection_scale: float = 10.0) -> CortexLM:
     """Load a trained bilingual CortexLM and attach a fresh CounterPrimitive."""
     sd = torch.load(lm_ckpt_path, map_location=device, weights_only=False)
     lm_cfg = sd["cfg"]
@@ -100,7 +101,7 @@ def build_attached_lm(lm_ckpt_path: str, device: str) -> CortexLM:
         layer=0,
         n_counters=2,
         readout="unbounded",
-        injection_scale=10.0,
+        injection_scale=injection_scale,
     )
     model = CortexLM(lm_cfg, primitives=[counter]).to(device)
 
@@ -142,6 +143,7 @@ def train_counter(
     log_every: int,
     ckpt_every: int,
     seed: int,
+    injection_scale: float = 10.0,
 ):
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"device: {device}")
@@ -149,7 +151,7 @@ def train_counter(
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    model = build_attached_lm(lm_ckpt, device)
+    model = build_attached_lm(lm_ckpt, device, injection_scale=injection_scale)
     seq_len = model.cfg.max_seq_len
 
     dataset = MixedBatchDataset(
@@ -258,6 +260,9 @@ def main():
     ap.add_argument("--log-every", type=int, default=100)
     ap.add_argument("--ckpt-every", type=int, default=500)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--injection-scale", type=float, default=10.0,
+                    help="multiplier on residual injection (Phase 5/6 of cortex "
+                         "showed bigger scale = louder counter signal in residual)")
     ap.add_argument("--eval-only", action="store_true",
                     help="skip training, just eval (use --resume in --out)")
     args = ap.parse_args()
@@ -268,7 +273,7 @@ def main():
         sd = torch.load(ckpt_path, map_location=device, weights_only=False)
         cfg = sd["cfg"]
         counter = CounterPrimitive(d_model=cfg.d_model, layer=0, n_counters=2,
-                                    readout="unbounded", injection_scale=10.0)
+                                    readout="unbounded", injection_scale=args.injection_scale)
         model = CortexLM(cfg, primitives=[counter]).to(device)
         model.load_state_dict(sd["model"])
         run_eval(model, device)
@@ -279,6 +284,7 @@ def main():
         steps=args.steps, batch_size=args.batch_size, lr=args.lr,
         lambda_aux=args.lambda_aux, unary_p=args.unary_p,
         log_every=args.log_every, ckpt_every=args.ckpt_every, seed=args.seed,
+        injection_scale=args.injection_scale,
     )
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     run_eval(model, device)
