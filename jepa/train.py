@@ -69,6 +69,7 @@ class TrainConfig:
     counter_readout:           str = "unbounded"
     counter_head_bias:         bool = True
     counter_injection_scale:   float = 1.0
+    n_loops:                   int = 1
 
     # Teacher dim — set automatically from data on first batch if 0.
     d_teacher: int = 0
@@ -225,6 +226,7 @@ def train(cfg: TrainConfig) -> None:
         counter_layer=cfg.counter_layer, counter_readout=cfg.counter_readout,
         counter_head_bias=cfg.counter_head_bias,
         counter_injection_scale=cfg.counter_injection_scale,
+        n_loops=cfg.n_loops,
     )
     model = CortexLM(model_cfg).to(device)
     thought_head = ThoughtHead(cfg.d_model, cfg.d_teacher).to(device)
@@ -397,6 +399,11 @@ def main():
                     choices=["true", "false"],
                     help="If false, no CounterPrimitive is built; aux loss "
                          "path returns 0. Use for the no-cortex variant.")
+    ap.add_argument("--n-loops", type=int, default=1,
+                    help="RLF-inspired layer recursion. n=1 (default) is "
+                         "standard behavior. n>1 re-runs the SSM stack n "
+                         "times per token with a decayed lifeline of the "
+                         "original embedding re-injected each loop.")
     ap.add_argument("--override-stride-bytes", type=int,
                     default=TrainConfig.stride_bytes,
                     help="Must match the stride used to make teacher_thoughts")
@@ -424,6 +431,7 @@ def main():
         d_model=args.d_model,
         n_layers=args.n_layers,
         use_counter=(args.use_counter == "true"),
+        n_loops=args.n_loops,
         stride_bytes=args.override_stride_bytes,
         device=args.device,
         seed=args.seed,

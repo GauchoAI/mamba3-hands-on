@@ -287,6 +287,11 @@ class CortexLMConfig:
     counter_readout: str = "sinusoidal"   # "sinusoidal" | "unbounded" (Phase 3)
     counter_head_bias: bool = False       # Phase 4: direct counter→logit path
     counter_injection_scale: float = 1.0  # Phase 5: multiplier on residual injection
+    # recursion (RLF-inspired). n_loops=1 = standard behavior. n_loops>1
+    # re-runs the SSM layer block that many additional times before the
+    # final norm + head. Primitives re-fire on each pass, so the
+    # CounterPrimitive gets multiple "chances" to update its state per token.
+    n_loops: int = 1
 
 
 class CortexLM(nn.Module):
@@ -380,21 +385,38 @@ class CortexLM(nn.Module):
         """
         x = self.embed(tokens)
         x = self.embed_norm(x)
+        # Snapshot the post-embed state for RLF-style lifeline re-injection
+        # on subsequent loops. Detached so the lifeline acts as a fixed
+        # anchor (RLF paper: the original prompt embedding stays as a
+        # constant context across all loop iterations, otherwise the
+        # gradient feeds back through it on every loop and destabilises).
+        x_anchor = x.detach() if self.cfg.n_loops > 1 else None
         prim_outputs = {}
         head_bias_total = None
-        for i, layer in enumerate(self.layers):
-            residual = x
-            x = layer["norm"](x)
-            x = layer["block"](x)
-            x = residual + x
-            for p in self.primitives:
-                if p.layer == i:
-                    out = p(x, tokens)
-                    x = x + out["injection"]
-                    prim_outputs[p.name] = out
-                    hb = out.get("head_bias")
-                    if hb is not None:
-                        head_bias_total = hb if head_bias_total is None else head_bias_total + hb
+        # Outer loop: standard pass = 1 iteration; n_loops>1 re-runs the
+        # SSM stack with re-injected anchor and a different geometric phase
+        # per iteration (cheap LoopRoPE analog: scale x by cos(loop_idx*0.1)
+        # before re-entry; not a full rotation, just enough to break exact
+        # fixed-point collapse).
+        for loop_i in range(max(1, self.cfg.n_loops)):
+            if loop_i > 0 and x_anchor is not None:
+                # Lifeline: re-add the original embedding (with mild decay
+                # so we're not just averaging the same vector each loop).
+                decay = 0.5 ** loop_i
+                x = x + decay * x_anchor
+            for i, layer in enumerate(self.layers):
+                residual = x
+                x = layer["norm"](x)
+                x = layer["block"](x)
+                x = residual + x
+                for p in self.primitives:
+                    if p.layer == i:
+                        out = p(x, tokens)
+                        x = x + out["injection"]
+                        prim_outputs[p.name] = out
+                        hb = out.get("head_bias")
+                        if hb is not None:
+                            head_bias_total = hb if head_bias_total is None else head_bias_total + hb
         x = self.final_norm(x)
         logits = self.head(x)
         if head_bias_total is not None:
