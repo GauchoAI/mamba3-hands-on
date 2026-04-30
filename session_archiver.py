@@ -23,10 +23,15 @@ date-aware shard routing places it in the original day's shard. Records
 without a timestamp (~7% of them — the housekeeping types) fall back to
 the parent record's mtime.
 
+There's no separate backfill vs watch mode — the first poll iteration
+naturally handles records not yet in the dedup state (= "backfill");
+subsequent iterations handle new appends (= "realtime"). Same loop,
+same code path. SIGINT to stop.
+
 CLI:
-    python session_archiver.py                # one-shot, all sessions
-    python session_archiver.py --watch        # poll forever, 30s interval
-    python session_archiver.py --session UUID # one session only
+    python session_archiver.py                # poll forever, 30 s interval
+    python session_archiver.py --session UUID # restrict to one session
+    python session_archiver.py --interval 5   # tighter polling
 """
 from __future__ import annotations
 
@@ -208,9 +213,8 @@ def main():
                     help="local kappa run dir for the streams")
     ap.add_argument("--session",
                     help="archive only this session uuid")
-    ap.add_argument("--watch", action="store_true",
-                    help="poll forever (interval --interval seconds)")
-    ap.add_argument("--interval", type=int, default=30)
+    ap.add_argument("--interval", type=int, default=30,
+                    help="poll interval in seconds (default 30)")
     args = ap.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -234,8 +238,6 @@ def main():
             print(f"  total={r['total']:,}  new={r['new']:,}  "
                   f"skipped_seen={r['skipped_seen']:,}  ({dt:.1f}s)",
                   flush=True)
-        if not args.watch:
-            return
         time.sleep(args.interval)
 
 
