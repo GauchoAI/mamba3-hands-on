@@ -189,6 +189,128 @@ That's the whole convention. New experiments inherit Firebase
 telemetry, durable HF archive, LAN redundancy, code propagation,
 and Parquet compaction by following the four steps above.
 
+## Two-tier streams: hot Firebase log + cold HF Parquet
+
+Streams are how producers write growing series of small records
+(metrics, samples, events). Each push lands in **two places**:
+
+1. **Local JSONL shard** at `<run_dir>/streams/<stream>-<UTC-date>.jsonl`
+   — canonical, append-only, one record per line. The packer reads
+   from here.
+2. **Firebase RTDB** at `/streams/<exp>/<run>/<stream>/<UTC-date>/<auto-id>`
+   — live mirror, dashboardable, deleted on seal.
+
+A **meta node** tracks the live state of each stream:
+
+```yaml
+# /streams_meta/<exp>/<run>/<stream>
+stream:                  "metrics"
+hf_user:                 "miguelemosreverte"
+hf_bucket:               "GauchoAI"
+prefix:                  "cortex_bilingual/lm-bf16/streams"
+url_browse_template:     "https://huggingface.co/buckets/{hf_user}/{hf_bucket}/{prefix}/{filename}"
+url_hfsync_template:     "hf://buckets/{hf_user}/{hf_bucket}/{prefix}/{filename}"
+pack_threshold_bytes:    10485760     # 10 MB
+pack_threshold_records:  50000
+pack_threshold_hours:    24.0
+current_size_bytes:      12345
+current_record_count:    87
+pack_progress_pct:       0.18
+last_pack_at:            null
+last_pack_filename:      null
+shard_started_at:        1714521600
+```
+
+A live record is then **minimal** — no URL strings, no run/exp
+fields (those are the path):
+
+```yaml
+# /streams/<exp>/<run>/<stream>/<date>/<auto-id>
+ts:    1714521602.5
+step:  100
+loss:  1.23
+lr:    0.001
+```
+
+The dashboard joins `meta.url_browse_template` + the shard
+filename to render a clickable link to the Parquet on HF. **No URL
+is ever stored per-record.** This is the prefix/suffix
+compression: the convention is the function, the records are the
+arguments.
+
+## Producer API
+
+`experiment_pusher.py` exposes three methods:
+
+```python
+p = ExperimentPusher(experiment_id="cortex_bilingual-2026-04-30",
+                     run_id="lm-bf16",
+                     kind="cortex_bilingual",
+                     config=cfg, outbox_dir=run_dir)
+p.declare_run(...)
+
+# Optional — a stream is auto-declared on first push() with defaults.
+p.declare_stream("metrics",
+                 pack_threshold_bytes=10*1024*1024,
+                 pack_threshold_records=50_000,
+                 pack_threshold_hours=24.0)
+
+# Push records (cheap, non-blocking, dual-write).
+p.stream("metrics", {"step": 100, "loss": 1.23, "lr": 1e-3})
+
+# After kappa_packer rolls a shard to Parquet:
+p.seal_stream("metrics", "metrics-2026-04-30.jsonl")
+# (kappa_packer.py does this for you via REST when given a manifest.)
+```
+
+The existing `pusher.metrics(step, **values)` /
+`pusher.canary_sample(step, prompt, completion)` / `pusher.event(...)`
+are now **backward-compat shims**: they internally call
+`pusher.stream("metrics" | "samples" | "events", ...)`. So every
+trainer in the repo gets local JSONL + meta tracking + RTDB live
+mirror automatically with zero migration churn.
+
+## Per-record size cap
+
+**Records >256 KB are rejected with a hard error.** Silent
+truncation is the worst possible bug. Truncate fields at the call
+site or split the record into two pushes.
+
+Most records are <1 KB (metrics, events). Sample records can hit
+~10 KB if the prompt + completion are long. Both fit comfortably.
+
+## Pack triggers
+
+`kappa_packer.py` packs a shard when ANY of these is reached:
+
+| Trigger | Default | Why |
+|---|---|---|
+| Size | 10 MB JSONL (uncompressed) | ~1-2 MB Parquet after zstd; fast read, big enough to amortize column overhead |
+| Count | 50,000 records | bounds RTDB record count per shard |
+| Age | 24 hours | guarantees a daily rollover even if traffic is sparse |
+
+First trigger wins. Override per-stream via `declare_stream()`.
+
+## Run manifest
+
+The pusher writes `<run_dir>/_kappa_manifest.json` on init:
+
+```json
+{
+  "experiment_id": "cortex_bilingual-2026-04-30",
+  "run_id":        "lm-bf16",
+  "kind":          "cortex_bilingual",
+  "firebase_url":  "https://signaling-...",
+  "hf_user":       "miguelemosreverte",
+  "hf_bucket":     "GauchoAI"
+}
+```
+
+`kappa_packer.py` walks upward from any JSONL shard to find this
+manifest, then talks to RTDB directly (no in-process pusher needed)
+to issue the DELETE + meta PATCH. So packing can happen between
+training runs without re-instantiating anything.
+
 ## Why Kappa, not Lambda
 
 Lambda architecture splits batch and streaming processing into two

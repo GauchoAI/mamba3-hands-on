@@ -188,9 +188,17 @@ class ExperimentPusher:
         self.config = config
         self.firebase_url = firebase_url.rstrip("/")
         self.enabled = enabled
+        self.outbox_dir = Path(outbox_dir)
 
-        self.outbox_path = Path(outbox_dir) / "firebase_outbox.jsonl"
-        self.outbox_path.parent.mkdir(parents=True, exist_ok=True)
+        self.outbox_path = self.outbox_dir / "firebase_outbox.jsonl"
+        self.outbox_dir.mkdir(parents=True, exist_ok=True)
+
+        # Kappa streams: per-stream local JSONL shards (canonical),
+        # mirrored to RTDB for live observability + drained to HF Parquet
+        # on pack via kappa_packer.py.
+        self.streams_dir = self.outbox_dir / "streams"
+        self.streams_dir.mkdir(parents=True, exist_ok=True)
+        self._stream_meta: dict[str, dict[str, Any]] = {}
 
         self._channel_state: dict[str, _ChannelState] = {
             "metrics": _ChannelState(),
@@ -203,9 +211,14 @@ class ExperimentPusher:
         }
 
         # Single background queue + thread. Caller methods enqueue and return.
-        self._q: queue.Queue = queue.Queue(maxsize=64)
+        self._q: queue.Queue = queue.Queue(maxsize=256)
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
+
+        # Drop a manifest so kappa_packer (run as a separate process,
+        # possibly later) can find experiment_id / run_id / firebase URL
+        # from any local run directory it gets pointed at.
+        self._write_manifest()
 
     # -- path helpers -------------------------------------------------------
     def _exp_path(self, *parts: str) -> str:
@@ -248,17 +261,198 @@ class ExperimentPusher:
         }
         self._enqueue(("PUT", self._run_path("meta"), meta))
 
+    # -- Kappa stream API --------------------------------------------------
+    # Streams are append-only logs of small records. Each push:
+    #   1. Appends a JSON line to <run_dir>/streams/<name>-<UTC-date>.jsonl
+    #      (canonical, what the packer reads)
+    #   2. POSTs to /streams/<exp>/<run>/<name>/<UTC-date>/<auto-id> in RTDB
+    #      (live mirror, dashboardable, deleted on seal)
+    #   3. Bumps in-memory counters; flushes meta to RTDB every 50 pushes.
+    # When a shard hits a pack threshold (size / count / age), kappa_packer
+    # converts the JSONL → Parquet on HF Bucket and calls seal_stream() to
+    # drop the matching RTDB records and bump last_pack_*.
+
+    def _stream_meta_path(self, name: str) -> str:
+        return f"streams_meta/{self.experiment_id}/{self.run_id}/{name}"
+
+    def _stream_records_path(self, name: str, *parts: str) -> str:
+        return "/".join(["streams", self.experiment_id, self.run_id, name, *parts])
+
+    def _write_manifest(self) -> None:
+        """Write a small _kappa_manifest.json so kappa_packer can find
+        experiment_id / run_id / firebase URL from any run directory it's
+        pointed at, without needing the original ExperimentPusher object.
+        """
+        try:
+            manifest = {
+                "experiment_id": self.experiment_id,
+                "run_id": self.run_id,
+                "kind": self.kind,
+                "firebase_url": self.firebase_url,
+                "hf_user": os.environ.get("HF_ARCHIVE_USER",
+                                          "miguelemosreverte"),
+                "hf_bucket": os.environ.get("HF_ARCHIVE_BUCKET", "GauchoAI"),
+            }
+            (self.outbox_dir / "_kappa_manifest.json").write_text(
+                json.dumps(manifest, indent=2)
+            )
+        except OSError:
+            pass
+
+    def declare_stream(
+        self,
+        name: str,
+        *,
+        pack_threshold_bytes: int = 10 * 1024 * 1024,
+        pack_threshold_records: int = 50_000,
+        pack_threshold_hours: float = 24.0,
+        hf_user: str | None = None,
+        hf_bucket: str | None = None,
+        hf_prefix: str | None = None,
+    ) -> None:
+        """Register a stream. Writes the meta node once. Idempotent.
+
+        URL templates are stored in the meta so dashboards can build
+        clickable links by substituting the filename only — neither
+        records nor the live RTDB nodes carry full URLs.
+        """
+        user = hf_user or os.environ.get(
+            "HF_ARCHIVE_USER", "miguelemosreverte"
+        )
+        bucket = hf_bucket or os.environ.get(
+            "HF_ARCHIVE_BUCKET", "GauchoAI"
+        )
+        prefix = hf_prefix or f"{self.kind}/{self.run_id}/streams"
+        now = time.time()
+        meta = {
+            "stream": name,
+            "experiment_id": self.experiment_id,
+            "run_id": self.run_id,
+            "kind": self.kind,
+            "hf_user": user,
+            "hf_bucket": bucket,
+            "prefix": prefix,
+            "url_browse_template":
+                f"https://huggingface.co/buckets/{user}/{bucket}/{prefix}/{{filename}}",
+            "url_hfsync_template":
+                f"hf://buckets/{user}/{bucket}/{prefix}/{{filename}}",
+            "pack_threshold_bytes": pack_threshold_bytes,
+            "pack_threshold_records": pack_threshold_records,
+            "pack_threshold_hours": pack_threshold_hours,
+            "current_size_bytes": 0,
+            "current_record_count": 0,
+            "pack_progress_pct": 0.0,
+            "last_pack_at": None,
+            "last_pack_filename": None,
+            "shard_started_at": now,
+        }
+        self._stream_meta[name] = meta
+        self._enqueue(("PUT", self._stream_meta_path(name), meta))
+
+    def stream(self, name: str, record: dict[str, Any]) -> None:
+        """Append a record to a stream. Non-blocking.
+
+        Local JSONL is canonical; RTDB push() is the live mirror.
+        Records >256 KB are rejected (silent loss is the worst possible
+        bug). Counters drive the pack-progress meta the dashboard sees.
+        """
+        if not self.enabled:
+            return
+        if name not in self._stream_meta:
+            self.declare_stream(name)
+
+        record_with_ts = {"ts": time.time(),
+                          **{k: _safe_float(v) for k, v in record.items()}}
+        line = json.dumps(record_with_ts, default=str) + "\n"
+        line_bytes = line.encode("utf-8")
+        if len(line_bytes) > 256_000:
+            raise ValueError(
+                f"stream record too large: {len(line_bytes)} bytes "
+                f"(>256 KB cap). Truncate fields or split records."
+            )
+
+        # 1. Canonical local JSONL append (UTC date sharded).
+        today = time.strftime("%Y-%m-%d", time.gmtime())
+        shard_path = self.streams_dir / f"{name}-{today}.jsonl"
+        try:
+            with shard_path.open("a") as f:
+                f.write(line)
+        except OSError as e:
+            # Local write fails — log + continue; RTDB still gets the record.
+            print(f"[pusher] stream {name} local append failed: {e}",
+                  flush=True)
+
+        # 2. Live mirror to RTDB at a date-sharded path so seal can drop
+        #    the whole day's records with one DELETE on pack.
+        self._enqueue((
+            "POST",
+            self._stream_records_path(name, today),
+            record_with_ts,
+            None,  # don't trigger _maybe_rotate; we manage retention via seal
+        ))
+
+        # 3. Counter bookkeeping.
+        m = self._stream_meta[name]
+        m["current_record_count"] += 1
+        m["current_size_bytes"] += len(line_bytes)
+        # Flush meta every 50 pushes (keeps the dashboard ~live without
+        # spamming RTDB).
+        if m["current_record_count"] % 50 == 0:
+            self._flush_stream_meta(name)
+
+    def _flush_stream_meta(self, name: str) -> None:
+        m = self._stream_meta.get(name)
+        if not m:
+            return
+        age_h = (time.time() - m["shard_started_at"]) / 3600.0
+        pct = max(
+            m["current_size_bytes"] / max(1, m["pack_threshold_bytes"]),
+            m["current_record_count"] / max(1, m["pack_threshold_records"]),
+            age_h / max(1e-9, m["pack_threshold_hours"]),
+        )
+        m["pack_progress_pct"] = round(100.0 * pct, 2)
+        update = {
+            "current_size_bytes": m["current_size_bytes"],
+            "current_record_count": m["current_record_count"],
+            "pack_progress_pct": m["pack_progress_pct"],
+        }
+        self._enqueue(("PATCH", self._stream_meta_path(name), update))
+
+    def seal_stream(self, name: str, shard_filename: str,
+                    parquet_filename: str | None = None) -> None:
+        """Called by kappa_packer after a successful pack + upload.
+
+        Drops the sealed records (RTDB DELETE on the date subtree) and
+        updates last_pack_* in the meta. Resets live counters.
+        """
+        # Filename like "metrics-2026-04-30.jsonl"; date is the suffix.
+        base = shard_filename.removesuffix(".jsonl").removesuffix(".parquet")
+        date = base.rsplit("-", 1)[-1] if "-" in base else "unknown"
+        if parquet_filename is None:
+            parquet_filename = base + ".parquet"
+
+        # 1. Drop the sealed records from RTDB.
+        self._enqueue(("DELETE", self._stream_records_path(name, date), None))
+
+        # 2. Update meta — last_pack_* and reset counters.
+        if name not in self._stream_meta:
+            self.declare_stream(name)
+        m = self._stream_meta[name]
+        m["last_pack_at"] = time.time()
+        m["last_pack_filename"] = parquet_filename
+        m["current_size_bytes"] = 0
+        m["current_record_count"] = 0
+        m["pack_progress_pct"] = 0.0
+        m["shard_started_at"] = time.time()
+        self._enqueue(("PUT", self._stream_meta_path(name), m))
+
     # -- per-step API (cheap; throttled internally) -------------------------
     def metrics(self, step: int, **values: float) -> None:
-        """Append a metrics row. Throttled to ~every 2 min."""
-        st = self._channel_state["metrics"]
-        now = time.time()
-        if now - st.last_push_ts < THROTTLE_METRICS_S:
-            return
-        st.last_push_ts = now
-        row = {"step": step, "ts": now,
-               **{k: _safe_float(v) for k, v in values.items()}}
-        self._enqueue(("POST", self._run_path("metrics"), row, "metrics"))
+        """Append a metrics row. Routes through stream("metrics", ...)
+        so the local JSONL + meta tracking happen automatically.
+        Existing callers don't need code changes."""
+        self.stream("metrics", {"step": step,
+                                **{k: _safe_float(v) for k, v in values.items()}})
 
     def heartbeat(self, step: int, **values) -> None:
         """Overwrite the run's status document. Throttled to ~every 10 min."""
@@ -274,23 +468,18 @@ class ExperimentPusher:
 
     def canary_sample(self, step: int, prompt: str, completion: str,
                       max_chars: int = 600) -> None:
-        """Append a canary sample. Throttled to ~every 1 h. Truncates strings."""
-        st = self._channel_state["samples"]
-        now = time.time()
-        if now - st.last_push_ts < THROTTLE_SAMPLES_S:
-            return
-        st.last_push_ts = now
-        row = {"step": step, "ts": now,
-               "prompt": prompt[:max_chars],
-               "completion": completion[:max_chars]}
-        self._enqueue(("POST", self._run_path("samples"), row, "samples"))
+        """Append a canary sample. Routes through stream("samples", ...)."""
+        self.stream("samples", {"step": step,
+                                "prompt": prompt[:max_chars],
+                                "completion": completion[:max_chars]})
 
     def event(self, type: str, step: int, details: str = "",
               reasoning: str = "", **extra) -> None:
-        """Append a milestone / decision event. NOT throttled."""
-        row = {"type": type, "step": step, "ts": time.time(),
-               "details": details, "reasoning": reasoning, **extra}
-        self._enqueue(("POST", self._run_path("events"), row, "events"))
+        """Append a milestone / decision event. Routes through
+        stream("events", ...)."""
+        self.stream("events", {"type": type, "step": step,
+                               "details": details, "reasoning": reasoning,
+                               **extra})
 
     # -- run lifecycle ------------------------------------------------------
     def complete(self, final_state: str = "completed",
@@ -308,13 +497,19 @@ class ExperimentPusher:
         # to finish — the worker grabs an item *then* makes a HTTPS call,
         # so an empty queue alone does not mean all writes have landed.
         # task_done()/join() handles this exactly.
-        deadline = time.time() + 30.0
-        # Poll-style timeout — Queue.join() has no timeout, so spin.
+        # 5 min deadline is generous: covers bursty end-of-run flushes
+        # (e.g. 1000 unposted stream records each needing a HTTPS round
+        # trip) without hanging forever on a partitioned network.
+        deadline = time.time() + 300.0
         while True:
             with self._q.all_tasks_done:
                 if self._q.unfinished_tasks == 0:
                     break
             if time.time() >= deadline:
+                # Give up; surface the count so it's visible in logs.
+                print(f"[pusher] complete() drain timeout — "
+                      f"{self._q.unfinished_tasks} task(s) still in flight",
+                      flush=True)
                 break
             time.sleep(0.1)
 
@@ -362,6 +557,10 @@ class ExperimentPusher:
             # ended_at + final_state without clobbering started_at /
             # config / git_sha that declare_run() wrote.
             return _patch(url, payload)
+        if method == "DELETE":
+            # Used by seal_stream() to drop a sealed date's records once
+            # they've been packed into Parquet on HF.
+            return _delete(url)
         return False
 
     def _spool(self, method: str, path: str, payload: dict) -> None:

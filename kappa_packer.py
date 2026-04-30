@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -52,6 +53,113 @@ def _pa():
     import pyarrow as pa
     import pyarrow.parquet as pq
     return pa, pq
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Manifest discovery + RTDB seal — direct REST so the packer doesn't
+# need an in-process ExperimentPusher (it's a separate command, may
+# run between training sessions).
+# ─────────────────────────────────────────────────────────────────────
+
+def find_manifest(start: Path) -> Path | None:
+    """Walk upward from `start` looking for `_kappa_manifest.json`.
+
+    The pusher writes this on init at the run's outbox dir
+    (typically the trainer's ckpt_dir), so packing any file inside
+    that tree finds it. Returns None if not found.
+    """
+    p = start.resolve()
+    if p.is_file():
+        p = p.parent
+    while True:
+        candidate = p / "_kappa_manifest.json"
+        if candidate.exists():
+            return candidate
+        if p.parent == p:
+            return None
+        p = p.parent
+
+
+_SHARD_RE = re.compile(r"^(?P<stream>.+)-(?P<date>\d{4}-\d{2}-\d{2})$")
+
+
+def _stream_name_from_filename(path: Path) -> tuple[str, str]:
+    """Extract `(stream, date)` from a `<stream>-YYYY-MM-DD.jsonl` shard.
+    The date is YYYY-MM-DD which has its own dashes — use a regex
+    rather than naive rpartition.
+    """
+    base = path.stem
+    m = _SHARD_RE.match(base)
+    if not m:
+        return base, "unknown"
+    return m.group("stream"), m.group("date")
+
+
+def seal_via_rtdb(manifest_path: Path, jsonl_path: Path,
+                  parquet_path: Path) -> dict:
+    """Tell RTDB the JSONL shard is now packed:
+      - DELETE /streams/<exp>/<run>/<stream>/<date>/   (drop sealed records)
+      - PUT    /streams_meta/<exp>/<run>/<stream>     (last_pack_*, reset counters)
+
+    Direct REST via urllib so we don't need to import the pusher class.
+    Returns a small status dict; safe to ignore on failure (kappa_packer
+    will still report the local pack success).
+    """
+    import json as _json
+    import time as _time
+    import urllib.request as _req
+    import urllib.error as _err
+
+    try:
+        manifest = _json.loads(manifest_path.read_text())
+    except (OSError, _json.JSONDecodeError) as e:
+        return {"ok": False, "reason": f"manifest read: {e}"}
+
+    fb = manifest.get("firebase_url", "").rstrip("/")
+    exp = manifest.get("experiment_id")
+    run = manifest.get("run_id")
+    if not (fb and exp and run):
+        return {"ok": False, "reason": "manifest incomplete"}
+
+    stream, date = _stream_name_from_filename(jsonl_path)
+    parquet_filename = parquet_path.name
+
+    # 1. DELETE the date subtree of records.
+    rec_url = f"{fb}/streams/{exp}/{run}/{stream}/{date}.json"
+    delete_ok = False
+    try:
+        req = _req.Request(rec_url, method="DELETE")
+        with _req.urlopen(req, timeout=10.0) as resp:
+            delete_ok = 200 <= resp.status < 300
+    except _err.URLError as e:
+        return {"ok": False, "reason": f"DELETE: {e}"}
+
+    # 2. PATCH the meta with last_pack_* + counter reset.
+    meta_url = f"{fb}/streams_meta/{exp}/{run}/{stream}.json"
+    update = {
+        "last_pack_at": _time.time(),
+        "last_pack_filename": parquet_filename,
+        "current_size_bytes": 0,
+        "current_record_count": 0,
+        "pack_progress_pct": 0.0,
+        "shard_started_at": _time.time(),
+    }
+    patch_ok = False
+    try:
+        req = _req.Request(
+            meta_url, data=_json.dumps(update).encode("utf-8"),
+            method="PATCH",
+            headers={"Content-Type": "application/json"},
+        )
+        with _req.urlopen(req, timeout=10.0) as resp:
+            patch_ok = 200 <= resp.status < 300
+    except _err.URLError as e:
+        return {"ok": False, "reason": f"PATCH: {e}"}
+
+    return {"ok": delete_ok and patch_ok,
+            "delete_ok": delete_ok, "patch_ok": patch_ok,
+            "stream": stream, "date": date,
+            "parquet_filename": parquet_filename}
 
 
 def read_records(path: Path) -> list[dict]:
@@ -177,6 +285,21 @@ def cmd_pack(args: argparse.Namespace) -> None:
         total_before += r["bytes_before"]
         total_after += r["bytes_after"]
 
+        # Auto-seal RTDB if a manifest is reachable and --no-seal isn't set.
+        if not args.no_seal:
+            manifest = find_manifest(p)
+            if manifest is not None:
+                parquet_path = p.with_suffix(".parquet")
+                seal = seal_via_rtdb(manifest, p, parquet_path)
+                if seal["ok"]:
+                    print(f"      sealed RTDB: stream={seal['stream']} "
+                          f"date={seal['date']}")
+                else:
+                    print(f"      seal skipped: {seal.get('reason')}")
+            elif args.require_manifest:
+                print(f"      ! no manifest found near {p}; skipping seal "
+                      "(--require-manifest set)")
+
     if total_before:
         print(f"\ntotal: {total_before:,} → {total_after:,} bytes "
               f"({100 * total_after / total_before:.1f}%)")
@@ -219,6 +342,10 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--status", action="store_true",
                     help="show JSONL/Parquet counts and exit")
+    ap.add_argument("--no-seal", action="store_true",
+                    help="skip RTDB seal even if a _kappa_manifest.json is found")
+    ap.add_argument("--require-manifest", action="store_true",
+                    help="warn loudly when no manifest is reachable")
     args = ap.parse_args()
 
     if args.status:
