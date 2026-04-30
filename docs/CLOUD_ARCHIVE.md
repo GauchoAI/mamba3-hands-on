@@ -6,48 +6,104 @@ network failure spools to a local outbox for later replay.
 
 This is the answer to "the m4-mini 4 TB external drive is fragile —
 requires the mini to be online and the share to be mounted." Files
-stop relying on a single always-on host and live in a content-
-addressable durable store with no egress fees.
+stop relying on a single always-on host and live in a durable
+S3-compatible store.
 
 ## Backend
 
-Default: **Cloudflare R2** (S3-compatible, 10 GB free, **unlimited
-egress** — the standout deal for our use case where the same corpus
-gets pulled to vast.ai / m4-pro / m4-mini repeatedly).
+Default: **Firebase Cloud Storage** (== Google Cloud Storage backed;
+same Firebase project as the telemetry RTDB). 5 GB free, $0.026/GB-
+month after, 1 GB/day download free / $0.12/GB egress after.
 
-R2 speaks the S3 API, so the same code works for **Backblaze B2,
-AWS S3, MinIO**, or any S3-compatible store — only the endpoint URL
-changes.
+**Why not Cloudflare R2?** R2 is the better deal in isolation
+(10 GB free, unlimited egress) but the EG corporate VPN's TLS
+inspection proxy actively blocks `*.r2.cloudflarestorage.com`. We
+verified by direct curl: connection succeeds at the IP level but the
+TLS handshake fails. Major cloud-storage providers (GCS, AWS S3,
+B2) are allowlisted; Cloudflare is not. Firebase Cloud Storage works
+through the VPN out of the box because it's the same provider as the
+RTDB telemetry, which already works.
+
+The R2 keys are kept commented out in `.env` for the m4-mini path
+(off-VPN host, could still upload to R2). If we ever want both
+backends active simultaneously, that's a small extension.
+
+The code speaks the plain S3 API, so any S3-compat backend works —
+**Backblaze B2, AWS S3, MinIO, R2** — only the endpoint URL changes.
 
 ## Configuration
 
-Four environment variables. Put them in your shell rc or a `.env`
-that's gitignored:
+Backend-neutral env vars (preferred):
 
 ```bash
-export R2_ACCESS_KEY_ID="<your access key id>"
-export R2_SECRET_ACCESS_KEY="<your secret>"
-export R2_ENDPOINT_URL="https://<account_id>.r2.cloudflarestorage.com"
-export R2_BUCKET="mamba3-archive"     # default
-export R2_REGION="auto"               # default; Cloudflare's edge
+export ARCHIVE_ACCESS_KEY_ID="GOOG1E..."           # GCS HMAC key
+export ARCHIVE_SECRET_ACCESS_KEY="..."             # 40-char secret
+export ARCHIVE_ENDPOINT_URL="https://storage.googleapis.com"
+export ARCHIVE_BUCKET="<project>.firebasestorage.app"
+export ARCHIVE_REGION="auto"
 ```
 
-If any of `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, or
-`R2_ENDPOINT_URL` is missing, `cloud_archive.py` becomes a quiet
-no-op — every method returns immediately. **Trainers can be
-unconditionally wired to it** and runs without credentials still
-work, just without remote archive.
+Legacy `R2_*` env vars are still recognized — useful when an
+off-VPN box (m4-mini, vast.ai) wants to use the R2 keys directly
+without renaming. Code reads `R2_*` first, then falls back to
+`ARCHIVE_*`.
 
-## Setup recipe (5 minutes, browser)
+If credentials aren't set, `cloud_archive.py` is a quiet no-op:
+every method returns immediately. **Trainers can be unconditionally
+wired** and runs without credentials still work — just without
+remote archive.
+
+## Setup recipe — Firebase Cloud Storage (5-10 min, browser)
+
+Firebase Cloud Storage uses Google Cloud Storage under the hood.
+For S3-compatible auth we need GCS's HMAC keys feature.
+
+**1. Enable Storage on your Firebase project**
+
+- https://console.firebase.google.com → your project (the one
+  the telemetry RTDB uses) → **Build → Storage** → Get started
+- Pick "Production mode" rules
+- Region: pick closest, e.g. `europe-west1` to match the RTDB
+
+This creates the default bucket. Copy its name — looks like
+`<project-id>.firebasestorage.app` or `<project-id>.appspot.com`.
+
+**2. Create HMAC keys (S3-compatible auth)**
+
+- https://console.cloud.google.com → same project (Firebase ⊆ GCP)
+- **Cloud Storage → Settings → Interoperability** tab
+- "Create a key for a service account"
+  - Either pick existing or create new with **Storage Object Admin**
+    role on the bucket
+- Result: **Access key** (`GOOG1E...`) and **Secret** (one-time
+  display — copy now or you'll need to regenerate)
+
+**3. Set env vars**
+
+```bash
+export ARCHIVE_ACCESS_KEY_ID="GOOG1E..."
+export ARCHIVE_SECRET_ACCESS_KEY="<40-char secret>"
+export ARCHIVE_ENDPOINT_URL="https://storage.googleapis.com"
+export ARCHIVE_BUCKET="<your-bucket-name>"
+```
+
+Endpoint URL is fixed for everyone using GCS — `https://storage.googleapis.com`.
+
+## Alternative recipe — Cloudflare R2 (off-VPN hosts only)
+
+If running on a host that isn't behind the EG VPN (m4-mini, vast.ai,
+personal laptop on home wifi), R2 is still a better deal:
 
 1. Sign in at https://dash.cloudflare.com
-2. R2 → "Get started" (asks for a payment method even on free tier;
-   no charge under 10 GB / unlimited egress)
+2. R2 → "Get started" (asks for a payment method on Spark; no charge
+   under 10 GB / unlimited egress)
 3. Create bucket `mamba3-archive` (region: `auto`)
 4. R2 → Manage R2 API Tokens → Create token
    - Permissions: **Object Read & Write**
    - Scoped to: `mamba3-archive` bucket only
-5. Copy the access key, secret, and endpoint URL into your shell rc.
+
+Use the `R2_*` env vars — `R2_ENDPOINT_URL` looks like
+`https://<account_id>.r2.cloudflarestorage.com`.
 
 ## Smoke test
 

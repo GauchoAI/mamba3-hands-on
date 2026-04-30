@@ -2,8 +2,11 @@
 and checkpoints. Mirrors the experiment_pusher.py shape: daemon thread,
 local outbox fallback, fire-and-forget uploads that never block training.
 
-Default backend: Cloudflare R2 (S3-compatible API, 10 GB free, **unlimited
-egress**). Can target Backblaze B2 / AWS S3 / any S3-compatible store
+Default backend: **Firebase Cloud Storage** (== Google Cloud Storage)
+via its S3-compatible interoperability mode. Same Firebase project as
+the telemetry RTDB, works through the EG VPN (R2 was originally chosen
+but its TLS handshake is blocked by the corporate VPN's inspection
+proxy). Can target any S3-compatible store (R2, B2, AWS S3, MinIO)
 just by switching the endpoint URL.
 
 Why this exists:
@@ -19,11 +22,13 @@ Why this exists:
   telemetry layer. Same fault-tolerance shape.
 
 Configuration via environment (keep secrets out of code):
-    R2_ACCESS_KEY_ID      access key
-    R2_SECRET_ACCESS_KEY  secret
-    R2_ENDPOINT_URL       e.g. https://<account_id>.r2.cloudflarestorage.com
-    R2_BUCKET             bucket name (default: mamba3-archive)
-    R2_REGION             region (default: auto — Cloudflare's edge)
+    ARCHIVE_ACCESS_KEY_ID      access key (GCS HMAC: starts with GOOG1E...)
+    ARCHIVE_SECRET_ACCESS_KEY  secret
+    ARCHIVE_ENDPOINT_URL       https://storage.googleapis.com (GCS)
+                               or https://<acc>.r2.cloudflarestorage.com (R2)
+                               or https://s3.<region>.backblazeb2.com (B2)
+    ARCHIVE_BUCKET             bucket name (e.g. <project>.firebasestorage.app)
+    ARCHIVE_REGION             region (default: auto)
 
 Usage:
     from cloud_archive import CloudArchive
@@ -83,8 +88,18 @@ except ImportError:
 # Configuration — env-driven so credentials never touch source.
 # ─────────────────────────────────────────────────────────────────────
 
-DEFAULT_BUCKET = os.environ.get("R2_BUCKET", "mamba3-archive")
-DEFAULT_REGION = os.environ.get("R2_REGION", "auto")
+# Read either R2_* (preferred per docs/CLOUD_ARCHIVE.md and .env) or
+# the legacy ARCHIVE_* prefix. R2_* wins when both are set.
+def _envvar(*names: str, default: str | None = None) -> str | None:
+    for n in names:
+        v = os.environ.get(n)
+        if v:
+            return v
+    return default
+
+
+DEFAULT_BUCKET = _envvar("R2_BUCKET", "ARCHIVE_BUCKET", default="mamba3-archive")
+DEFAULT_REGION = _envvar("R2_REGION", "ARCHIVE_REGION", default="auto")
 
 # Files matching these extensions are compressed before upload.
 # Excluded: torch/safetensors checkpoints (already compressed), images.
@@ -94,20 +109,27 @@ _NO_COMPRESS_EXTS = {".pt", ".pth", ".npz", ".safetensors",
 
 
 def _client():
-    """Build an S3 client pointed at R2. Returns None if creds aren't set."""
+    """Build an S3 client pointed at R2. Returns None if creds aren't set.
+
+    Reads R2_* (preferred) or ARCHIVE_* (legacy) env vars. R2_* wins.
+    """
     if not _HAS_BOTO3:
         return None
-    key = os.environ.get("R2_ACCESS_KEY_ID")
-    sec = os.environ.get("R2_SECRET_ACCESS_KEY")
-    endpoint = os.environ.get("R2_ENDPOINT_URL")
+    key = _envvar("R2_ACCESS_KEY_ID", "ARCHIVE_ACCESS_KEY_ID")
+    sec = _envvar("R2_SECRET_ACCESS_KEY", "ARCHIVE_SECRET_ACCESS_KEY")
+    endpoint = _envvar("R2_ENDPOINT_URL", "ARCHIVE_ENDPOINT_URL")
     if not (key and sec and endpoint):
         return None
+    # Cloudflare R2 requires SigV4. Set explicitly because some
+    # environments default to SigV2, which R2 rejects.
+    from botocore.client import Config as _Config
     return boto3.client(
         "s3",
         endpoint_url=endpoint,
         aws_access_key_id=key,
         aws_secret_access_key=sec,
         region_name=DEFAULT_REGION,
+        config=_Config(signature_version="s3v4"),
     )
 
 
@@ -181,7 +203,7 @@ class CloudArchive:
         elif not _HAS_BOTO3:
             print("[cloud-archive] disabled — boto3 not installed", flush=True)
         elif self.client is None:
-            print("[cloud-archive] disabled — R2_* env vars not set", flush=True)
+            print("[cloud-archive] disabled — ARCHIVE_* / R2_* env vars not set", flush=True)
         else:
             print(f"[cloud-archive] {bucket}/{experiment_kind}/{run_name}/...", flush=True)
 
