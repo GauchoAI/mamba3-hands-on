@@ -375,6 +375,48 @@ the wrong place.
 > but namespace their checkpoints + runs separately so they don't
 > interfere with each other.
 
+> **Round 2 headline result (2026-04-30):**
+>
+> The single architectural change that produced the most fluent
+> bilingual output is **removing the CounterPrimitive entirely**, not
+> any of the JEPA-loss-weight knobs we expected.
+>
+> At step 4600 / byte_ce_biling matched-step:
+>
+> | Variant | byte_ce_biling | diversity | best fluent fragment |
+> |---|---|---|---|
+> | gpu0-pure-bilingual (counter present, no aux) | **1.21** | 0.46 | "There are sold has been took in the filosopirent" |
+> | **gpu1-no-cortex (no counter at all)** | 1.27 | **0.77** | *"¿Cuántos años tienes?"*, *"Los días lluviosos son ideales para pasar tiempo en casa leyendo"*, *"Me gustaría encontrarme"* |
+> | gpu2-tinier (counter, d_model=128) | 1.30 | 0.38 | mode-collapsed onto unary attractor (`*****:aaaaa`) on 3+ prompts |
+>
+> The byte CE penalty for removing the counter is small (0.06 nats);
+> the diversity gain is large (0.31 nats of pairwise Jaccard distance);
+> the qualitative gain is enormous — *"¿Cuántos años tienes?"* and
+> *"Los días lluviosos son ideales para pasar tiempo en casa leyendo"*
+> are the most grammatical Spanish the project has ever produced from
+> a from-scratch ~1M-param byte-level LM.
+>
+> **Why removing the counter helps:** with --mix-unary 0 (round 2) the
+> CounterPrimitive's gates never get aux supervision. The primitive sits
+> in the residual stream emitting whatever its untrained gates produce,
+> which is statistically structured noise that the LM head learns to
+> *predict* (it correlates with the byte stream because both flow from
+> the same residual). The model spends capacity modeling its own untrained
+> circuit. Even worse, when the corpus has *any* unary-shaped data, the
+> counter becomes an attractor — gpu2-tinier mode-collapsed onto unary
+> at step 6200 even though `--mix-unary 0` removed the synthetic batches.
+>
+> **Generalizable lesson:** the Cortex thesis (residual primitives extend
+> small-LM reasoning) holds for *targeted* primitive tasks (the original
+> 151k-LM byte-perfect counter to N=500 still works). It does *not* hold
+> for "let the LM use the primitive opportunistically while training on
+> a different task" — co-training a primitive with no aux supervision is
+> net-negative. The primitive needs either explicit aux supervision or
+> to be absent. Half-measures hurt.
+>
+> Pinned: `checkpoints/jepa_cortex_pinned_round2/gpu1-no-cortex/light_step_0004600.pt`.
+> Cross-project takeaway folded into root `findings.md`.
+
 ## 4. Next round of experiments — proposal
 
 The next round attacks the failure modes we observed:

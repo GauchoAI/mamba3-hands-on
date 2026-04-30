@@ -34,6 +34,27 @@ Silicon MPS. Each entry corresponds to a commit.
 > The findings live in `jepa/findings.md` with hypothesis-before,
 > live-observations, and (eventually) conclusion sections. Reproduce
 > via `DEPLOYMENT.md` + `jepa/README.md`.
+>
+> **Round 2 update (2026-04-30):** the single architectural change that
+> produced the most fluent bilingual output was **removing the
+> CounterPrimitive entirely**. With `--mix-unary 0` (no synthetic unary
+> batches) the counter's gates never get aux supervision and the model
+> ends up modeling its own untrained circuit's noise. Removing it cost
+> 0.06 nats of byte CE but gained 0.31 nats of diversity and produced
+> the most grammatical from-scratch Spanish the project has ever shipped
+> from a 1M-param byte-level LM (*"¿Cuántos años tienes?"*,
+> *"Los días lluviosos son ideales para pasar tiempo en casa leyendo"*).
+> Cross-project lesson: half-measures with residual primitives are
+> net-negative — either supervise the primitive explicitly the whole
+> run, or don't include it at all.
+>
+> A side experiment in `rlf_cortex/` testing layer-recursion + decayed
+> lifeline (inspired by `batteryphil/mamba2backbonerecursion`'s RLF) was
+> stopped early at step 2950 — at ~2× the SSM compute of the no-cortex
+> baseline it was 1.77 nats *worse* on byte CE. Pure recursion alone
+> doesn't help on this corpus; LoopRoPE + HaltingHead + prefix scratchpad
+> would be needed before it could plausibly close the gap. Documented
+> in `rlf_cortex/findings.md` §3.
 
 ---
 

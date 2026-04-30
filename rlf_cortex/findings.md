@@ -116,9 +116,105 @@ a 1M-param byte-level Mamba-3 with JEPA distillation?"
 
 ---
 
-## 3. Conclusion
+## 3. Conclusion — early stop at step 2950, recursion+lifeline alone refuted on this corpus
 
-*(Pending.)*
+We stopped gpu3-recurse-n3 early (step 2950, ~6 hours wall-clock) when
+it became clear the recursion+lifeline-only variant was significantly
+behind the comparable jepa/ runs on every metric.
+
+At equivalent compute (gpu3 at step 2950 ≈ 8850 SSM-passes per token,
+gpu1 at step 4600 = 4600 SSM-passes per token; gpu3 had ~2× the total
+SSM compute):
+
+| Metric | gpu3-recurse-n3 (n_loops=3) | gpu1-no-cortex (n_loops=1) |
+|---|---|---|
+| step | 2950 | 4600 |
+| byte_ce_biling | 3.04 | 1.27 |
+| diversity | 0.75 | 0.77 |
+| count_acc | 0.0 | n/a |
+
+**The compute-equivalent comparison is unfavorable.** gpu3 has done
+~2× the SSM compute of gpu1 and is dramatically worse on byte CE
+(3.04 vs 1.27 — 1.77 nats higher). Diversity is similar (0.75 vs 0.77),
+but on a model that's still emitting near-random text.
+
+This refutes the most-likely-outcome from §1 ("byte_ce_biling within
+0.05 of jepa/'s gpu0 at the same step count"). Pure layer recursion +
+decayed lifeline re-injection on a 1M-param byte-level Mamba-3 with
+JEPA distillation does *not* match a single-loop baseline at matched
+compute.
+
+### What this run did NOT test
+
+- LoopRoPE — the geometric loop-index encoding. Without it, repeated
+  application of the same SSM layers can converge on a fixed point that
+  the lifeline alone can't escape. RLF's own implementation includes
+  LoopRoPE as a load-bearing component, not an optional one. We may
+  have skipped a critical piece.
+- Dedicated loop SSM (separate ~13M-param Mamba1 in their version).
+  We ran the same 4 layers 3 times; their architecture has 24 *frozen*
+  layers + 24 LoRA layers + a *separate* 13M-param loop SSM. Different.
+- Prefix scratchpad. M=8 learnable virtual tokens prepended each loop.
+  We had nothing equivalent.
+- HaltingHead. We had no learned stop signal — every token forced 3
+  loops regardless of difficulty.
+
+So the falsification is narrow: **bare layer recursion + decayed
+lifeline alone is not enough.** The full RLF stack (with LoopRoPE +
+prefix scratchpad + HaltingHead + dedicated loop SSM) might still
+work — but their own 1.4B port is currently failing at ~5% chain
+accuracy, so this is not a clear path to follow without each piece
+being independently validated.
+
+### Pivot
+
+Given the round 2 jepa/ result that **removing the CounterPrimitive
+entirely produces the best bilingual fluency** (gpu1-no-cortex at
+step 4600: byte_ce 1.27, diversity 0.77, real grammatical Spanish),
+the highest-value follow-up is *not* more RLF variants. It's
+**finding the right scale of no-cortex model + Cerebras Qwen3-235B
+corpus**. RLF can come back later if and when we have a clear reason
+to add structural compute-per-token.
+
+For now: rlf_cortex/ stays as a documented branch-and-rejoin in the
+project's history. The `--n-loops` machinery is preserved if we want
+to revisit (with LoopRoPE + HaltingHead added as proper companions).
+
+### Open questions, parked
+
+- Would `n_loops=3 + LoopRoPE` (geometric loop distinction) close the
+  gap with `n_loops=1`? Likely yes given the RLF paper's insistence,
+  but we'd want to validate on a smaller-scale toy task first.
+- Would `HaltingHead` solve the count_acc problem on the bilingual LM
+  better than the CounterPrimitive's reset_gate did? Plausibly yes;
+  worth a future round.
+- What is the JEPA-loss floor under recursion? gpu3 was at jepa=1.51
+  (w=0.28) at step 2950; would have continued falling. We don't have
+  enough data to tell if recursion ultimately helps the JEPA target.
+
+These questions don't justify continuing this run; they justify a
+fresh, structurally-different round designed to test exactly one of
+them. Out of scope for this branch.
+
+---
+
+## 4. Resume notes for future runs
+
+If resuming `rlf_cortex/` with a new experiment:
+
+1. The `--n-loops` flag is wired and tested. n=1 is a no-op; n>1
+   re-runs the SSM stack with decayed lifeline.
+2. The eval_daemon's diversity metric is universal across both
+   `jepa/` and `rlf_cortex/` — same code, same semantic.
+3. Pinned best ckpts from this run (if anything was worth keeping)
+   would land at `checkpoints/jepa_cortex_pinned_round2/gpu3-recurse-n3/`.
+   We did *not* pin anything because the run was strictly behind
+   gpu0/gpu1; nothing to demo.
+4. The next RLF variant should add LoopRoPE + HaltingHead before
+   testing recursion again — pure recursion alone is now refuted on
+   this corpus. Adding LoopRoPE would be ~30 lines in
+   `rlf_cortex/cortex_counting.py` (a 1D rotary keyed by loop index,
+   applied between the lifeline re-add and the layer block).
 
 Open questions to resolve in the conclusion:
 - Did `n_loops=3` improve byte_ce_biling at matched compute vs jepa/'s
