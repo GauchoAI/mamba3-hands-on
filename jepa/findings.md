@@ -361,6 +361,20 @@ the wrong place.
 
 ---
 
+> **Side experiment forked off (2026-04-30):**
+> While round 2 is cooking, we noticed
+> [`batteryphil/mamba2backbonerecursion`](https://github.com/batteryphil/mamba2backbonerecursion)
+> on Reddit — Mamba SSM with recursive latent forcing (loop the hidden
+> state through the same layers N times before emitting each token).
+> Genuinely interesting and at least partially-validated (their 2.8B
+> hits 75% on BIG-Bench Lite) so we forked the experiment off into
+> [`rlf_cortex/`](../rlf_cortex/) — same baseline as this branch at the
+> moment of the fork, plus an `--n-loops` flag that runs the SSM stack
+> N times per token with a decayed lifeline of the original embedding
+> re-injected each loop. The two experiments share the data directory
+> but namespace their checkpoints + runs separately so they don't
+> interfere with each other.
+
 ## 4. Next round of experiments — proposal
 
 The next round attacks the failure modes we observed:
