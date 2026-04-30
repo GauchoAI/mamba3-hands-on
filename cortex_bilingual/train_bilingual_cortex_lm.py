@@ -37,6 +37,12 @@ import torch.nn.functional as F
 
 from cortex_counting import CortexLM, CortexLMConfig
 
+try:
+    from experiment_pusher import ExperimentPusher
+    _HAS_PUSHER = True
+except ImportError:
+    _HAS_PUSHER = False
+
 
 # ----------------------------------------------------------------------------
 # Dataset
@@ -122,6 +128,7 @@ def render_samples(model: CortexLM) -> str:
 class LMTrainConfig:
     corpus_path: str = "data/bilingual.txt"
     ckpt_dir: str = "checkpoints/lm"
+    run_name: str = ""               # for Firebase run_id; defaults to ckpt_dir name
     seq_len: int = 96
     batch_size: int = 64
     lr: float = 1e-3
@@ -203,6 +210,30 @@ def train(cfg: LMTrainConfig, resume: str | None = None):
         with open(log_path, "a") as f:
             f.write(text + "\n")
 
+    # ─── Firebase mirror — fault-tolerant, daemon-thread, never blocks training ───
+    pusher = None
+    if _HAS_PUSHER:
+        kind = Path(__file__).resolve().parent.name        # "cortex_bilingual"
+        exp_id = f"{kind}-{time.strftime('%Y-%m-%d')}"
+        run_id = cfg.run_name or ckpt_dir.name
+        try:
+            from dataclasses import asdict
+            cfg_dict = asdict(cfg)
+        except TypeError:
+            cfg_dict = {k: getattr(cfg, k) for k in vars(cfg) if not k.startswith("_")}
+        pusher = ExperimentPusher(
+            experiment_id=exp_id, run_id=run_id, kind=kind,
+            config=cfg_dict, outbox_dir=str(ckpt_dir),
+        )
+        pusher.declare_experiment(name=kind,
+            hypothesis="Bilingual byte-level Mamba-3 LM (en+es Tatoeba "
+                       "+5% cortex unary mixin) — host for cortex primitive "
+                       "attach experiments.")
+        pusher.declare_run(purpose=f"{cfg.n_layers}L d={cfg.d_model} "
+                                   f"steps={cfg.total_steps} batch={cfg.batch_size}",
+                           gpu=-1)  # MPS, not a CUDA index
+        print(f"[firebase] pushing to /experiments/{exp_id}/runs/{run_id}", flush=True)
+
     def save_ckpt(step: int, tag: str = ""):
         path = ckpt_dir / (f"step_{tag}.pt" if tag else f"step_{step:06d}.pt")
         torch.save({
@@ -217,6 +248,7 @@ def train(cfg: LMTrainConfig, resume: str | None = None):
     print(f"params: {n_params:,}  steps: {start_step}..{cfg.total_steps}", flush=True)
     t0 = time.time()
     model.train()
+    last_metrics: dict = {}
 
     for step in range(start_step, cfg.total_steps + 1):
         x, y = corpus.get_batch(cfg.batch_size)
@@ -234,11 +266,18 @@ def train(cfg: LMTrainConfig, resume: str | None = None):
             elapsed = time.time() - t0
             bpc = loss.item() / math.log(2)
             lr_now = sched.get_last_lr()[0]
+            sps = step / max(elapsed, 1e-3)
             line = (f"step {step:6d}/{cfg.total_steps}  "
                     f"loss={loss.item():.3f}  bpc={bpc:.3f}  "
                     f"lr={lr_now:.2e}  elapsed={elapsed:.1f}s")
             print(line, flush=True)
             append_log(line)
+            if pusher is not None:
+                pusher.metrics(step=step, byte_ce=float(loss.item()),
+                               bpc=float(bpc), lr=float(lr_now))
+                pusher.heartbeat(step=step, sps=float(sps))
+            last_metrics = {"byte_ce": float(loss.item()), "bpc": float(bpc),
+                            "lr": float(lr_now)}
 
         if step % cfg.ckpt_every == 0 or step == cfg.total_steps:
             path = save_ckpt(step)
@@ -247,10 +286,21 @@ def train(cfg: LMTrainConfig, resume: str | None = None):
                      f"{samples}\n")
             print(block, flush=True)
             append_log(block)
+            if pusher is not None:
+                # Push the first probe prompt's continuation as the canary —
+                # ExperimentPusher throttles internally to ~hourly.
+                first = PROBE_PROMPTS[0]
+                cont = sample(model, first, max_new=80, temperature=0.8, top_k=40)
+                pusher.canary_sample(step=step, prompt=first,
+                                     completion=cont[len(first):])
 
     final_path = save_ckpt(cfg.total_steps, tag="FINAL")
     print(f"\nDone. Final checkpoint: {final_path}", flush=True)
     print(f"Training log: {log_path}", flush=True)
+    if pusher is not None:
+        pusher.event(type="run_complete", step=cfg.total_steps,
+                     details=f"reached step {cfg.total_steps}")
+        pusher.complete(final_state="completed", final_metrics=last_metrics)
 
 
 # ----------------------------------------------------------------------------
@@ -271,11 +321,14 @@ def main():
     ap.add_argument("--log-every", type=int, default=100)
     ap.add_argument("--resume", default=None)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--run-name", default="",
+                    help="Firebase run_id; defaults to ckpt-dir basename")
     args = ap.parse_args()
 
     cfg = LMTrainConfig(
         corpus_path=args.corpus,
         ckpt_dir=args.ckpt_dir,
+        run_name=args.run_name,
         total_steps=args.steps,
         seq_len=args.seq_len,
         batch_size=args.batch_size,

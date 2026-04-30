@@ -46,6 +46,12 @@ from cortex_counting import (
     CountingDataset, eval_counting,
 )
 
+try:
+    from experiment_pusher import ExperimentPusher
+    _HAS_PUSHER = True
+except ImportError:
+    _HAS_PUSHER = False
+
 
 # ---------------------------------------------------------------------------
 # Mixed-batch dataset: bilingual lines + cortex counting examples
@@ -149,6 +155,7 @@ def train_counter(
     ckpt_every: int,
     seed: int,
     injection_scale: float = 10.0,
+    run_name: str = "",
 ):
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"device: {device}")
@@ -173,10 +180,34 @@ def train_counter(
                         f"steps={steps} unary_p={unary_p} lambda_aux={lambda_aux}\n")
     def append_log(s): open(log_path, "a").write(s + "\n")
 
+    # ─── Firebase mirror ───
+    pusher = None
+    if _HAS_PUSHER:
+        kind = Path(__file__).resolve().parent.name        # "cortex_bilingual"
+        exp_id = f"{kind}-counter-attach-{time.strftime('%Y-%m-%d')}"
+        run_id = run_name or out_path.name
+        cfg_dict = {"lm_ckpt": lm_ckpt, "corpus": corpus, "steps": steps,
+                    "batch_size": batch_size, "lr": lr, "lambda_aux": lambda_aux,
+                    "unary_p": unary_p, "injection_scale": injection_scale,
+                    "seed": seed}
+        pusher = ExperimentPusher(
+            experiment_id=exp_id, run_id=run_id, kind=kind,
+            config=cfg_dict, outbox_dir=str(out_path),
+        )
+        pusher.declare_experiment(name=f"{kind}/counter-attach",
+            hypothesis="Frozen bilingual LM + fresh CounterPrimitive — does "
+                       "fine-tuning only the ~1k adapter params extend OOD "
+                       "counting? Aux BCE on inc_logits, hard gates at eval.")
+        pusher.declare_run(purpose=f"injection_scale={injection_scale} "
+                                   f"unary_p={unary_p} steps={steps}",
+                           gpu=-1)
+        print(f"[firebase] pushing to /experiments/{exp_id}/runs/{run_id}", flush=True)
+
     print(f"training {sum(p.numel() for p in train_params):,} params, "
           f"steps={steps}, batch={batch_size}", flush=True)
     t0 = time.time()
     model.train()
+    last_metrics: dict = {}
 
     for step in range(1, steps + 1):
         x, y, mask = dataset.get_batch(batch_size)
@@ -196,11 +227,18 @@ def train_counter(
 
         if step % log_every == 0 or step == 1:
             elapsed = time.time() - t0
+            sps = step / max(elapsed, 1e-3)
             line = (f"step {step:5d}/{steps}  ce={main_loss.item():.3f}  "
                     f"aux={aux_loss.item():.4f}  "
                     f"elapsed={elapsed:.1f}s")
             print(line, flush=True)
             append_log(line)
+            if pusher is not None:
+                pusher.metrics(step=step, ce=float(main_loss.item()),
+                               aux=float(aux_loss.item()))
+                pusher.heartbeat(step=step, sps=float(sps))
+            last_metrics = {"ce": float(main_loss.item()),
+                            "aux": float(aux_loss.item())}
 
         if step % ckpt_every == 0 or step == steps:
             ckpt = {"model": model.state_dict(), "cfg": model.cfg, "step": step}
@@ -209,6 +247,10 @@ def train_counter(
     final_path = out_path / "step_FINAL.pt"
     torch.save({"model": model.state_dict(), "cfg": model.cfg, "step": steps}, final_path)
     print(f"\nFinal: {final_path}", flush=True)
+    if pusher is not None:
+        pusher.event(type="run_complete", step=steps,
+                     details=f"counter-attach finished, final ckpt at {final_path}")
+        pusher.complete(final_state="completed", final_metrics=last_metrics)
     return model
 
 
@@ -268,6 +310,8 @@ def main():
     ap.add_argument("--injection-scale", type=float, default=10.0,
                     help="multiplier on residual injection (Phase 5/6 of cortex "
                          "showed bigger scale = louder counter signal in residual)")
+    ap.add_argument("--run-name", default="",
+                    help="Firebase run_id; defaults to --out basename")
     ap.add_argument("--eval-only", action="store_true",
                     help="skip training, just eval (use --resume in --out)")
     args = ap.parse_args()
@@ -289,7 +333,7 @@ def main():
         steps=args.steps, batch_size=args.batch_size, lr=args.lr,
         lambda_aux=args.lambda_aux, unary_p=args.unary_p,
         log_every=args.log_every, ckpt_every=args.ckpt_every, seed=args.seed,
-        injection_scale=args.injection_scale,
+        injection_scale=args.injection_scale, run_name=args.run_name,
     )
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     run_eval(model, device)
