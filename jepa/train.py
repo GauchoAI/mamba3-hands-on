@@ -41,6 +41,16 @@ from data_loader import (
 )
 from checkpoint import AsyncCheckpointer, capture_rng
 
+# Cross-experiment Firebase pusher (lives at the repo root). Optional —
+# trainer runs without it if the import fails or PUSH_FIREBASE != "1".
+try:
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from experiment_pusher import ExperimentPusher
+    _HAS_PUSHER = True
+except ImportError:
+    _HAS_PUSHER = False
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -247,6 +257,28 @@ def train(cfg: TrainConfig) -> None:
     ckpt = AsyncCheckpointer(ckpt_dir)
     cfg_dict = asdict(cfg)
 
+    # Optional Firebase mirror. Opt-in via env var so existing runs keep
+    # local-only behavior unless explicitly turned on.
+    pusher = None
+    if _HAS_PUSHER and os.environ.get("PUSH_FIREBASE", "0") == "1":
+        # experiment_id is the trainer kind (jepa-cortex/rlf-cortex/...) plus
+        # the day, so all runs from one push session group together.
+        kind = os.environ.get("EXPERIMENT_KIND", "jepa-cortex")
+        exp_id = os.environ.get("EXPERIMENT_ID",
+                                f"{kind}-{time.strftime('%Y-%m-%d')}")
+        pusher = ExperimentPusher(
+            experiment_id=exp_id, run_id=cfg.run_name, kind=kind,
+            config=cfg_dict, outbox_dir=run_dir,
+        )
+        pusher.declare_experiment(
+            name=os.environ.get("EXPERIMENT_NAME", kind),
+            hypothesis=os.environ.get("EXPERIMENT_HYPOTHESIS", ""),
+        )
+        pusher.declare_run(purpose=cfg.run_name,
+                           gpu=int(os.environ.get("CUDA_VISIBLE_DEVICES", "-1") or "-1"))
+        print(f"[firebase] pushing to /experiments/{exp_id}/runs/{cfg.run_name}",
+              flush=True)
+
     start_step = 0
     if cfg.resume_from:
         payload = torch.load(cfg.resume_from, map_location="cpu",
@@ -338,6 +370,15 @@ def train(cfg: TrainConfig) -> None:
             (run_dir / "loss.jsonl").open("a").write(
                 json.dumps({"step": step, **last_metrics}) + "\n"
             )
+            if pusher is not None:
+                # Both methods are throttled internally (metrics every 2 min,
+                # status every 10 min) so calling on every 50-step boundary is
+                # cheap; the pusher decides when to actually POST.
+                pusher.metrics(step=step, **{
+                    k: last_metrics[k] for k in
+                    ("loss", "l_byte", "l_jepa", "l_sig", "l_aux", "lr", "jepa_w")
+                })
+                pusher.heartbeat(step=step, sps=sps)
 
         # ----- checkpoints ---------------------------------------------
         if step % cfg.light_every == 0 and step > 0:
@@ -357,12 +398,30 @@ def train(cfg: TrainConfig) -> None:
             model.eval()
             try:
                 write_canary(model, run_dir, step)
+                if pusher is not None:
+                    # Push the first canary as the latest sample; throttled
+                    # to ~hourly internally so this is also cheap.
+                    try:
+                        last = json.loads(
+                            (run_dir / "samples.jsonl").read_text().strip().splitlines()[-1]
+                        )
+                        if last["samples"]:
+                            s = last["samples"][0]
+                            pusher.canary_sample(step=step,
+                                                 prompt=s["prompt"],
+                                                 completion=s["out"])
+                    except (FileNotFoundError, IndexError, json.JSONDecodeError):
+                        pass
             finally:
                 model.train()
 
     ckpt.submit_heavy(cfg.steps, model, opt, capture_rng(), None,
                       last_metrics, cfg_dict, cfg.run_name)
     ckpt.flush(timeout=60.0)
+    if pusher is not None:
+        pusher.event(type="run_complete", step=cfg.steps,
+                     details=f"reached step {cfg.steps}")
+        pusher.complete(final_state="completed", final_metrics=last_metrics)
     print("[done]", flush=True)
 
 

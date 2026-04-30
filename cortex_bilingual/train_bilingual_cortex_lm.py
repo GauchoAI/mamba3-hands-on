@@ -24,9 +24,12 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import torch.nn as nn

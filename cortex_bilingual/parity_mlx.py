@@ -10,8 +10,16 @@ Run:
 """
 from __future__ import annotations
 import math
+import os
+import sys
 import numpy as np
 import torch
+
+# Path: prepend script dir (so `mamba3_mlx` resolves to the local file)
+# and repo root (so `cortex_counting` resolves to the file at root).
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
+sys.path.insert(0, os.path.dirname(_HERE))
 
 import mlx.core as mx
 import mlx.nn as mlx_nn
@@ -22,7 +30,7 @@ from cortex_counting import (
     CortexLMConfig as PTCortexLMConfig,
     CounterPrimitive as PTCounterPrimitive,
 )
-# MLX port
+# MLX port (sibling file in the same folder)
 from mamba3_mlx import (
     CortexLM as MXCortexLM,
     CortexLMConfig as MXCortexLMConfig,

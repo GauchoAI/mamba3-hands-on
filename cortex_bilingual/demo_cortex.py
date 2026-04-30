@@ -21,8 +21,12 @@ Run after counter-attach training:
 """
 from __future__ import annotations
 import argparse
+import os
+import sys
 import torch
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cortex_counting import (
     CortexLM, CortexLMConfig, CounterPrimitive, parse_count_output,

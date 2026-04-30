@@ -13,8 +13,18 @@ is off-by-one even in-distribution; full byte-perfect did not
 transfer to the language-trained host. See findings.md entry
 "Counter primitive on a frozen bilingual LM" for the full read.
 
-A scale=30 diagnostic (3× louder counter signal) is currently
-running to test whether the off-by-one is purely signal-magnitude.
+A scale=30 diagnostic (3× louder counter signal) confirmed the
+in-distribution off-by-one is purely magnitude-bound (now byte-
+perfect at N=30); OOD failure is upstream LM mode-switching, not a
+counter problem.
+
+**Update 2026-04-29 (reorganization):** all six scripts authored
+this session moved into `cortex_bilingual/` so future cortex
+experiments (and there will be many) each get their own folder.
+`cortex_counting.py` stays at the repo root as the shared
+foundation. Cross-imports work via `sys.path` preambles — verified
+with `parity_mlx.py` (3.58e-7) and `demo_cortex.py` from the new
+location. See `cortex_bilingual/README.md`.
 
 ---
 

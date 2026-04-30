@@ -8,6 +8,12 @@ This document is the linear sequence of work. Each entry is one
 commit boundary, each commit gated by a validation step. Status as
 of last update is in brackets `[done]` / `[in flight]` / `[planned]`.
 
+> **Note (2026-04-29):** the experiment files referenced below now
+> live in `cortex_bilingual/`. The shared cortex foundation
+> (`cortex_counting.py`) stays at the repo root; `cortex_bilingual/`
+> uses it via a `sys.path` preamble. See `cortex_bilingual/README.md`
+> for the folder layout and reproduction commands.
+
 ---
 
 ## Strategic levers (ranked by leverage on the end-state)

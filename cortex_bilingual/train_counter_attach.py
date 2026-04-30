@@ -29,8 +29,13 @@ from __future__ import annotations
 import argparse
 import math
 import os
+import sys
 import time
 from pathlib import Path
+
+# Allow `from cortex_counting import ...` regardless of cwd —
+# cortex_counting.py lives at the repo root.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import torch.nn as nn
