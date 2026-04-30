@@ -196,13 +196,44 @@ CANARY_PROMPTS_BYTES: list[bytes] = [
 
 
 @torch.no_grad()
+def _sample_completion(model: CortexLM, prompt_bytes: list[int],
+                       max_new: int = 80, temperature: float = 0.7,
+                       seed: int = 42) -> bytes:
+    """Deterministic temperature-sampled completion (matches jepa/train.py)."""
+    device = next(model.parameters()).device
+    torch.manual_seed(seed)
+    toks = torch.tensor([prompt_bytes], dtype=torch.long, device=device)
+    out = bytearray()
+    for _ in range(max_new):
+        logits = model(toks)[:, -1] / temperature
+        probs = torch.softmax(logits, dim=-1)
+        nxt = torch.multinomial(probs, 1)
+        b = int(nxt.item())
+        out.append(b)
+        toks = torch.cat([toks, nxt], dim=1)
+        if len(out) >= 2 and out[-1] == 10 and out[-2] == 10:
+            break
+    return bytes(out)
+
+
+@torch.no_grad()
 def write_canary(model: CortexLM, run_dir: Path, step: int) -> None:
+    """Record both greedy and sampled completions per canary prompt.
+
+    See jepa/train.py:write_canary for the rationale — caching both
+    means cross-variant comparisons read files instead of running
+    inference.
+    """
     samples = []
     for prompt in CANARY_PROMPTS_BYTES:
-        out = model.generate_greedy(list(prompt), max_new=80)
+        prompt_ids = list(prompt)
+        greedy = model.generate_greedy(prompt_ids, max_new=80)
+        sampled = _sample_completion(model, prompt_ids, max_new=80,
+                                     temperature=0.7, seed=42)
         samples.append({
             "prompt": prompt.decode("utf-8", errors="replace"),
-            "out": bytes(out).decode("utf-8", errors="replace"),
+            "out": bytes(greedy).decode("utf-8", errors="replace"),
+            "out_sampled": sampled.decode("utf-8", errors="replace"),
         })
     line = json.dumps({"step": step, "samples": samples})
     (run_dir / "samples.jsonl").open("a").write(line + "\n")

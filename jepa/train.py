@@ -195,13 +195,54 @@ CANARY_PROMPTS_BYTES: list[bytes] = [
 
 
 @torch.no_grad()
+def _sample_completion(model: CortexLM, prompt_bytes: list[int],
+                       max_new: int = 80, temperature: float = 0.7,
+                       seed: int = 42) -> bytes:
+    """Deterministic temperature-sampled completion.
+
+    Same fixed seed each time → reproducible across-checkpoint comparisons,
+    so cross-variant comparisons become file reads, not inference re-runs.
+    """
+    device = next(model.parameters()).device
+    torch.manual_seed(seed)
+    toks = torch.tensor([prompt_bytes], dtype=torch.long, device=device)
+    out = bytearray()
+    for _ in range(max_new):
+        logits = model(toks)[:, -1] / temperature
+        probs = torch.softmax(logits, dim=-1)
+        nxt = torch.multinomial(probs, 1)
+        b = int(nxt.item())
+        out.append(b)
+        toks = torch.cat([toks, nxt], dim=1)
+        if len(out) >= 2 and out[-1] == 10 and out[-2] == 10:
+            break
+    return bytes(out)
+
+
+@torch.no_grad()
 def write_canary(model: CortexLM, run_dir: Path, step: int) -> None:
+    """Record both greedy and sampled completions per canary prompt.
+
+    Two completions per prompt:
+      - greedy: argmax decoding, fully deterministic
+      - sampled: temp=0.7 with fixed seed=42 (deterministic per ckpt)
+
+    The sampled output is what cross-variant comparisons use because
+    greedy mode often falls into the loop attractor in early training.
+    Caching it here means the cross-variant compare becomes a file
+    read instead of an inference rerun (saves ~5 min per comparison
+    on the contended GPU 3).
+    """
     samples = []
     for prompt in CANARY_PROMPTS_BYTES:
-        out = model.generate_greedy(list(prompt), max_new=80)
+        prompt_ids = list(prompt)
+        greedy = model.generate_greedy(prompt_ids, max_new=80)
+        sampled = _sample_completion(model, prompt_ids, max_new=80,
+                                     temperature=0.7, seed=42)
         samples.append({
             "prompt": prompt.decode("utf-8", errors="replace"),
-            "out": bytes(out).decode("utf-8", errors="replace"),
+            "out": bytes(greedy).decode("utf-8", errors="replace"),
+            "out_sampled": sampled.decode("utf-8", errors="replace"),
         })
     line = json.dumps({"step": step, "samples": samples})
     (run_dir / "samples.jsonl").open("a").write(line + "\n")

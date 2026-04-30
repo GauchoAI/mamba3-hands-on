@@ -101,6 +101,64 @@ def _char_bigrams(text: bytes) -> set[tuple[int, int]]:
 
 
 @torch.no_grad()
+def prompt_response_retention(model: CortexLM, device,
+                              max_new: int = 60) -> dict:
+    """Internal-coherence metric: how much of the prompt's residual
+    representation survives generation of the response?
+
+    For each diversity-probe prompt:
+      1. Forward `prompt` only → snapshot residual at end_of_prompt → h_p
+      2. Greedy-generate response (up to max_new bytes)
+      3. Forward `prompt + response` → snapshot residual at end_of_response → h_r
+      4. Score:
+         - retention = cosine(h_p, h_r)         -- direction overlap
+         - drift     = ||h_r - h_p|| / ||h_p||  -- magnitude of latent move
+
+    The user's intuition: a model that's *responding to* the prompt
+    will keep h_r structurally related to h_p (high cosine, moderate drift).
+    A model that drifts to "autopilot" produces low cosine + high drift.
+    A model that *echoes* the prompt produces cosine ~ 1.0 + drift ~ 0.
+
+    Healthy band (per the user's prior): retention 0.40-0.75, drift > 0.
+
+    Returns dict with mean retention + mean drift across the probe set.
+    Both numbers are useful: retention alone misses the echo failure mode.
+    """
+    retentions = []
+    drifts = []
+    for prompt in DIVERSITY_PROMPTS:
+        prompt_ids = list(prompt)
+        prompt_t = torch.tensor([prompt_ids], dtype=torch.long, device=device)
+        # Forward over prompt only — snapshot end-of-prompt residual.
+        out = model(prompt_t, return_jepa=True,
+                    prompt_lens=torch.tensor([len(prompt_ids)], device=device))
+        # out is (logits, prim_outputs, residual, intent)
+        h_p = out[2][0, len(prompt_ids) - 1, :].float()  # (d_model,)
+        # Greedy-generate the response.
+        response = model.generate_greedy(prompt_ids, max_new=max_new)
+        if not response:
+            continue
+        full_ids = prompt_ids + list(response)
+        full_t = torch.tensor([full_ids], dtype=torch.long, device=device)
+        out_full = model(full_t, return_jepa=True,
+                         prompt_lens=torch.tensor([len(prompt_ids)], device=device))
+        h_r = out_full[2][0, len(full_ids) - 1, :].float()
+        # Cosine retention.
+        denom = (h_p.norm() * h_r.norm()).clamp_min(1e-6)
+        retention = float(torch.dot(h_p, h_r) / denom)
+        # Relative drift (Euclidean distance normalised by ||h_p||).
+        drift = float((h_r - h_p).norm() / h_p.norm().clamp_min(1e-6))
+        retentions.append(retention)
+        drifts.append(drift)
+    if not retentions:
+        return {"retention": 0.0, "drift": 0.0}
+    return {
+        "retention": float(sum(retentions) / len(retentions)),
+        "drift":     float(sum(drifts)     / len(drifts)),
+    }
+
+
+@torch.no_grad()
 def response_diversity(model: CortexLM, device, max_new: int = 80) -> float:
     """Mean pairwise Jaccard distance across the diversity probe set.
 
@@ -259,6 +317,13 @@ class RunWatcher:
         # Diversity probe: deterministic, doesn't depend on having a held-out
         # iterator. The headline metric for catching mode collapse early.
         out["diversity"] = response_diversity(model, self.device)
+        # Prompt→response internal coherence — does the residual at
+        # end-of-response retain anything from end-of-prompt? This is the
+        # metric for "is the model actually responding, or just running
+        # autopilot." See prompt_response_retention's docstring.
+        ret = prompt_response_retention(model, self.device)
+        out["retention"] = ret["retention"]
+        out["drift"]     = ret["drift"]
         return out
 
     def snapshot(self) -> list[dict]:
