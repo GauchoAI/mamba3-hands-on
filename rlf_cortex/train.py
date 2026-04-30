@@ -259,23 +259,25 @@ def train(cfg: TrainConfig) -> None:
     ckpt = AsyncCheckpointer(ckpt_dir)
     cfg_dict = asdict(cfg)
 
-    # Optional Firebase mirror. Opt-in via env var so existing runs keep
-    # local-only behavior unless explicitly turned on.
+    # Firebase mirror — always on. The pusher itself is fault-tolerant:
+    # network failures spool to a local JSONL outbox so we never lose
+    # data, and the worker is a daemon thread so it never blocks training.
+    # `kind` is auto-derived from this file's parent folder (jepa, rlf_cortex,
+    # ...) — no env var needed.
     pusher = None
-    if _HAS_PUSHER and os.environ.get("PUSH_FIREBASE", "0") == "1":
-        kind = os.environ.get("EXPERIMENT_KIND", "rlf-cortex")
-        exp_id = os.environ.get("EXPERIMENT_ID",
-                                f"{kind}-{time.strftime('%Y-%m-%d')}")
+    if _HAS_PUSHER:
+        kind = Path(__file__).resolve().parent.name        # "rlf_cortex"
+        exp_id = f"{kind}-{time.strftime('%Y-%m-%d')}"
         pusher = ExperimentPusher(
             experiment_id=exp_id, run_id=cfg.run_name, kind=kind,
             config=cfg_dict, outbox_dir=run_dir,
         )
-        pusher.declare_experiment(
-            name=os.environ.get("EXPERIMENT_NAME", kind),
-            hypothesis=os.environ.get("EXPERIMENT_HYPOTHESIS", ""),
-        )
-        pusher.declare_run(purpose=cfg.run_name,
-                           gpu=int(os.environ.get("CUDA_VISIBLE_DEVICES", "-1") or "-1"))
+        pusher.declare_experiment(name=kind, hypothesis="")
+        try:
+            gpu = int(os.environ.get("CUDA_VISIBLE_DEVICES", "-1") or "-1")
+        except ValueError:
+            gpu = -1
+        pusher.declare_run(purpose=cfg.run_name, gpu=gpu)
         print(f"[firebase] pushing to /experiments/{exp_id}/runs/{cfg.run_name}",
               flush=True)
 
