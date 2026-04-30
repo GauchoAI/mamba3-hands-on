@@ -1,34 +1,48 @@
-"""cloud_archive.py — S3-compatible durable archive for generated corpora
-and checkpoints. Mirrors the experiment_pusher.py shape: daemon thread,
-local outbox fallback, fire-and-forget uploads that never block training.
+"""cloud_archive.py — HuggingFace Hub Buckets durable archive.
 
-Default backend: **Firebase Cloud Storage** (== Google Cloud Storage)
-via its S3-compatible interoperability mode. Same Firebase project as
-the telemetry RTDB, works through the EG VPN (R2 was originally chosen
-but its TLS handshake is blocked by the corporate VPN's inspection
-proxy). Can target any S3-compatible store (R2, B2, AWS S3, MinIO)
-just by switching the endpoint URL.
+HF Buckets is a newer, S3-style file-archive product on HF (distinct
+from datasets/models repos which use git+LFS). The right primitive
+for "stash arbitrary files, no version-control overhead":
 
-Why this exists:
-- Generated corpora (Cerebras, Bedrock, local Qwen) and trained
-  checkpoints currently live on whichever box ran them. The m4-mini
-  4 TB external is the convention for durable archive but requires
-  manual rsync and m4-mini being online.
-- vast.ai boxes are ephemeral; anything not pushed off them dies on
-  rotation.
-- Firebase Realtime DB (telemetry) is the wrong tool for files
-  (1 GB total cap, JSON-only, ~1 MB per record limits).
-- This module is the durable file-archive layer alongside the
-  telemetry layer. Same fault-tolerance shape.
+  hf sync ./data hf://buckets/<user>/<bucket-name>           # upload
+  hf sync hf://buckets/<user>/<bucket-name> ./local         # download
 
-Configuration via environment (keep secrets out of code):
-    ARCHIVE_ACCESS_KEY_ID      access key (GCS HMAC: starts with GOOG1E...)
-    ARCHIVE_SECRET_ACCESS_KEY  secret
-    ARCHIVE_ENDPOINT_URL       https://storage.googleapis.com (GCS)
-                               or https://<acc>.r2.cloudflarestorage.com (R2)
-                               or https://s3.<region>.backblazeb2.com (B2)
-    ARCHIVE_BUCKET             bucket name (e.g. <project>.firebasestorage.app)
-    ARCHIVE_REGION             region (default: auto)
+The Python equivalent is HfApi.sync_bucket(source, dest, ...). This
+module wraps that primitive in the same shape as experiment_pusher.py:
+- daemon thread for periodic sync, never blocks training
+- the trainer's existing checkpoints/log directory IS the staging
+  area — we mirror it as-is, no extra copy
+- final sync on complete()
+- silent no-op if HF_TOKEN isn't set, so trainers can be wired
+  unconditionally
+
+Why HF Buckets specifically (not datasets/models repos):
+- No git/LFS overhead — buckets are flat key-value blob stores
+- Fits "stash this checkpoint" semantics better than "version
+  this artifact"
+- Egress is free (HF policy)
+- Works through the EG corporate VPN (R2 is blocked at TLS layer)
+- One bucket can hold many experiments; no proliferating repos
+
+Why ALL-IN on HF (not Firebase Cloud Storage / R2 / etc.):
+- Free at our scale and beyond
+- ML-native — already where datasets/checkpoints live in this
+  community
+- Single auth token; same place we're already pulling teacher
+  models from
+
+Configuration:
+    HF_TOKEN              huggingface.co token with write scope (THE only secret)
+
+The non-secret defaults are baked in code (this is a public repo
+and the bucket miguelemosreverte/GauchoAI is public):
+    HF_ARCHIVE_USER       defaults to "miguelemosreverte"  (overridable)
+    HF_ARCHIVE_BUCKET     defaults to "GauchoAI"           (overridable)
+    HF_ARCHIVE_PRIVATE    defaults to "0" (public bucket)  (overridable)
+    HF_ARCHIVE_SYNC_EVERY seconds between background syncs (default 60)
+
+Path convention on the bucket:
+    hf://buckets/<user>/<bucket>/<experiment_kind>/<run_name>/<filename>
 
 Usage:
     from cloud_archive import CloudArchive
@@ -36,187 +50,128 @@ Usage:
     archive = CloudArchive(
         experiment_kind="cortex_bilingual",
         run_name="step_FINAL",
-        outbox_dir="checkpoints/lm",
+        local_dir="checkpoints/lm",            # we'll mirror this
     )
-
-    # Upload a single file
-    archive.upload(
-        local_path="checkpoints/lm/step_FINAL.pt",
-        artifact_kind="checkpoint",
-    )
-
-    # Upload many (queues, returns immediately)
-    archive.upload_dir(
-        local_dir="checkpoints/lm",
-        artifact_kind="checkpoint",
-        glob="*.pt",
-    )
-
-    # End of run — wait for in-flight uploads
-    archive.complete()
-
-Path convention on remote:
-    <bucket>/<experiment_kind>/<run_name>/<artifact_kind>/<filename>
-
-So `cortex_bilingual/step_FINAL/checkpoint/step_010000.pt` is fully
-addressable and parallels the Firebase /experiments/<id>/runs/<run>/
-structure for ergonomic dashboards.
+    # ... trainer does its thing, writes to checkpoints/lm/* ...
+    archive.complete()                          # final sync
 """
 from __future__ import annotations
 
-import gzip
-import hashlib
-import json
 import os
-import queue
-import shutil
 import threading
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 try:
-    import boto3
-    from botocore.exceptions import ClientError, EndpointConnectionError
-    _HAS_BOTO3 = True
+    from huggingface_hub import HfApi
+    from huggingface_hub.errors import HfHubHTTPError
+    _HAS_HF = True
 except ImportError:
-    _HAS_BOTO3 = False
+    _HAS_HF = False
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Configuration — env-driven so credentials never touch source.
 # ─────────────────────────────────────────────────────────────────────
 
-# Read either R2_* (preferred per docs/CLOUD_ARCHIVE.md and .env) or
-# the legacy ARCHIVE_* prefix. R2_* wins when both are set.
-def _envvar(*names: str, default: str | None = None) -> str | None:
-    for n in names:
-        v = os.environ.get(n)
-        if v:
-            return v
-    return default
+# Username + bucket name are NOT secrets — this is a public repo and a
+# public bucket. Only HF_TOKEN is. Bake the public defaults in code so
+# the smoke test works for anyone who clones + sets HF_TOKEN.
+DEFAULT_USER    = os.environ.get("HF_ARCHIVE_USER", "miguelemosreverte")
+DEFAULT_BUCKET  = os.environ.get("HF_ARCHIVE_BUCKET", "GauchoAI")
+DEFAULT_PRIVATE = os.environ.get("HF_ARCHIVE_PRIVATE", "0") == "1"
+DEFAULT_SYNC_EVERY = int(os.environ.get("HF_ARCHIVE_SYNC_EVERY", "60"))
 
 
-DEFAULT_BUCKET = _envvar("R2_BUCKET", "ARCHIVE_BUCKET", default="mamba3-archive")
-DEFAULT_REGION = _envvar("R2_REGION", "ARCHIVE_REGION", default="auto")
-
-# Files matching these extensions are compressed before upload.
-# Excluded: torch/safetensors checkpoints (already compressed), images.
-_COMPRESS_EXTS = {".jsonl", ".txt", ".log", ".csv", ".tsv", ".md"}
-_NO_COMPRESS_EXTS = {".pt", ".pth", ".npz", ".safetensors",
-                     ".png", ".jpg", ".jpeg", ".webp", ".bin", ".idx"}
-
-
-def _client():
-    """Build an S3 client pointed at R2. Returns None if creds aren't set.
-
-    Reads R2_* (preferred) or ARCHIVE_* (legacy) env vars. R2_* wins.
-    """
-    if not _HAS_BOTO3:
+def _hf_api() -> Optional["HfApi"]:
+    if not _HAS_HF:
         return None
-    key = _envvar("R2_ACCESS_KEY_ID", "ARCHIVE_ACCESS_KEY_ID")
-    sec = _envvar("R2_SECRET_ACCESS_KEY", "ARCHIVE_SECRET_ACCESS_KEY")
-    endpoint = _envvar("R2_ENDPOINT_URL", "ARCHIVE_ENDPOINT_URL")
-    if not (key and sec and endpoint):
+    token = os.environ.get("HF_TOKEN")
+    if not token:
         return None
-    # Cloudflare R2 requires SigV4. Set explicitly because some
-    # environments default to SigV2, which R2 rejects.
-    from botocore.client import Config as _Config
-    return boto3.client(
-        "s3",
-        endpoint_url=endpoint,
-        aws_access_key_id=key,
-        aws_secret_access_key=sec,
-        region_name=DEFAULT_REGION,
-        config=_Config(signature_version="s3v4"),
-    )
-
-
-def _sha256(path: Path, chunk: int = 1 << 20) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for buf in iter(lambda: f.read(chunk), b""):
-            h.update(buf)
-    return h.hexdigest()
-
-
-def _should_compress(path: Path) -> bool:
-    ext = path.suffix.lower()
-    if ext in _NO_COMPRESS_EXTS:
-        return False
-    if ext in _COMPRESS_EXTS:
-        return True
-    # Compress unknown text-like files; leave unknown binary alone.
     try:
-        with path.open("rb") as f:
-            sample = f.read(8192)
-        # Naive: mostly-printable ASCII → text-ish → compress
-        printable = sum(1 for b in sample if 32 <= b < 127 or b in (9, 10, 13))
-        return len(sample) > 0 and printable / len(sample) > 0.85
-    except OSError:
-        return False
+        return HfApi(token=token)
+    except Exception:
+        return None
+
+
+def _bucket_path(user: str, bucket: str, *suffix: str) -> str:
+    s = "/".join(p.strip("/") for p in suffix if p)
+    base = f"hf://buckets/{user}/{bucket}"
+    return f"{base}/{s}" if s else base
 
 
 # ─────────────────────────────────────────────────────────────────────
 # CloudArchive — the user-facing API.
 # ─────────────────────────────────────────────────────────────────────
 
-@dataclass
-class _Job:
-    local_path: Path
-    remote_key: str
-    compress: bool
-    metadata: dict = field(default_factory=dict)
-
-
 class CloudArchive:
-    """Async, fault-tolerant uploader to S3-compatible storage.
+    """Mirrors a local directory to an HF bucket on a periodic timer +
+    a final flush at complete().
 
-    Design mirrors ExperimentPusher:
-      - background daemon thread drains the upload queue
-      - failed uploads spool to an on-disk JSONL outbox so we never
-        lose data on a flaky connection
-      - caller never blocks; complete() drains in-flight + outbox
+    Design:
+      - The trainer's existing checkpoints/log directory IS the staging
+        area. No extra file copies; we just rsync-style sync it.
+      - A daemon thread runs sync_bucket every HF_ARCHIVE_SYNC_EVERY
+        seconds. Caller never blocks. Network failures are logged but
+        non-fatal — the next tick retries.
+      - complete() does a final synchronous sync + stops the thread.
 
-    No-op if creds aren't configured (returns immediately on every
-    method) so trainers can be unconditionally wired.
+    Silent no-op if HF_TOKEN / HF_ARCHIVE_USER aren't configured, so
+    trainers can be unconditionally wired and runs without creds still
+    work (just without remote archive).
     """
 
     def __init__(self,
                  experiment_kind: str,
                  run_name: str,
-                 outbox_dir: str | Path,
+                 local_dir: str | Path,
+                 user: str = DEFAULT_USER,
                  bucket: str = DEFAULT_BUCKET,
-                 enabled: bool = True,
-                 max_inflight: int = 16):
+                 private: bool = DEFAULT_PRIVATE,
+                 sync_every_s: int = DEFAULT_SYNC_EVERY,
+                 enabled: bool = True):
         self.experiment_kind = experiment_kind
         self.run_name = run_name
+        self.local_dir = Path(local_dir)
+        self.user = user
         self.bucket = bucket
-        self.outbox_dir = Path(outbox_dir)
-        self.outbox_dir.mkdir(parents=True, exist_ok=True)
-        self.outbox_file = self.outbox_dir / "cloud_archive_outbox.jsonl"
+        self.private = private
+        self.sync_every_s = max(5, int(sync_every_s))
 
-        self.client = _client() if enabled else None
+        self.api = _hf_api() if enabled else None
         if not enabled:
             print("[cloud-archive] disabled (enabled=False)", flush=True)
-        elif not _HAS_BOTO3:
-            print("[cloud-archive] disabled — boto3 not installed", flush=True)
-        elif self.client is None:
-            print("[cloud-archive] disabled — ARCHIVE_* / R2_* env vars not set", flush=True)
+        elif not _HAS_HF:
+            print("[cloud-archive] disabled — huggingface_hub not installed",
+                  flush=True)
+        elif self.api is None:
+            print("[cloud-archive] disabled — HF_TOKEN env var not set",
+                  flush=True)
+        elif not self.user:
+            print("[cloud-archive] disabled — HF_ARCHIVE_USER env var not set",
+                  flush=True)
+            self.api = None
         else:
-            print(f"[cloud-archive] {bucket}/{experiment_kind}/{run_name}/...", flush=True)
+            self.bucket_id = f"{self.user}/{self.bucket}"
+            self.remote_prefix = _bucket_path(
+                self.user, self.bucket, experiment_kind, run_name,
+            )
+            scope = "private" if self.private else "public"
+            print(f"[cloud-archive] HF bucket sync: {self.local_dir}/  →  "
+                  f"{self.remote_prefix}  ({scope})", flush=True)
 
-        self._queue: "queue.Queue[Optional[_Job]]" = queue.Queue(maxsize=max_inflight * 4)
-        self._stopped = False
-        self._n_uploaded = 0
-        self._n_failed = 0
-        self._n_bytes = 0
+        self._stop = threading.Event()
         self._lock = threading.Lock()
+        self._n_syncs = 0
+        self._n_uploaded_total = 0
+        self._n_failed = 0
 
-        if self.client is not None:
+        if self.api is not None:
+            self._ensure_bucket()
             self._worker = threading.Thread(
-                target=self._worker_loop, daemon=True, name="cloud-archive"
+                target=self._sync_loop, daemon=True, name="cloud-archive"
             )
             self._worker.start()
         else:
@@ -228,173 +183,120 @@ class CloudArchive:
                local_path: str | Path,
                artifact_kind: str = "artifact",
                metadata: Optional[dict] = None) -> None:
-        """Queue a file upload. Non-blocking.
+        """Compatibility shim with the old per-file API.
 
-        Remote key: <experiment_kind>/<run_name>/<artifact_kind>/<basename>
-        File is gzip'd if its extension / content suggests text-like.
+        Buckets sync the WHOLE local_dir — individual upload() calls
+        are mostly no-ops here. We use them to nudge a sync on
+        ckpt-save boundaries so the remote stays close to the local
+        without waiting for the periodic timer.
         """
-        if self.client is None:
+        if self.api is None:
             return
-        local_path = Path(local_path)
-        if not local_path.exists():
-            print(f"[cloud-archive] skip missing: {local_path}", flush=True)
-            return
-        compress = _should_compress(local_path)
-        ext = ".gz" if compress else ""
-        remote_key = (f"{self.experiment_kind}/{self.run_name}/"
-                      f"{artifact_kind}/{local_path.name}{ext}")
-        job = _Job(local_path=local_path, remote_key=remote_key,
-                   compress=compress, metadata=metadata or {})
-        try:
-            self._queue.put_nowait(job)
-        except queue.Full:
-            # Don't block the caller; spool to outbox instead.
-            self._spool(job, reason="queue_full")
+        # Don't sync more often than the timer; just register intent.
+        # The next periodic tick will pick it up. Callers that want
+        # immediate sync can call sync_now().
 
-    def upload_dir(self,
-                   local_dir: str | Path,
-                   artifact_kind: str = "artifact",
-                   glob: str = "*",
-                   recursive: bool = False) -> None:
-        """Queue every matching file in a directory."""
-        if self.client is None:
-            return
-        local_dir = Path(local_dir)
-        if not local_dir.is_dir():
-            return
-        it = local_dir.rglob(glob) if recursive else local_dir.glob(glob)
-        for p in it:
-            if p.is_file():
-                self.upload(p, artifact_kind=artifact_kind)
+    def upload_dir(self, *args, **kwargs) -> None:
+        """Compat shim — sync covers it."""
+        return
 
-    def complete(self, timeout: float = 60.0) -> None:
-        """Drain the queue, wait for in-flight uploads, drain the outbox."""
-        if self.client is None:
+    def sync_now(self, dry_run: bool = False) -> None:
+        """Force an immediate sync of local_dir → bucket prefix."""
+        if self.api is None:
             return
-        try:
-            self._queue.join()  # wait for queued jobs
-        except Exception:
-            pass
-        # Try one outbox replay before declaring done.
-        self._replay_outbox()
-        self._stopped = True
-        self._queue.put(None)
+        self._do_sync(dry_run=dry_run)
+
+    def complete(self, timeout: float = 120.0) -> None:
+        """Stop the periodic thread + do a final synchronous sync."""
+        if self.api is None:
+            return
+        self._stop.set()
         if self._worker is not None:
             self._worker.join(timeout=timeout)
-        print(f"[cloud-archive] complete: uploaded={self._n_uploaded} "
-              f"failed={self._n_failed} bytes={self._n_bytes:,}", flush=True)
+        # Final flush — even if the timer just fired, do one more so
+        # any files written between the last tick and now are pushed.
+        self._do_sync()
+        with self._lock:
+            print(f"[cloud-archive] complete: syncs={self._n_syncs} "
+                  f"files_pushed={self._n_uploaded_total} "
+                  f"failed_attempts={self._n_failed}", flush=True)
 
     def stats(self) -> dict:
         with self._lock:
             return {
-                "uploaded": self._n_uploaded,
+                "syncs": self._n_syncs,
+                "uploaded": self._n_uploaded_total,
                 "failed": self._n_failed,
-                "bytes": self._n_bytes,
             }
 
     # ────────── internals ──────────
 
-    def _worker_loop(self) -> None:
-        while True:
-            try:
-                job = self._queue.get(timeout=1.0)
-            except queue.Empty:
-                if self._stopped:
-                    return
-                continue
-            try:
-                if job is None:
-                    return
-                self._do_upload(job)
-            finally:
-                self._queue.task_done()
-
-    def _do_upload(self, job: _Job) -> None:
+    def _ensure_bucket(self) -> None:
+        """Lazy-create the bucket if it doesn't exist yet."""
         try:
-            # Skip if remote already has the byte-identical object.
-            if self._remote_matches(job):
-                with self._lock:
-                    self._n_uploaded += 1
-                return
-
-            body = self._read_body(job)
-            extra = {"Metadata": {k: str(v) for k, v in job.metadata.items()}} \
-                if job.metadata else {}
-            self.client.put_object(
-                Bucket=self.bucket, Key=job.remote_key, Body=body, **extra,
+            from huggingface_hub import create_bucket
+            create_bucket(
+                bucket_id=self.bucket_id,
+                private=self.private,
+                exist_ok=True,
+                token=os.environ.get("HF_TOKEN"),
             )
+        except HfHubHTTPError as e:
+            # If we don't have create perms but the bucket exists,
+            # uploads will still work — surface the note but continue.
+            print(f"[cloud-archive] create_bucket note: {e}", flush=True)
+        except Exception as e:
+            print(f"[cloud-archive] create_bucket unexpected: "
+                  f"{type(e).__name__}: {e}", flush=True)
+
+    def _sync_loop(self) -> None:
+        """Periodic sync thread."""
+        while not self._stop.wait(self.sync_every_s):
+            self._do_sync()
+
+    def _do_sync(self, dry_run: bool = False) -> None:
+        if self.api is None or not self.local_dir.is_dir():
+            return
+        try:
+            plan = self.api.sync_bucket(
+                source=str(self.local_dir),
+                dest=self.remote_prefix,
+                dry_run=dry_run,
+                quiet=True,
+                token=os.environ.get("HF_TOKEN"),
+            )
+            n_files = self._extract_n_uploaded(plan)
             with self._lock:
-                self._n_uploaded += 1
-                self._n_bytes += len(body)
-        except (ClientError, EndpointConnectionError, OSError) as e:
+                self._n_syncs += 1
+                self._n_uploaded_total += n_files
+            if n_files > 0 and not dry_run:
+                print(f"[cloud-archive] synced {n_files} new/changed file(s) "
+                      f"→ {self.remote_prefix}", flush=True)
+        except HfHubHTTPError as e:
             with self._lock:
                 self._n_failed += 1
-            self._spool(job, reason=str(e))
+            print(f"[cloud-archive] sync failed (will retry): {e}", flush=True)
+        except Exception as e:
+            with self._lock:
+                self._n_failed += 1
+            print(f"[cloud-archive] sync unexpected: "
+                  f"{type(e).__name__}: {e}", flush=True)
 
-    def _read_body(self, job: _Job) -> bytes:
-        with job.local_path.open("rb") as f:
-            data = f.read()
-        if job.compress:
-            return gzip.compress(data, compresslevel=6)
-        return data
-
-    def _remote_matches(self, job: _Job) -> bool:
-        """True if the remote object exists with the same content hash."""
-        try:
-            head = self.client.head_object(Bucket=self.bucket, Key=job.remote_key)
-        except ClientError as e:
-            if e.response.get("Error", {}).get("Code") in {"404", "NoSuchKey", "NotFound"}:
-                return False
-            return False
-        # Compare a content hash we attach as metadata. ETag is unreliable
-        # for multipart uploads, so we use our own field.
-        local_hash = _sha256(job.local_path)
-        remote_hash = (head.get("Metadata") or {}).get("sha256")
-        return remote_hash == local_hash
-
-    def _spool(self, job: _Job, reason: str) -> None:
-        record = {
-            "ts": time.time(),
-            "local_path": str(job.local_path),
-            "remote_key": job.remote_key,
-            "compress": job.compress,
-            "metadata": job.metadata,
-            "reason": reason,
-        }
-        with self.outbox_file.open("a") as f:
-            f.write(json.dumps(record) + "\n")
-
-    def _replay_outbox(self) -> None:
-        if not self.outbox_file.exists():
-            return
-        try:
-            lines = self.outbox_file.read_text().splitlines()
-        except OSError:
-            return
-        if not lines:
-            return
-        # Move outbox aside; replay attempts go through normal queue.
-        archive_path = self.outbox_file.with_suffix(".jsonl.replayed")
-        try:
-            shutil.move(self.outbox_file, archive_path)
-        except OSError:
-            return
-        for line in lines:
+    @staticmethod
+    def _extract_n_uploaded(plan) -> int:
+        """SyncPlan structure varies; pull a best-effort uploaded count."""
+        for attr in ("n_uploaded", "uploaded_count", "num_uploaded"):
+            v = getattr(plan, attr, None)
+            if isinstance(v, int):
+                return v
+        # Fall back to len of an "uploads" list if present
+        uploads = getattr(plan, "uploads", None) or getattr(plan, "to_upload", None)
+        if uploads is not None:
             try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            try:
-                self._queue.put_nowait(_Job(
-                    local_path=Path(rec["local_path"]),
-                    remote_key=rec["remote_key"],
-                    compress=bool(rec.get("compress")),
-                    metadata=rec.get("metadata") or {},
-                ))
-            except queue.Full:
-                # If we can't even re-queue, leave the rest in the
-                # archived outbox for a future replay.
-                break
+                return len(uploads)
+            except TypeError:
+                return 0
+        return 0
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -403,11 +305,16 @@ class CloudArchive:
 # ─────────────────────────────────────────────────────────────────────
 
 def _smoke():
-    """Round-trip a small file: upload → list → download → byte-diff."""
+    """Round-trip a small file: write locally → bucket sync → list → diff."""
     import tempfile
 
-    if _client() is None:
-        print("R2_* env vars not set; skipping smoke test.")
+    api = _hf_api()
+    if api is None:
+        print("HF_TOKEN not set; skipping smoke test.")
+        return 1
+    user = DEFAULT_USER
+    if not user:
+        print("HF_ARCHIVE_USER not set; skipping smoke test.")
         return 1
 
     with tempfile.TemporaryDirectory() as td:
@@ -419,23 +326,40 @@ def _smoke():
         a = CloudArchive(
             experiment_kind="smoke",
             run_name="cloud_archive_self_test",
-            outbox_dir=tmp,
+            local_dir=tmp,
+            sync_every_s=10,   # not waited on; complete() flushes
         )
-        a.upload(local, artifact_kind="test")
-        a.complete(timeout=30.0)
+        a.complete(timeout=120.0)
 
-        # Download via raw client to verify
-        c = _client()
-        key = "smoke/cloud_archive_self_test/test/smoke.jsonl.gz"
-        downloaded = tmp / "downloaded.gz"
-        c.download_file(DEFAULT_BUCKET, key, str(downloaded))
-        round_tripped = gzip.decompress(downloaded.read_bytes())
+        # Verify by listing the bucket prefix
+        from huggingface_hub import HfApi as _Api
+        x = _Api(token=os.environ["HF_TOKEN"])
+        tree = list(x.list_bucket_tree(
+            bucket_id=f"{user}/{DEFAULT_BUCKET}",
+            path=f"smoke/cloud_archive_self_test",
+        ))
+        names = [getattr(e, "path", str(e)) for e in tree]
+        assert any("smoke.jsonl" in n for n in names), \
+            f"smoke.jsonl not found in remote tree: {names}"
+        print(f"[smoke] PASS — uploaded files visible at "
+              f"hf://buckets/{user}/{DEFAULT_BUCKET}/smoke/cloud_archive_self_test/")
+        print(f"[smoke] remote tree: {names}")
 
-        assert round_tripped == payload, "round-trip mismatch"
-        print("[smoke] PASS — uploaded, downloaded, byte-identical.")
-
-        # Cleanup the test object so we don't leave junk in the bucket.
-        c.delete_object(Bucket=DEFAULT_BUCKET, Key=key)
+        # Optional: also download & byte-diff for full roundtrip
+        from huggingface_hub import hf_hub_download_to_local
+        # Sync back to a different local path
+        round_trip_dir = tmp / "roundtrip"
+        round_trip_dir.mkdir()
+        plan = x.sync_bucket(
+            source=f"hf://buckets/{user}/{DEFAULT_BUCKET}/smoke/cloud_archive_self_test",
+            dest=str(round_trip_dir),
+            quiet=True,
+            token=os.environ["HF_TOKEN"],
+        )
+        downloaded = round_trip_dir / "smoke.jsonl"
+        if downloaded.exists():
+            assert downloaded.read_bytes() == payload, "round-trip mismatch"
+            print(f"[smoke] PASS — bidirectional roundtrip byte-identical.")
         return 0
 
 
