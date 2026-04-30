@@ -311,6 +311,54 @@ manifest, then talks to RTDB directly (no in-process pusher needed)
 to issue the DELETE + meta PATCH. So packing can happen between
 training runs without re-instantiating anything.
 
+## Reader
+
+`stream_reader.py` is the merged-source consumer API. Three calls:
+
+```python
+from stream_reader import list_streams, read_meta, read_stream
+
+# discovery — what streams exist project-wide?
+for exp_id, run_id, name in list_streams():
+    print(exp_id, run_id, name)
+
+# single stream's meta
+meta = read_meta("cortex_bilingual-2026-04-30",
+                 "mlx-bilingual-widerN-2026-04-30",
+                 "metrics")
+
+# transparent record iterator — sealed Parquet (HF) + live RTDB,
+# merged by `ts` within each UTC-date shard, dates in chronological
+# order
+for rec in read_stream(experiment_id, run_id, "metrics",
+                       since="2026-04-25", until="2026-05-05"):
+    print(rec["step"], rec["byte_ce"])
+```
+
+The caller sees one ordered iterator and never has to know which
+store any given record came from. The reader does what the
+dashboard would otherwise need to do itself: list sealed Parquet
+shards on HF, list any open RTDB dates, merge.
+
+Sealed shards are cached at `~/.cache/mamba3-archive/<bucket>/...`
+(override with `MAMBA3_ARCHIVE_CACHE` env var). Re-reads are local.
+
+A date can appear in **both** stores: when a producer is mid-day on
+a date that ALSO has an intra-day Parquet (because a seal happened
+between two record bursts on the same UTC day). The two record sets
+are **disjoint by construction** — `seal_via_rtdb` issues `DELETE`
+on the date subtree before pack returns, so any records present in
+RTDB after the seal are strictly new pushes. The reader concatenates
+both and sorts by `ts` without double-counting.
+
+Quick CLI:
+
+```bash
+python stream_reader.py ls                                   # list everything
+python stream_reader.py meta <exp> <run> <stream>            # one stream's meta
+python stream_reader.py read <exp> <run> <stream> --limit 10 # read records
+```
+
 ## Why Kappa, not Lambda
 
 Lambda architecture splits batch and streaming processing into two

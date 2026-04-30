@@ -391,14 +391,18 @@ class ExperimentPusher:
             None,  # don't trigger _maybe_rotate; we manage retention via seal
         ))
 
-        # 3. Counter bookkeeping.
+        # 3. Counter bookkeeping. Flush meta on every push so the
+        # dashboard's pack_progress_pct is genuinely live. At the
+        # worst-case threshold (50k records / pack), this is ~50k
+        # ~200-byte PATCHes per cycle = ~10 MB transfer, well within
+        # free-tier budget. Typical training runs (~1000 records)
+        # generate negligible meta traffic. Earlier every-50 throttle
+        # made dashboards lag by 50 records, which for short bursts
+        # meant they showed 0 when records existed.
         m = self._stream_meta[name]
         m["current_record_count"] += 1
         m["current_size_bytes"] += len(line_bytes)
-        # Flush meta every 50 pushes (keeps the dashboard ~live without
-        # spamming RTDB).
-        if m["current_record_count"] % 50 == 0:
-            self._flush_stream_meta(name)
+        self._flush_stream_meta(name)
 
     def _flush_stream_meta(self, name: str) -> None:
         m = self._stream_meta.get(name)
