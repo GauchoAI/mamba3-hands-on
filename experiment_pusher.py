@@ -67,6 +67,12 @@ DEFAULT_FIREBASE_URL = (
     "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app"
 )
 
+# Protocol versions. Bump the relevant one on any breaking change to that
+# wire format. Readers should branch on these and warn (not fail) on a
+# version newer than what they know about. History: v1 — initial.
+KAPPA_MANIFEST_VERSION = 1
+STREAM_META_VERSION = 1
+
 # Throttle interval per channel, in seconds. Tuned to fit free-tier budget;
 # see schema doc §1 for the math (~940 writes/day per run budget).
 THROTTLE_METRICS_S  = 120.0   # write every 2 min even if caller pushes per-step
@@ -289,6 +295,7 @@ class ExperimentPusher:
         """
         try:
             manifest = {
+                "version": KAPPA_MANIFEST_VERSION,
                 "experiment_id": self.experiment_id,
                 "run_id": self.run_id,
                 "kind": self.kind,
@@ -329,6 +336,7 @@ class ExperimentPusher:
         prefix = hf_prefix or f"{self.kind}/{self.run_id}/streams"
         now = time.time()
         meta = {
+            "schema_version": STREAM_META_VERSION,
             "stream": name,
             "experiment_id": self.experiment_id,
             "run_id": self.run_id,
@@ -446,8 +454,9 @@ class ExperimentPusher:
                 shard_date = stem[-10:]
                 if shard_date >= current_date:
                     continue
-                if p.with_suffix(".parquet").exists():
-                    continue
+                # Don't skip when .parquet exists — pack_one is merge-aware
+                # and reads the carry-over rows before appending the new
+                # ones. Skipping here would lose records on watcher re-runs.
                 candidates.append(p)
             if not candidates:
                 self._pack_lock.release()

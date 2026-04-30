@@ -184,17 +184,29 @@ def read_records(path: Path) -> list[dict]:
 
 
 def pack_one(jsonl_path: Path, *, delete_source: bool = True) -> dict:
-    """JSONL → zstd Parquet. Returns a small report dict."""
+    """JSONL → zstd Parquet. Returns a small report dict.
+
+    Merge-aware: if a `.parquet` already exists for this shard (e.g. an
+    earlier pass packed pass-1 records, then more records landed in a
+    fresh JSONL on the same date), we read the existing rows first and
+    accumulate. Without this, the watcher pattern (poll → append → pack)
+    would lose every-other-pass's records.
+    """
     if not jsonl_path.exists() or jsonl_path.suffix != ".jsonl":
         return {"skipped": "not a jsonl file", "path": str(jsonl_path)}
     parquet_path = jsonl_path.with_suffix(".parquet")
-    if parquet_path.exists():
-        # Already packed (possibly partially). Re-pack into a temp file
-        # then rename, so we never leave a torn .parquet behind.
-        pass
 
     pa, pq = _pa()
     records = []
+    n_carry = 0
+    if parquet_path.exists():
+        try:
+            records.extend(pq.read_table(parquet_path).to_pylist())
+            n_carry = len(records)
+        except Exception:                                       # noqa: BLE001
+            # Unreadable existing parquet — overwrite, surface in report.
+            n_carry = -1
+
     with jsonl_path.open("r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
@@ -204,8 +216,10 @@ def pack_one(jsonl_path: Path, *, delete_source: bool = True) -> dict:
                 records.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
-    if not records:
-        return {"skipped": "empty", "path": str(jsonl_path)}
+    n_new = len(records) - max(0, n_carry)
+    if n_new == 0:
+        return {"skipped": "empty (no new records)",
+                "path": str(jsonl_path), "n_carry": n_carry}
 
     # Coerce nested dict / list fields to JSON strings so the schema is
     # uniform across rows (the storage_packer pattern).
@@ -232,6 +246,8 @@ def pack_one(jsonl_path: Path, *, delete_source: bool = True) -> dict:
     return {
         "path": str(jsonl_path),
         "n_records": len(records),
+        "n_carry": max(0, n_carry),
+        "n_new": n_new,
         "bytes_before": bytes_before,
         "bytes_after": bytes_after,
         "ratio": round(bytes_after / max(1, bytes_before), 3),

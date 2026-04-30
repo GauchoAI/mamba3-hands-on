@@ -56,6 +56,11 @@ DEFAULT_STATE_DIR = Path.home() / ".cache" / "mamba3-archive" / "session_archive
 
 EXPERIMENT_ID = "claude-sessions"
 
+# Envelope schema version — bump on any breaking change to the record
+# fields the archiver writes (e.g. renaming `_payload` or `_id`). Readers
+# should branch on this and warn-not-fail on unknown future values.
+ENVELOPE_VERSION = 1
+
 
 def _encoded_folder_for(repo: Path) -> str:
     """Claude Code encodes the absolute path by replacing `/` and `_`
@@ -165,6 +170,7 @@ def archive_one(jsonl_path: Path, state_dir: Path,
         # string column is uniform, packs well under zstd, and round-trips
         # losslessly via json.loads.
         rec_with_ts = {
+            "_v": ENVELOPE_VERSION,
             "_id": rid,
             "ts": _record_ts(rec, fallback_ts),
             "type": rec.get("type", "?"),
