@@ -39,7 +39,14 @@ EN_PATH  = CACHE_DIR / "Tatoeba.en-es.en"
 ES_PATH  = CACHE_DIR / "Tatoeba.en-es.es"
 SEED = 42
 UNARY_FRACTION = 0.05
-UNARY_MAX_N = 30   # keep the cortex training distribution
+# Widened from N≤30 → N≤60 to test the diagnosis from the
+# counter-attach experiment: the bilingual LM acquired a 'stars are
+# short → switch out of unary mode' prior because training only saw
+# N≤30 unary lines. With N up to 60 (122 chars, fits seq_len=128
+# with margin), the LM's mode-switch threshold should shift, letting
+# the cortex composition extend OOD further. See findings entry
+# 'Counter primitive on a frozen bilingual LM' (2026-04-29).
+UNARY_MAX_N = 60
 
 
 def download_tatoeba(refresh: bool = False) -> None:
