@@ -402,16 +402,23 @@ class ExperimentPusher:
         record_with_ts = {**coerced, "ts": record_ts}
         line = json.dumps(record_with_ts, default=str) + "\n"
         line_bytes = line.encode("utf-8")
-        if len(line_bytes) > 256_000:
-            raise ValueError(
-                f"stream record too large: {len(line_bytes)} bytes "
-                f"(>256 KB cap). Truncate fields or split records."
-            )
 
         # 1. Canonical local JSONL append (UTC date sharded — based on the
         #    record's own timestamp).
         today = time.strftime("%Y-%m-%d", time.gmtime(record_ts))
+        current_utc = time.strftime("%Y-%m-%d", time.gmtime())
         shard_path = self.streams_dir / f"{name}-{today}.jsonl"
+
+        # The 256 KB cap exists because RTDB has practical per-write limits
+        # at this scale. Historical records skip RTDB entirely (see step 2),
+        # so they have no such constraint — a 1 MB tool-result line lands
+        # in JSONL → Parquet without complaint. Only enforce the cap when
+        # this record is actually going to RTDB (today's date).
+        if today == current_utc and len(line_bytes) > 256_000:
+            raise ValueError(
+                f"stream record too large: {len(line_bytes)} bytes "
+                f"(>256 KB cap on RTDB-bound records). Truncate or split."
+            )
         try:
             with shard_path.open("a") as f:
                 f.write(line)
@@ -425,7 +432,6 @@ class ExperimentPusher:
         #    log import, etc.) skip RTDB entirely. Auto-pack will move them
         #    to Parquet on HF; RTDB never has to see them. By construction,
         #    RTDB only ever contains today's records.
-        current_utc = time.strftime("%Y-%m-%d", time.gmtime())
         if today == current_utc:
             self._enqueue((
                 "POST",

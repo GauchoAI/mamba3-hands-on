@@ -190,7 +190,12 @@ def archive_one(jsonl_path: Path, state_dir: Path, outbox_dir: Path,
         try:
             pusher.stream("events", rec_with_ts)
         except ValueError as e:
+            # Cap-exceeded on a current-day record. Mark seen anyway so
+            # we don't loop forever retrying the same too-large line —
+            # the caller's choice to drop has been made; re-attempting
+            # gains nothing.
             print(f"  ! line {line_no}: {e}", flush=True)
+            new_ids.append(rid)
             continue
         new_ids.append(rid)
         n_new += 1
