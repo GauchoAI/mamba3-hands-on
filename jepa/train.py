@@ -393,6 +393,10 @@ def main():
     ap.add_argument("--d-model", type=int, default=TrainConfig.d_model)
     ap.add_argument("--n-layers", type=int, default=TrainConfig.n_layers)
 
+    ap.add_argument("--use-counter", type=str, default="true",
+                    choices=["true", "false"],
+                    help="If false, no CounterPrimitive is built; aux loss "
+                         "path returns 0. Use for the no-cortex variant.")
     ap.add_argument("--override-stride-bytes", type=int,
                     default=TrainConfig.stride_bytes,
                     help="Must match the stride used to make teacher_thoughts")
@@ -419,6 +423,7 @@ def main():
         runs_root=args.runs_root,
         d_model=args.d_model,
         n_layers=args.n_layers,
+        use_counter=(args.use_counter == "true"),
         stride_bytes=args.override_stride_bytes,
         device=args.device,
         seed=args.seed,

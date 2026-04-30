@@ -75,6 +75,70 @@ def intent_variance(model: CortexLM, batch, device) -> float:
     return float(intent.var(dim=0).mean())
 
 
+# Diversity probe: a small fixed set of varied prompts. The metric
+# measures how *similar* the model's responses are across these prompts.
+# High similarity ⇒ mode collapse (all prompts produce the same output).
+DIVERSITY_PROMPTS: list[bytes] = [
+    b"Hello, how are you?\n",
+    b"Hola, como estas?\n",
+    b"The weather today is\n",
+    b"El clima de hoy es\n",
+    b"Tom said\n",
+    b"Maria dijo\n",
+    b"I went to the market and bought\n",
+    b"Mi color favorito es\n",
+]
+
+
+def _char_bigrams(text: bytes) -> set[tuple[int, int]]:
+    """Set of consecutive-byte pairs in `text`.
+
+    Bigrams instead of bytes-as-tokens because two responses that share
+    the same opening phrase ("Tom are much...") will share many bigrams
+    even if individual byte frequencies look uncorrelated.
+    """
+    return {(text[i], text[i + 1]) for i in range(len(text) - 1)}
+
+
+@torch.no_grad()
+def response_diversity(model: CortexLM, device, max_new: int = 80) -> float:
+    """Mean pairwise Jaccard distance across the diversity probe set.
+
+    Generates one response per probe prompt with greedy decoding (so the
+    metric is deterministic for a given checkpoint), computes character-
+    bigram sets per response, then averages Jaccard *distance* (1 - overlap)
+    over all (prompt_i, prompt_j) pairs with i < j.
+
+    Returns:
+        diversity ∈ [0, 1].  High = different responses to different prompts.
+        Low = mode collapse (all prompts produce similar text).
+
+    The metric we were missing: at step 2800 in the first run,
+    JEPA-on runs had diversity ~0.85+, gpu3-zerojepa had ~0.30. By step
+    4000 all four collapsed to ~0.30. With this metric in eval_daemon,
+    the dashboard would have flashed red at step ~3000 and we'd have
+    stopped sooner.
+    """
+    bigrams = []
+    for prompt in DIVERSITY_PROMPTS:
+        out = model.generate_greedy(list(prompt), max_new=max_new)
+        bigrams.append(_char_bigrams(bytes(out)))
+    n = len(bigrams)
+    if n < 2:
+        return 0.0
+    distances: list[float] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = bigrams[i], bigrams[j]
+            if not a and not b:
+                continue
+            inter = len(a & b)
+            union = len(a | b)
+            jaccard = inter / max(union, 1)
+            distances.append(1.0 - jaccard)
+    return float(sum(distances) / max(len(distances), 1))
+
+
 # ---------------------------------------------------------------------------
 # Worker: poll manifest, load each new ckpt, evaluate, log.
 # ---------------------------------------------------------------------------
@@ -192,6 +256,9 @@ class RunWatcher:
         if self._teacher_iter is not None:
             out["intent_var"] = intent_variance(model, next(self._teacher_iter),
                                                 self.device)
+        # Diversity probe: deterministic, doesn't depend on having a held-out
+        # iterator. The headline metric for catching mode collapse early.
+        out["diversity"] = response_diversity(model, self.device)
         return out
 
     def snapshot(self) -> list[dict]:
