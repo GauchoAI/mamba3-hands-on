@@ -60,6 +60,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from kappa_schemas import SCHEMAS, schema_path
+
 # ---------------------------------------------------------------------------
 # Firebase RTDB endpoint — same DB the existing GA dashboard reads from
 # ---------------------------------------------------------------------------
@@ -230,6 +232,11 @@ class ExperimentPusher:
         # from any local run directory it gets pointed at.
         self._write_manifest()
 
+        # Publish protocol schemas to RTDB so any consumer can resolve a
+        # version int → field definitions without the producer's source.
+        # Idempotent PUT; if the doc already matches, RTDB just rewrites.
+        self._publish_schemas()
+
     # -- path helpers -------------------------------------------------------
     def _exp_path(self, *parts: str) -> str:
         return "/".join(["experiments", self.experiment_id, *parts])
@@ -287,6 +294,18 @@ class ExperimentPusher:
 
     def _stream_records_path(self, name: str, *parts: str) -> str:
         return "/".join(["streams", self.experiment_id, self.run_id, name, *parts])
+
+    def _publish_schemas(self, names: list[str] | None = None) -> None:
+        """Idempotent PUT of versioned JSON Schema docs to RTDB at
+        `/_schemas/<name>/v<version>`. Default: every schema in the
+        registry. Cheap (a handful of small docs); RTDB rewrites are
+        no-ops when the content matches.
+        """
+        for name in (names or list(SCHEMAS.keys())):
+            entry = SCHEMAS.get(name)
+            if not entry:
+                continue
+            self._enqueue(("PUT", schema_path(name, entry["v"]), entry["doc"]))
 
     def _write_manifest(self) -> None:
         """Write a small _kappa_manifest.json so kappa_packer can find
