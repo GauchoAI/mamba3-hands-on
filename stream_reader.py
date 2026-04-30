@@ -136,10 +136,17 @@ def _live_records(experiment_id: str, run_id: str, stream: str,
 # HF Bucket Parquet shards
 # ─────────────────────────────────────────────────────────────────────
 
-def _list_sealed_shards(meta: dict[str, Any]) -> list[tuple[str, str]]:
-    """Return a list of (filename, parquet_path_in_bucket) for every
-    sealed Parquet shard for this stream. Filename is e.g.
-    `metrics-2026-04-29.parquet`; path is the prefix-relative path."""
+def _list_sealed_shards(meta: dict[str, Any]
+                        ) -> list[tuple[str, str, str]]:
+    """Return a list of (filename, parquet_path_in_bucket, cache_key)
+    for every sealed Parquet shard for this stream.
+
+    The cache_key encodes the remote object's size + last-modified so the
+    reader can detect when a previously-cached parquet has been re-written
+    on HF (which happens whenever pack_one runs in merge-aware mode and
+    appends new rows). Form: `<size>:<last_modified_iso>` — a content
+    fingerprint cheap enough to compute on every list.
+    """
     try:
         from huggingface_hub import HfApi
     except ImportError:
@@ -165,33 +172,43 @@ def _list_sealed_shards(meta: dict[str, Any]) -> list[tuple[str, str]]:
     name_prefix = f"{stream}-"
     for entry in tree:
         path = getattr(entry, "path", None) or str(entry)
-        # path looks like "<prefix>/<filename>"; we want filenames that
-        # start with "<stream>-" and end with ".parquet"
         filename = Path(path).name
-        if filename.startswith(name_prefix) and filename.endswith(suffix):
-            out.append((filename, path))
+        if not (filename.startswith(name_prefix)
+                and filename.endswith(suffix)):
+            continue
+        size = getattr(entry, "size", None)
+        last_modified = getattr(entry, "last_modified", None)
+        cache_key = f"{size}:{last_modified}"
+        out.append((filename, path, cache_key))
     return sorted(out)
 
 
 def _download_shard(meta: dict[str, Any], remote_path: str,
+                    cache_key: str = "",
                     cache_root: Path = DEFAULT_CACHE) -> Path:
     """Download a Parquet shard to the local cache; return the local
-    path. If already cached (same path under cache_root), return
-    immediately without re-downloading."""
+    path. If a cached file exists AND its sidecar `.cachekey` matches
+    the remote `cache_key` (size + last-modified), reuse it. Otherwise
+    re-download. Empty `cache_key` = always re-download (defensive).
+    """
     user = meta["hf_user"]
     bucket = meta["hf_bucket"]
     bucket_id = f"{user}/{bucket}"
     cache_dir = cache_root / user / bucket / Path(remote_path).parent
     cache_dir.mkdir(parents=True, exist_ok=True)
     local_path = cache_dir / Path(remote_path).name
-    if local_path.exists():
-        return local_path
+    sidecar = local_path.with_suffix(local_path.suffix + ".cachekey")
+
+    if local_path.exists() and cache_key:
+        try:
+            cached_key = sidecar.read_text().strip()
+        except OSError:
+            cached_key = ""
+        if cached_key == cache_key:
+            return local_path
 
     from huggingface_hub import HfApi
     api = HfApi(token=os.environ.get("HF_TOKEN"))
-    # download_bucket_files writes into local_dir/<remote_path>; we want
-    # it directly at cache_dir/<filename>. Use sync_bucket scoped to one
-    # file via the include filter for predictable output.
     api.sync_bucket(
         source=f"hf://buckets/{bucket_id}/{remote_path}",
         dest=str(cache_dir),
@@ -202,8 +219,18 @@ def _download_shard(meta: dict[str, Any], remote_path: str,
         # Fallback: the file may have landed under a nested path.
         candidates = list(cache_dir.rglob(Path(remote_path).name))
         if candidates:
-            return candidates[0]
-        raise FileNotFoundError(f"download produced no file for {remote_path}")
+            local_path = candidates[0]
+        else:
+            raise FileNotFoundError(
+                f"download produced no file for {remote_path}"
+            )
+
+    # Persist the new cache key so the next read can short-circuit.
+    if cache_key:
+        try:
+            sidecar.write_text(cache_key)
+        except OSError:
+            pass
     return local_path
 
 
@@ -267,10 +294,12 @@ def read_stream(experiment_id: str, run_id: str, stream: str,
     sealed = _list_sealed_shards(meta)
     sealed_dates: set[str] = set()
     sealed_path_by_date: dict[str, str] = {}
-    for filename, path in sealed:
+    sealed_key_by_date: dict[str, str] = {}
+    for filename, path, cache_key in sealed:
         d = _date_from_shard(filename, stream)
         sealed_dates.add(d)
         sealed_path_by_date[d] = path
+        sealed_key_by_date[d] = cache_key
 
     live_dates = _live_dates(experiment_id, run_id, stream, fb_url=fb_url)
 
@@ -288,8 +317,11 @@ def read_stream(experiment_id: str, run_id: str, stream: str,
             continue
         records: list[dict] = []
         if date in sealed_dates:
-            shard_path = _download_shard(meta, sealed_path_by_date[date],
-                                         cache_root=cache_root)
+            shard_path = _download_shard(
+                meta, sealed_path_by_date[date],
+                cache_key=sealed_key_by_date[date],
+                cache_root=cache_root,
+            )
             records.extend(_read_parquet(shard_path))
         if date in live_dates:
             records.extend(_live_records(experiment_id, run_id, stream,
