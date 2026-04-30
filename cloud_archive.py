@@ -83,6 +83,13 @@ DEFAULT_BUCKET  = os.environ.get("HF_ARCHIVE_BUCKET", "GauchoAI")
 DEFAULT_PRIVATE = os.environ.get("HF_ARCHIVE_PRIVATE", "0") == "1"
 DEFAULT_SYNC_EVERY = int(os.environ.get("HF_ARCHIVE_SYNC_EVERY", "60"))
 
+# Optional second sink: rsync over SSH to a LAN-connected disk, e.g.
+# the m4-mini's 4 TB external. Opportunistic — skipped when the host
+# is unreachable, retried next sync tick. Not VPN-bound (LAN traffic
+# stays on en0 regardless of VPN state). Format:
+#     LOCAL_MIRROR_DEST=miguel_lemos@192.168.0.170:/Volumes/4TB/mamba3-archive
+DEFAULT_MIRROR_DEST = os.environ.get("LOCAL_MIRROR_DEST", "")
+
 
 def _hf_api() -> Optional["HfApi"]:
     if not _HAS_HF:
@@ -145,6 +152,7 @@ class CloudArchive:
                  bucket: str = DEFAULT_BUCKET,
                  private: bool = DEFAULT_PRIVATE,
                  sync_every_s: int = DEFAULT_SYNC_EVERY,
+                 mirror_dest: str = DEFAULT_MIRROR_DEST,
                  exclude: Optional[list[str]] = None,
                  include: Optional[list[str]] = None,
                  enabled: bool = True):
@@ -155,6 +163,8 @@ class CloudArchive:
         self.bucket = bucket
         self.private = private
         self.sync_every_s = max(5, int(sync_every_s))
+        # Optional second sink (LAN rsync). Empty string = disabled.
+        self.mirror_dest = mirror_dest.strip() if mirror_dest else ""
         # Combine user-provided excludes with the always-excluded defaults
         self.exclude = list(self.DEFAULT_EXCLUDE) + list(exclude or [])
         self.include = list(include) if include else None
@@ -276,6 +286,7 @@ class CloudArchive:
     def _do_sync(self, dry_run: bool = False) -> None:
         if self.api is None or not self.local_dir.is_dir():
             return
+        # ── HF bucket sink ──
         try:
             plan = self.api.sync_bucket(
                 source=str(self.local_dir),
@@ -296,12 +307,70 @@ class CloudArchive:
         except HfHubHTTPError as e:
             with self._lock:
                 self._n_failed += 1
-            print(f"[cloud-archive] sync failed (will retry): {e}", flush=True)
+            print(f"[cloud-archive] HF sync failed (will retry): {e}", flush=True)
         except Exception as e:
             with self._lock:
                 self._n_failed += 1
-            print(f"[cloud-archive] sync unexpected: "
+            print(f"[cloud-archive] HF sync unexpected: "
                   f"{type(e).__name__}: {e}", flush=True)
+
+        # ── Local mirror sink (LAN rsync, opportunistic) ──
+        if self.mirror_dest and not dry_run:
+            self._mirror_to_lan()
+
+    def _mirror_to_lan(self) -> None:
+        """rsync local_dir to the LAN mirror destination if reachable.
+        Fast-fails when the host is offline; never blocks the HF path.
+        """
+        import subprocess
+        # Build remote path: <user@host>:<base>/<experiment_kind>/<run_name>/
+        # If mirror_dest already includes a trailing path, preserve it; otherwise
+        # treat it as a base. We use the same kind/run_name layout as HF.
+        if ":" in self.mirror_dest:
+            base = self.mirror_dest
+        else:
+            base = self.mirror_dest
+        sep = "" if base.endswith("/") else "/"
+        remote = f"{base}{sep}{self.experiment_kind}/{self.run_name}/"
+
+        # rsync over SSH with fast-fail. --partial keeps interrupted xfers
+        # resumable. Excludes match the HF path's defaults so the same
+        # caches stay out of both sinks.
+        excludes = []
+        for pat in self.exclude:
+            excludes.extend(["--exclude", pat])
+
+        rsh = "ssh -o ConnectTimeout=4 -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+        cmd = [
+            "rsync", "-az", "--partial",
+            "-e", rsh,
+            *excludes,
+            f"{self.local_dir}/",
+            remote,
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if r.returncode == 0:
+                # rsync prints a summary on stdout when -v is set; we use
+                # -a here, which is silent on success. So presence of the
+                # tree on the remote is the only confirmation.
+                pass
+            else:
+                # Common cases: host unreachable, ssh refused, no perms.
+                # Don't spam — print one short line.
+                err = (r.stderr.strip().splitlines()[-1]
+                       if r.stderr.strip() else f"rc={r.returncode}")
+                with self._lock:
+                    self._n_failed += 1
+                print(f"[cloud-archive] mirror skipped: {err}", flush=True)
+        except subprocess.TimeoutExpired:
+            with self._lock:
+                self._n_failed += 1
+            print(f"[cloud-archive] mirror timeout: {self.mirror_dest}", flush=True)
+        except (FileNotFoundError, OSError) as e:
+            with self._lock:
+                self._n_failed += 1
+            print(f"[cloud-archive] mirror error: {e}", flush=True)
 
     @staticmethod
     def _extract_n_uploaded(plan) -> int:
