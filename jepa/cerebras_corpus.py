@@ -240,6 +240,18 @@ def main():
                     help="records: one prompt+full-response per line "
                          "(preserves context for later JEPA hidden capture). "
                          "pairs: one bilingual pair per line (flat corpus).")
+    ap.add_argument("--archive-kind", default="cerebras",
+                    help="experiment_kind for cloud_archive (forms the "
+                         "first segment of the remote key). Default: cerebras.")
+    ap.add_argument("--archive-run", default=None,
+                    help="run_name for cloud_archive (forms the second "
+                         "segment of the remote key). Defaults to today's "
+                         "date plus the model name.")
+    ap.add_argument("--upload-every-mb", type=float, default=20.0,
+                    help="Push the in-progress JSONL to cloud_archive every "
+                         "N MB of growth. 0 = only at end. Resilience knob: "
+                         "240 MB run with --upload-every-mb 20 means at most "
+                         "20 MB lost on a crash.")
     ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
@@ -252,6 +264,24 @@ def main():
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Cloud archive — fault-tolerant uploader. No-op if R2_* / ARCHIVE_*
+    # env vars aren't set, so this script keeps working in any environment.
+    archive = None
+    archive_run = args.archive_run or f"{time.strftime('%Y-%m-%d')}-{args.model}"
+    try:
+        # Local import: avoid hard dep on boto3 if user doesn't want archive.
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from cloud_archive import CloudArchive
+        archive = CloudArchive(
+            experiment_kind=args.archive_kind,
+            run_name=archive_run,
+            outbox_dir=str(out_path.parent),
+        )
+        if archive.client is None:
+            archive = None  # not configured; treat as no-op
+    except ImportError:
+        pass
 
     bytes_written = 0
     n_records = 0
@@ -340,9 +370,20 @@ def main():
                             out_f.write(line)
                             bytes_written += len(line)
                             n_records += 1
-                # Periodic flush + log.
+                # Periodic flush + log + (optional) durable archive push.
                 if n_attempts % 5 == 0:
                     out_f.flush()
+                    # Archive checkpoint: every --upload-every-mb of growth,
+                    # push the in-progress JSONL to R2. Dedupe in
+                    # cloud_archive means an unchanged file is a free skip.
+                    if archive is not None and args.upload_every_mb > 0:
+                        nonlocal_bytes = bytes_written  # snapshot
+                        last = getattr(main, "_last_upload_bytes", 0)
+                        if nonlocal_bytes - last >= args.upload_every_mb * 2**20:
+                            archive.upload(out_path, artifact_kind="corpus",
+                                           metadata={"records": n_records,
+                                                     "tokens": n_total_tokens})
+                            main._last_upload_bytes = nonlocal_bytes
                     pct = 100 * bytes_written / target_bytes
                     elapsed = time.time() - t0
                     rate = (bytes_written / max(elapsed, 1e-6)) / 1024
@@ -358,6 +399,17 @@ def main():
     print(f"\ndone: {out_path} ({bytes_written/2**20:.2f} MB, "
           f"{n_records} records, {n_total_tokens:,} tokens, "
           f"{n_attempts} prompts, {elapsed/60:.1f} min)", flush=True)
+
+    # Final upload (always, regardless of upload-every-mb) so the
+    # completed artifact ends up in R2 even if the periodic push was off.
+    if archive is not None:
+        archive.upload(out_path, artifact_kind="corpus",
+                       metadata={"records": n_records,
+                                 "tokens": n_total_tokens,
+                                 "final": "true"})
+        archive.complete(timeout=120.0)
+        print(f"[archive] uploaded to {args.archive_kind}/{archive_run}/corpus/{out_path.name}",
+              flush=True)
 
 
 if __name__ == "__main__":
