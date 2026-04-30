@@ -1,8 +1,14 @@
-# Session handoff — 2026-04-28 → 29
+# Signoff — 2026-04-29: Cortex counter-attach on bilingual LM
 
-End-of-session state for the cortex + language + MLX work. Whoever
-picks up next: this is the snapshot. `PLAN.md` is the strategic
-document and stays canonical; this file is the situation report.
+Companion to `signoff/2026-04-28-mlx-port-and-experiments-queued.md`
+(same-day MLX-port decision and harness-ship). This doc is scoped to
+the cortex-composition experiment that ran across the night: counter
+primitive attached to a frozen language-trained bilingual Mamba-3,
+fine-tuned only the adapter, evaluated. Result is a partial
+validation of the cortex thesis on a non-toy host.
+
+`PLAN.md` is the strategic document and stays canonical; this file
+is the situation report for the cortex-bilingual thread.
 
 **Branch:** `main` (tracking `origin/main`).
 
