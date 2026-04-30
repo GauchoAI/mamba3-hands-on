@@ -123,6 +123,20 @@ class CloudArchive:
     work (just without remote archive).
     """
 
+    # Patterns excluded from sync by default. Caller can override or
+    # extend via the `exclude` ctor arg. These keep us from accidentally
+    # archiving multi-GB caches, virtualenvs, or noise.
+    DEFAULT_EXCLUDE = [
+        "_*",                  # data/_tatoeba_cache, data/_opensubtitles_cache
+        "__pycache__",
+        "*.pyc", "*.pyo",
+        ".DS_Store",
+        ".venv", "venv",
+        ".git",
+        "*.tmp",
+        "cloud_archive_outbox.jsonl*",
+    ]
+
     def __init__(self,
                  experiment_kind: str,
                  run_name: str,
@@ -131,6 +145,8 @@ class CloudArchive:
                  bucket: str = DEFAULT_BUCKET,
                  private: bool = DEFAULT_PRIVATE,
                  sync_every_s: int = DEFAULT_SYNC_EVERY,
+                 exclude: Optional[list[str]] = None,
+                 include: Optional[list[str]] = None,
                  enabled: bool = True):
         self.experiment_kind = experiment_kind
         self.run_name = run_name
@@ -139,6 +155,9 @@ class CloudArchive:
         self.bucket = bucket
         self.private = private
         self.sync_every_s = max(5, int(sync_every_s))
+        # Combine user-provided excludes with the always-excluded defaults
+        self.exclude = list(self.DEFAULT_EXCLUDE) + list(exclude or [])
+        self.include = list(include) if include else None
 
         self.api = _hf_api() if enabled else None
         if not enabled:
@@ -261,6 +280,8 @@ class CloudArchive:
             plan = self.api.sync_bucket(
                 source=str(self.local_dir),
                 dest=self.remote_prefix,
+                exclude=self.exclude,
+                include=self.include,
                 dry_run=dry_run,
                 quiet=True,
                 token=os.environ.get("HF_TOKEN"),
@@ -284,19 +305,13 @@ class CloudArchive:
 
     @staticmethod
     def _extract_n_uploaded(plan) -> int:
-        """SyncPlan structure varies; pull a best-effort uploaded count."""
-        for attr in ("n_uploaded", "uploaded_count", "num_uploaded"):
-            v = getattr(plan, attr, None)
-            if isinstance(v, int):
-                return v
-        # Fall back to len of an "uploads" list if present
-        uploads = getattr(plan, "uploads", None) or getattr(plan, "to_upload", None)
-        if uploads is not None:
-            try:
-                return len(uploads)
-            except TypeError:
-                return 0
-        return 0
+        """Count upload operations from SyncPlan."""
+        summary = getattr(plan, "summary", None)
+        if isinstance(summary, dict) and summary.get("uploads") is not None:
+            return int(summary["uploads"])
+        ops = getattr(plan, "operations", None) or []
+        return sum(1 for op in ops
+                   if str(getattr(op, "action", op)).lower() == "upload")
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -332,34 +347,33 @@ def _smoke():
         a.complete(timeout=120.0)
 
         # Verify by listing the bucket prefix
-        from huggingface_hub import HfApi as _Api
-        x = _Api(token=os.environ["HF_TOKEN"])
-        tree = list(x.list_bucket_tree(
+        tree = list(api.list_bucket_tree(
             bucket_id=f"{user}/{DEFAULT_BUCKET}",
-            path=f"smoke/cloud_archive_self_test",
+            prefix="smoke/cloud_archive_self_test",
+            recursive=True,
         ))
         names = [getattr(e, "path", str(e)) for e in tree]
         assert any("smoke.jsonl" in n for n in names), \
             f"smoke.jsonl not found in remote tree: {names}"
-        print(f"[smoke] PASS — uploaded files visible at "
+        print(f"[smoke] PASS upload — visible at "
               f"hf://buckets/{user}/{DEFAULT_BUCKET}/smoke/cloud_archive_self_test/")
         print(f"[smoke] remote tree: {names}")
 
-        # Optional: also download & byte-diff for full roundtrip
-        from huggingface_hub import hf_hub_download_to_local
-        # Sync back to a different local path
+        # Bidirectional roundtrip via sync_bucket back
         round_trip_dir = tmp / "roundtrip"
         round_trip_dir.mkdir()
-        plan = x.sync_bucket(
+        api.sync_bucket(
             source=f"hf://buckets/{user}/{DEFAULT_BUCKET}/smoke/cloud_archive_self_test",
             dest=str(round_trip_dir),
             quiet=True,
-            token=os.environ["HF_TOKEN"],
         )
         downloaded = round_trip_dir / "smoke.jsonl"
         if downloaded.exists():
             assert downloaded.read_bytes() == payload, "round-trip mismatch"
-            print(f"[smoke] PASS — bidirectional roundtrip byte-identical.")
+            print(f"[smoke] PASS roundtrip — bytes identical.")
+        else:
+            print(f"[smoke] note — sync_bucket downloaded but file not found at "
+                  f"expected path; tree was: {list(round_trip_dir.iterdir())}")
         return 0
 
 

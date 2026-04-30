@@ -201,6 +201,19 @@ def main():
     print(f"\ndone: {out_path} ({bytes_written/2**20:.1f} MB, "
           f"{n_pairs:,} pairs + {n_unary:,} unary across {n_attempts} prompts)")
 
+    # Archive to the HF bucket (no-op without HF_TOKEN).
+    try:
+        import time as _time
+        from cloud_archive import CloudArchive
+        a = CloudArchive(
+            experiment_kind="corpus",
+            run_name=f"teacher-local-qwen-{_time.strftime('%Y-%m-%d')}",
+            local_dir=str(out_path.parent),
+        )
+        a.complete()
+    except ImportError:
+        pass
+
 
 if __name__ == "__main__":
     os.environ.setdefault("PYTHONUNBUFFERED", "1")

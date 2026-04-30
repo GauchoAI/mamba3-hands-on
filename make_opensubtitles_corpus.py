@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -133,6 +134,19 @@ def build_corpus(target_mb: float | None, full: bool) -> None:
     head = OUT.read_text(encoding="utf-8", errors="replace")[:1200]
     print("---first 1200 bytes---")
     print(head)
+
+    # Archive the generated corpus to the HF bucket (no-op without HF_TOKEN).
+    # `_*` excludes catch the multi-GB _opensubtitles_cache/.
+    try:
+        from cloud_archive import CloudArchive
+        a = CloudArchive(
+            experiment_kind="corpus",
+            run_name=f"opensubtitles-{time.strftime('%Y-%m-%d')}",
+            local_dir=str(DATA_DIR),
+        )
+        a.complete()
+    except ImportError:
+        pass
 
 
 def main():

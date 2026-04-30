@@ -52,6 +52,12 @@ try:
 except ImportError:
     _HAS_PUSHER = False
 
+try:
+    from cloud_archive import CloudArchive
+    _HAS_ARCHIVE = True
+except ImportError:
+    _HAS_ARCHIVE = False
+
 
 # ---------------------------------------------------------------------------
 # Mixed-batch dataset: bilingual lines + cortex counting examples
@@ -203,6 +209,16 @@ def train_counter(
                            gpu=-1)
         print(f"[firebase] pushing to /experiments/{exp_id}/runs/{run_id}", flush=True)
 
+    # ─── HuggingFace bucket archive — silent no-op without HF_TOKEN ───
+    archive = None
+    if _HAS_ARCHIVE:
+        kind = Path(__file__).resolve().parent.name        # "cortex_bilingual"
+        archive = CloudArchive(
+            experiment_kind=f"{kind}-counter-attach",
+            run_name=run_name or out_path.name,
+            local_dir=str(out_path),
+        )
+
     print(f"training {sum(p.numel() for p in train_params):,} params, "
           f"steps={steps}, batch={batch_size}", flush=True)
     t0 = time.time()
@@ -251,6 +267,8 @@ def train_counter(
         pusher.event(type="run_complete", step=steps,
                      details=f"counter-attach finished, final ckpt at {final_path}")
         pusher.complete(final_state="completed", final_metrics=last_metrics)
+    if archive is not None:
+        archive.complete()
     return model
 
 

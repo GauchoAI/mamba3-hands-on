@@ -43,6 +43,12 @@ try:
 except ImportError:
     _HAS_PUSHER = False
 
+try:
+    from cloud_archive import CloudArchive
+    _HAS_ARCHIVE = True
+except ImportError:
+    _HAS_ARCHIVE = False
+
 
 # ----------------------------------------------------------------------------
 # Dataset
@@ -234,6 +240,16 @@ def train(cfg: LMTrainConfig, resume: str | None = None):
                            gpu=-1)  # MPS, not a CUDA index
         print(f"[firebase] pushing to /experiments/{exp_id}/runs/{run_id}", flush=True)
 
+    # ─── HuggingFace bucket archive — silent no-op without HF_TOKEN ───
+    archive = None
+    if _HAS_ARCHIVE:
+        kind = Path(__file__).resolve().parent.name        # "cortex_bilingual"
+        archive = CloudArchive(
+            experiment_kind=kind,
+            run_name=cfg.run_name or ckpt_dir.name,
+            local_dir=str(ckpt_dir),
+        )
+
     def save_ckpt(step: int, tag: str = ""):
         path = ckpt_dir / (f"step_{tag}.pt" if tag else f"step_{step:06d}.pt")
         torch.save({
@@ -301,6 +317,8 @@ def train(cfg: LMTrainConfig, resume: str | None = None):
         pusher.event(type="run_complete", step=cfg.total_steps,
                      details=f"reached step {cfg.total_steps}")
         pusher.complete(final_state="completed", final_metrics=last_metrics)
+    if archive is not None:
+        archive.complete()
 
 
 # ----------------------------------------------------------------------------

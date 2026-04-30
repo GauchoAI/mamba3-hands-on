@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -86,6 +87,18 @@ def build_corpus() -> None:
     print(f"wrote {OUT}: {n_bytes:,} bytes, {text.count(chr(10)):,} lines")
     print("---first 800 bytes---")
     print(text[:800])
+
+    # Archive the generated corpus to the HF bucket (no-op without HF_TOKEN)
+    try:
+        from cloud_archive import CloudArchive
+        a = CloudArchive(
+            experiment_kind="corpus",
+            run_name=f"tatoeba-bilingual-{time.strftime('%Y-%m-%d')}",
+            local_dir=str(DATA_DIR),
+        )
+        a.complete()
+    except ImportError:
+        pass
 
 
 def main():
