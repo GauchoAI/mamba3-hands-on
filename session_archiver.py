@@ -120,13 +120,14 @@ def _append_seen(state_path: Path, ids: list[str]) -> None:
             f.write(rid + "\n")
 
 
-def archive_one(jsonl_path: Path, state_dir: Path,
-                outbox_dir: Path) -> dict:
-    """Archive a single session jsonl. Returns a small report."""
-    session_uuid = jsonl_path.stem
-    state_path = state_dir / f"{session_uuid}.uuids"
-    seen = _load_seen(state_path)
-    fallback_ts = jsonl_path.stat().st_mtime
+def get_or_create_pusher(session_uuid: str, jsonl_path: Path,
+                         outbox_dir: Path,
+                         pushers: dict) -> "tuple[ExperimentPusher, object | None]":
+    """Lazily build (and cache across iterations) the pusher + archive
+    for a session. The watcher loop calls this on every poll for every
+    session, so the cost has to be tiny on the second-and-later visits."""
+    if session_uuid in pushers:
+        return pushers[session_uuid]
 
     session_outbox = outbox_dir / session_uuid
     pusher = ExperimentPusher(
@@ -141,9 +142,6 @@ def archive_one(jsonl_path: Path, state_dir: Path,
     )
     pusher.declare_stream("events")
 
-    # CloudArchive uploads anything under session_outbox/ to
-    # `<user>/<bucket>/claude-sessions/<session_uuid>/...` — matches the
-    # URL template that pusher.declare_stream wrote into the meta node.
     archive = None
     if _HAS_ARCHIVE:
         archive = CloudArchive(
@@ -153,6 +151,26 @@ def archive_one(jsonl_path: Path, state_dir: Path,
             sync_every_s=30,
         )
 
+    pushers[session_uuid] = (pusher, archive)
+    return pusher, archive
+
+
+def archive_one(jsonl_path: Path, state_dir: Path, outbox_dir: Path,
+                pushers: dict) -> dict:
+    """Archive new lines from a single session jsonl using the cached
+    pusher (created on first visit, reused thereafter). Returns a small
+    report. Does NOT call complete() — the watcher loop calls flush()
+    after each pass and complete() only at SIGINT.
+    """
+    session_uuid = jsonl_path.stem
+    state_path = state_dir / f"{session_uuid}.uuids"
+    seen = _load_seen(state_path)
+    fallback_ts = jsonl_path.stat().st_mtime
+
+    pusher, _archive = get_or_create_pusher(
+        session_uuid, jsonl_path, outbox_dir, pushers,
+    )
+
     new_ids: list[str] = []
     n_total = n_new = n_skipped = 0
     for line_no, rec in enumerate(_iter_jsonl(jsonl_path)):
@@ -161,14 +179,6 @@ def archive_one(jsonl_path: Path, state_dir: Path,
         if rid in seen:
             n_skipped += 1
             continue
-        # Inject ts (epoch) for date-aware shard routing inside the pusher.
-        # We mutate a copy so the original record is preserved verbatim
-        # in `_payload`.
-        # JSON-encode the original record. Session records have wildly
-        # heterogeneous shapes (some fields list, some dict, some null)
-        # which breaks pyarrow column inference at pack time. A single
-        # string column is uniform, packs well under zstd, and round-trips
-        # losslessly via json.loads.
         rec_with_ts = {
             "_v": ENVELOPE_VERSION,
             "_id": rid,
@@ -180,17 +190,17 @@ def archive_one(jsonl_path: Path, state_dir: Path,
         try:
             pusher.stream("events", rec_with_ts)
         except ValueError as e:
-            # Records >256 KB get rejected by the pusher's safety cap.
-            # Surface and skip — almost always a giant tool result.
             print(f"  ! line {line_no}: {e}", flush=True)
             continue
         new_ids.append(rid)
         n_new += 1
 
-    pusher.complete()
-    if archive is not None:
-        archive.complete()
-    _append_seen(state_path, new_ids)
+    if n_new > 0:
+        # Flush packs ripe shards (today's included) into Parquet without
+        # tearing down the worker thread. Cloud archive picks up the
+        # parquet on its next sync cycle.
+        pusher.flush()
+        _append_seen(state_path, new_ids)
 
     return {
         "session": session_uuid,
@@ -228,6 +238,31 @@ def main():
     state_dir = Path(args.state_dir)
     outbox_dir = Path(args.outbox_dir)
 
+    pushers: dict = {}
+
+    def cleanup(*_):
+        """SIGINT/SIGTERM: complete every cached pusher so the active
+        shard packs and ended_at lands in RTDB. Daemon worker threads
+        die with the process; we just want a graceful flush+pack first."""
+        print("\n[archiver] shutting down — completing cached pushers…",
+              flush=True)
+        for session_uuid, (pusher, archive) in pushers.items():
+            try:
+                pusher.complete()
+            except Exception as e:                              # noqa: BLE001
+                print(f"  ! {session_uuid} pusher.complete: {e}", flush=True)
+            if archive is not None:
+                try:
+                    archive.complete()
+                except Exception as e:                          # noqa: BLE001
+                    print(f"  ! {session_uuid} archive.complete: {e}",
+                          flush=True)
+        raise SystemExit(0)
+
+    import signal
+    signal.signal(signal.SIGINT, cleanup)
+    signal.signal(signal.SIGTERM, cleanup)
+
     while True:
         sessions = list_sessions(repo, projects_dir)
         if args.session:
@@ -236,14 +271,13 @@ def main():
             print(f"no session jsonls found under "
                   f"{projects_dir / _encoded_folder_for(repo)}")
         for jsonl in sessions:
-            print(f"archiving {jsonl.name} ({jsonl.stat().st_size:,} bytes)…",
-                  flush=True)
             t0 = time.time()
-            r = archive_one(jsonl, state_dir, outbox_dir)
+            r = archive_one(jsonl, state_dir, outbox_dir, pushers)
             dt = time.time() - t0
-            print(f"  total={r['total']:,}  new={r['new']:,}  "
-                  f"skipped_seen={r['skipped_seen']:,}  ({dt:.1f}s)",
-                  flush=True)
+            if r["new"] > 0 or dt > 1.0:
+                print(f"  {jsonl.name}: total={r['total']:,}  "
+                      f"new={r['new']:,}  skipped={r['skipped_seen']:,}  "
+                      f"({dt:.1f}s)", flush=True)
         time.sleep(args.interval)
 
 

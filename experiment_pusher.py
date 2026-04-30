@@ -609,9 +609,37 @@ class ExperimentPusher:
                                **extra})
 
     # -- run lifecycle ------------------------------------------------------
+    def flush(self, drain_timeout_s: float = 60.0,
+              pack_timeout_s: float = 180.0) -> None:
+        """Pack any ripe shards (including today's) without changing run
+        state. Safe to call repeatedly from a watcher loop — the worker
+        thread + queue stay alive, so subsequent stream() calls work.
+
+        Drains the queue first so RTDB writes for current-day records
+        land before pack/seal. Then triggers _maybe_kick_pack with a
+        sentinel future date so every real date qualifies, and waits
+        for the pack thread to release the lock.
+        """
+        deadline = time.time() + drain_timeout_s
+        while True:
+            with self._q.all_tasks_done:
+                if self._q.unfinished_tasks == 0:
+                    break
+            if time.time() >= deadline:
+                print(f"[pusher] flush() drain timeout — "
+                      f"{self._q.unfinished_tasks} task(s) still in flight",
+                      flush=True)
+                break
+            time.sleep(0.1)
+
+        self._maybe_kick_pack("9999-99-99")
+        pack_deadline = time.time() + pack_timeout_s
+        while self._pack_lock.locked() and time.time() < pack_deadline:
+            time.sleep(0.1)
+
     def complete(self, final_state: str = "completed",
                  final_metrics: dict | None = None) -> None:
-        """Mark the run as ended; flush queue. Call before exit."""
+        """Mark the run as ended; flush queue + pack. Call before exit."""
         end_ts = time.time()
         self._enqueue(("PATCH", self._run_path("meta"),
                        {"ended_at": end_ts, "final_state": final_state}))
@@ -620,35 +648,10 @@ class ExperimentPusher:
                            {**final_metrics, "ts": end_ts}))
         self._enqueue(("PUT", self._run_path("status"),
                        {"state": final_state, "last_heartbeat": end_ts}))
-        # Drain. Wait for queue empty AND for any in-flight network call
-        # to finish — the worker grabs an item *then* makes a HTTPS call,
-        # so an empty queue alone does not mean all writes have landed.
-        # task_done()/join() handles this exactly.
-        # 5 min deadline is generous: covers bursty end-of-run flushes
-        # (e.g. 1000 unposted stream records each needing a HTTPS round
-        # trip) without hanging forever on a partitioned network.
-        deadline = time.time() + 300.0
-        while True:
-            with self._q.all_tasks_done:
-                if self._q.unfinished_tasks == 0:
-                    break
-            if time.time() >= deadline:
-                # Give up; surface the count so it's visible in logs.
-                print(f"[pusher] complete() drain timeout — "
-                      f"{self._q.unfinished_tasks} task(s) still in flight",
-                      flush=True)
-                break
-            time.sleep(0.1)
-
-        # Final pack: everything left in streams_dir (including today's
-        # active shard, which is no longer being written to). Caller
-        # contract is "no stream() calls after complete()", so safe.
-        # Use a sentinel date in the future so all real dates qualify.
-        self._maybe_kick_pack("9999-99-99")
-        # Wait for the pack thread to finish (at most ~60s drain + pack).
-        pack_deadline = time.time() + 180.0
-        while self._pack_lock.locked() and time.time() < pack_deadline:
-            time.sleep(0.1)
+        # 5 min drain deadline is generous for a final flush; bursty
+        # end-of-run writes (1000s of unposted records each needing a
+        # round trip) shouldn't hang forever on a partitioned network.
+        self.flush(drain_timeout_s=300.0)
 
     # -- internal -----------------------------------------------------------
     def _enqueue(self, item: tuple) -> None:
