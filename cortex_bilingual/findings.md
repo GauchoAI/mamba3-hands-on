@@ -136,12 +136,97 @@ Full entry in
 Updates claim 2 (verified, stronger). Updates claim 3 (supported,
 one data point). Does **not** test claim 4.
 
-Three small follow-ups queued, all tier A:
-1. Bias-only fine-tune of `read_proj.bias` to close the +4 offset.
-2. Per-layer linear probe — which layer carries the unary-mode feature.
-3. SVD on layer-0 residual at unary positions — does the counter
-   ride a single subspace.
+### 2026-04-30 — tier-A MI probes (per-layer, count-regression)
 
-Plus one tier-D probe to nail down claim 3:
-4. Train an N≤120 LM (4× widening). Linear-vs-multiplicative
-   falsifies between two clean hypotheses.
+Two fast probes against the wider-N checkpoint, no retraining:
+
+- **`probe_layers.py`**: per-layer linear classifier on the binary
+  feature "is this byte mid-unary-run". All 4 layers reach 98%+
+  test accuracy in-distribution (recall_unary ~92%) and the feature
+  *generalizes perfectly* to N up to 200 (recall_unary ~97%
+  OOD). The binary signal is **layer-redundant** and **OOD-robust**.
+- **`probe_count.py`**: per-layer linear regressor on the integer
+  count. L3 wins (in-dist MAE 4.6) but **the count saturates at
+  ~58 past training distribution**: at true N=150, the residual
+  still predicts ~58 regardless. Bucketed bias on L3:
+  `(60,100] → -21.7`, `(100,150] → -46.3`. The count signal is
+  sharply training-distribution-bounded.
+
+**Mechanism for today's counter +4:** the gate fires on the right
+bytes (binary signal works to N=500) but the count signal it would
+need to emit the right run-length isn't in the residual past
+N≈60. The counter falls back to a learned average run-length from
+N≤60 training, hence the constant +4 across N=10..500.
+
+---
+
+## Closure — 2026-04-30
+
+This experiment line is closed.
+
+**State at closure.**
+- Best LM: 472,960-param byte-level Mamba-3, 4L d=128, trained 10k
+  steps in MLX bf16, ce 0.987 bpc 1.424 — undertrained for natural
+  language. Bilingual probes degenerate.
+- Best primitive: `CounterPrimitive` (1,028 trainable params),
+  attached to the wider-N LM. Counter fires correctly to N=500
+  (~17× past N≤30 baseline) with a uniform +4 calibration offset.
+- Tooling: tier-A probe scripts (`probe_layers.py`, `probe_count.py`)
+  + a working pipeline (Kappa streams, auto-pack, transparent
+  reader, session archiver, schema registry) that is genuinely
+  reusable for any future experiment in this repo.
+
+**What was actually validated** (claims map):
+- Claim 1 (plug-in architecture viable): ✅
+- Claim 2 (coupled composition, learned primitive): ✅
+- Claim 3 (OOD reach is LM-bounded): one data point past the line
+- Claim 4 (cold composition): not tested here
+- Claims 5-6: not tested here
+
+**Why closure.** The decision criterion was the cost-to-result
+curve and the existence of a dominating alternative:
+
+1. **Cost.** The smallest meaningful experiment is a 6 h MLX
+   training run, the resulting LM is a poor language model
+   regardless, and each follow-up that requires retraining is
+   another 6 h. Tier-A probes are minutes, but they only diagnose;
+   they don't extend capability.
+2. **Result.** The strongest claim today's evidence supports is
+   "training-distribution width × C → OOD reach." That's
+   memorization-shelf-widening, not new computation in the forward
+   pass. The primitive is reading what the LM already memorized.
+3. **The original cortex thesis.** The bet was: a primitive with
+   *its own computation* (not learned via gradient descent against
+   a coupled host) injects results into a frozen pretrained LM's
+   forward pass and adds *new capability*. Today's setup tests a
+   weaker, easier version of that — and even there, results are
+   modest.
+4. **Dominating alternative.** Standard LoRA fine-tuning on a
+   pretrained model (e.g. Phi-3.5-mini) for tool calling is
+   mature, well-tooled, fast to iterate, and produces a usable
+   system this week. The forward-pass-tool-invocation idea would
+   need to clear that bar to justify continued effort, and right
+   now it cannot.
+
+**What would re-open it.** A clean falsifier-passing positive on
+claim 4 — a primitive with its own computation cold-attached to a
+frozen LM that has never seen the primitive's domain, producing
+genuine OOD capability the LM lacks alone. That experiment is
+running in another folder; if it lands, the work here resumes
+under a different setup (likely Phi or a pure-language Mamba host,
+hardcoded computational state in the primitive, ~minutes of
+training). Until then, the bilingual-LM-from-scratch + learned
+primitive direction is closed.
+
+**Reusable artifacts.**
+- `cortex_bilingual/probe_layers.py`, `cortex_bilingual/probe_count.py`
+  — generic per-layer MI probes; trivially adaptable to any model
+  with a residual stream.
+- The Kappa pipeline (`experiment_pusher.py`, `kappa_packer.py`,
+  `cloud_archive.py`, `stream_reader.py`, `kappa_schemas.py`,
+  `session_archiver.py`) — used by every future experiment.
+
+**Outcome.** First experiment in this repo closed by decision
+rather than by follow-up. The ambitious thesis remains
+interesting; this particular path to it does not justify
+further compute given the alternative.
