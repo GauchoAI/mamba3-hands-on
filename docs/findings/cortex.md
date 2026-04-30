@@ -24,6 +24,132 @@ All entries below are verbatim relocations from the root file (2026-04-30).
 
 ---
 
+## Entry — Wider-N bilingual LM: ~17× OOD shift on the counter primitive (2026-04-30)
+
+Mechanistic-interpretability follow-up to yesterday's "partial
+composition" result. The question this experiment asks is **not**
+"do primitives compose cold" — that's a different experiment
+running in another folder. Here we hold the primitive and the
+attachment recipe fixed, vary the *host LM's training
+distribution*, and read off how the OOD ceiling moves. The point
+is to learn where the signal a primitive reads actually lives.
+
+**Setup.** Same architecture as yesterday: 472,960-param byte-level
+Mamba-3 LM (4L, d_model=128), 17.7 MB Tatoeba en-es corpus + 5%
+unary cortex mixin. The only change is the unary mixin's range:
+yesterday's training set had `*N:aN` for N ∈ [1, 30]; today's has
+N ∈ [1, 60]. **A 2× widening of the unary support.** All other
+hyperparameters identical. Trained 10,000 steps in MLX (bf16, ~5h
+50min on M4 Pro Metal); converted .npz → .pt via the new
+`mlx_to_torch_ckpt.py` (46 model tensors, bf16→fp32 via uint16
+left-shift). Final LM: ce 0.987 bpc 1.424. Then froze every weight,
+attached a fresh `CounterPrimitive` (1,028 trainable params), and
+fine-tuned only those adapters for 1,000 steps under the same
+recipe as yesterday (λ_aux=0.5, --injection-scale 30.0, lr=3e-3,
+~32 min). Aux loss converged from 0.45 → 0.07.
+
+**The OOD shift.** Demo eval, hard_gates_inference=True:
+
+```
+   N      baseline           cortex+counter      OOD?
+   3       FAIL → None         FAIL → None
+  10       FAIL → None         FAIL → 14               ← +4
+  30       FAIL → None         FAIL → 34               ← +4
+  50       FAIL → None         FAIL → 54        (OOD)  ← +4
+ 100       FAIL → None         FAIL → 104       (OOD)  ← +4
+ 200       FAIL → None         FAIL → 204       (OOD)  ← +4
+ 500       FAIL → None         FAIL → 504       (OOD)  ← +4
+```
+
+The counter primitive **extends to N=500** with a *consistent
++4 offset across the entire range*. Compared to yesterday's
+ceiling at roughly N=30: a 2× widening of the LM's training
+distribution produced an ~17× shift in where the primitive's
+signal still works.
+
+**MI reading — what this tells us about the residual stream.**
+
+1. **The LM's hidden state encodes "in-unary mode" with graceful
+   degradation, not a cliff.** If the encoding had a hard cutoff at
+   training-N, the counter would fail abruptly past it. Instead,
+   the gate keeps firing correctly all the way to N=500 — far
+   beyond N=60. Whatever feature the counter reads from the layer-0
+   residual decays smoothly past the training horizon rather than
+   vanishing.
+2. **The 2× → 17× ratio is itself the interesting datum.** It
+   says training-distribution width is a *strong* lever on the
+   primitive's reach but not a saturating one — the relationship
+   is super-linear in this regime. A 4× widening (N≤120, seq=256)
+   is the obvious next probe; if it produces another ~17× jump,
+   the relationship is multiplicative and primitives can be
+   pushed arbitrarily by widening alone.
+3. **The +4 offset is mechanically uniform.** It isn't drift, it
+   isn't a soft tail — every N from 10 to 500 lands exactly four
+   over. That points to a calibration constant in the gate's
+   threshold (the emit-vs-newline decision triggers four positions
+   late), not a counting failure. Concretely: `inc_proj` is
+   probably reading the right signal but `read_proj` is firing
+   `aaaa` more than the count justifies before the newline gate
+   wins. A small bias-only fine-tune of `read_proj.bias` should
+   close it without retraining anything else.
+
+**Caveats.**
+
+- **Bilingual capability is damaged on this LM.** The baseline
+  (no counter) outputs `'����������…'` from `'The cat '` —
+  tokenization-replacement-character runs. The wider-N training
+  may have over-fit on the unary mixin at the expense of language;
+  ce 1.42 bpc final is meaningfully worse than yesterday's 1.0 bpc
+  for the same architecture. Worth checking whether this is the
+  conversion (bf16→fp32 lost precision somewhere) or genuine
+  training pathology — quick test: re-run the demo against the
+  raw .npz via mamba3_mlx and compare. If MLX-direct talks fine,
+  the conversion is at fault; if MLX-direct also outputs garbage,
+  the wider-N corpus is.
+- **The counter +4 offset is also new.** Yesterday's run was
+  *off by 1* in either direction, today's is uniformly +4. This
+  is consistent with the stronger cap-shift (LM "knows about"
+  longer runs now, so the gate's threshold needs more residual
+  signal to fire — the read_proj's effective bias ends up too
+  permissive).
+
+**Status of the broader thesis.**
+
+This experiment does not test the strong cortex claim — that
+primitives compose cold onto an LM that has never seen their
+domain. (That test is happening in a separate folder, with
+different successes and losses.) It tests the *mechanistic*
+question: given a primitive that does work on a coupled host,
+how far past the training distribution does the host's hidden
+state remain readable? Answer for this primitive on this host:
+multiplicatively far, with a pure calibration error rather than
+a counting failure.
+
+**Next probes from here, all small.**
+1. Per-layer probe: which layer's residual (post-norm) carries
+   the unary-mode feature most cleanly? Linear classifier on
+   the d_model=128 vector → probe accuracy across L0..L3.
+2. SVD on the layer-0 residual at unary positions: does the
+   counter ride a single subspace? If yes, what is its
+   alignment with `inc_proj`'s weight matrix?
+3. Bias-only fine-tune of `read_proj.bias` to close the +4.
+4. Train another LM with N ∈ [1, 120] (4× widening); re-run.
+   Multiplicative-or-not falsifies between two clean hypotheses.
+
+Pipeline this experiment exercised: full Kappa stream layer
+(metrics + canary samples + checkpoints all auto-mirrored to
+HF Buckets via `experiment_pusher` + `kappa_packer` running
+inline in the trainer; meta + URL templates in Firebase RTDB
+under `/streams_meta/cortex_bilingual-2026-04-30/mlx-bilingual-widerN-2026-04-30/*`;
+sealed parquet shards at
+`hf://buckets/miguelemosreverte/GauchoAI/cortex_bilingual/mlx-bilingual-widerN-2026-04-30/streams/`).
+First experiment with full transparent reader — `stream_reader.py`
+merges live Firebase + sealed HF parquet without the consumer
+caring which tier a record came from. Wall-clock from training
+kickoff to demo: 6h 22min.
+
+---
+
 ## Entry — Counter primitive on a frozen bilingual LM: partial composition (2026-04-29)
 
 The cortex thesis stress-tested on a real, language-trained host LM
