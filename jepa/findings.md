@@ -417,7 +417,70 @@ the wrong place.
 > Pinned: `checkpoints/jepa_cortex_pinned_round2/gpu1-no-cortex/light_step_0004600.pt`.
 > Cross-project takeaway folded into root `findings.md`.
 
-## 4. Next round of experiments — proposal
+## 4a. Round 3 — knob sweep around the gpu1-no-cortex winner (2026-04-30 PM)
+
+After the round-2 headline result landed (gpu1-no-cortex wins on the
+metric that matters: diversity at near-equal byte CE), the two
+"failed-mode" variants from round 2 (gpu0-pure-bilingual and
+gpu2-tinier) were retired and replaced with focused follow-ups around
+the winning config. Each replacement varies exactly *one* knob from
+gpu1's config — clean experimental design.
+
+### Why retire the round-2 failures
+
+`gpu0-pure-bilingual` and `gpu2-tinier` did exactly what we expected
+them to do — they validated the half-measures-hurt hypothesis:
+
+- gpu0 (counter present, no aux): byte_ce 1.21 (best on this metric)
+  but diversity 0.46 → mode-collapses on greedy decoding ("There are
+  sold has been took in the filosopirent" repeats across prompts)
+- gpu2 (counter, d_model=128): mode-collapsed onto unary attractor
+  `*****:aaaaa` on 3+ prompts despite `--mix-unary 0`
+
+Their best checkpoints are pinned to
+`checkpoints/jepa_cortex_pinned_round2/{gpu0-pure-bilingual,gpu2-tinier}/`
+(12 MB total, including the per-run metrics + samples logs) so the
+data isn't lost. They aren't going to teach us anything new from
+here, so we replace them.
+
+### Round 3 variants (running now)
+
+The four GPUs now host:
+
+| GPU | Run | What's varied vs gpu1's winning config |
+|---|---|---|
+| 0 | gpu0-no-cortex-highjepa | `λ_jepa = 1.0` (vs 0.3) — does more JEPA pressure help when the cortex isn't there to absorb it? |
+| 1 | gpu1-no-cortex | (winner; continues running) |
+| 2 | gpu2-no-cortex-highsig | `λ_sigreg = 1.0` (vs 0.3) — does pushing isotropy further widen the diversity gap? |
+| 3 | gpu3-no-cortex-bigger | `d_model = 256` (vs 192) — does more capacity help or hurt without a counter? |
+
+All four use:
+- `--use-counter false` (the round-2 winning move)
+- `--mix-unary 0` (no synthetic unary batches)
+- `--mix-teacher 0.7 --mix-biling 0.3`
+- `--steps 10000`
+- `--batch-size 64 --seq-len 256` (gpu3 uses 32 to fit d_model=256 in 12 GB)
+
+### What round 3 will tell us
+
+- If gpu0-no-cortex-highjepa beats gpu1: λ_jepa=0.3 was too low for
+  no-cortex; the JEPA term wants more pressure when not competing with
+  a counter primitive's gradient pull.
+- If gpu2-no-cortex-highsig beats gpu1: λ_sigreg=0.3 was leaving
+  diversity on the table; pushing isotropy harder helps.
+- If gpu3-no-cortex-bigger beats gpu1: 1M params was the bottleneck,
+  and 1.6M / d_model=256 is a strict improvement on this corpus.
+- If gpu1 stays best: we've found a local maximum; further gains need
+  a structural change (Cerebras corpus, HaltingHead, etc.) not a knob
+  twist.
+
+The diversity metric is now in eval_daemon by default, so this round
+is the first one where the dashboard will surface mode-collapse
+detection live (rather than us discovering it after-the-fact).
+
+---
+
+## 5. Next round of experiments — proposal (kept from round 2 for reference)
 
 The next round attacks the failure modes we observed:
 
