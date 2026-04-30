@@ -215,6 +215,10 @@ class ExperimentPusher:
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
 
+        # Auto-pack: a single background thread, debounced via a non-blocking
+        # lock so a burst of stream() writes doesn't fan out N packers.
+        self._pack_lock = threading.Lock()
+
         # Drop a manifest so kappa_packer (run as a separate process,
         # possibly later) can find experiment_id / run_id / firebase URL
         # from any local run directory it gets pointed at.
@@ -361,8 +365,14 @@ class ExperimentPusher:
         if name not in self._stream_meta:
             self.declare_stream(name)
 
-        record_with_ts = {"ts": time.time(),
-                          **{k: _safe_float(v) for k, v in record.items()}}
+        # Date routing: honor caller-supplied `ts` so backfill (e.g. session
+        # archive replaying historical records) lands in the original day's
+        # shard, not today's. Live trainers don't pass ts; they get now().
+        coerced = {k: _safe_float(v) for k, v in record.items()}
+        record_ts = coerced.get("ts")
+        if not isinstance(record_ts, (int, float)):
+            record_ts = time.time()
+        record_with_ts = {**coerced, "ts": record_ts}
         line = json.dumps(record_with_ts, default=str) + "\n"
         line_bytes = line.encode("utf-8")
         if len(line_bytes) > 256_000:
@@ -371,8 +381,9 @@ class ExperimentPusher:
                 f"(>256 KB cap). Truncate fields or split records."
             )
 
-        # 1. Canonical local JSONL append (UTC date sharded).
-        today = time.strftime("%Y-%m-%d", time.gmtime())
+        # 1. Canonical local JSONL append (UTC date sharded — based on the
+        #    record's own timestamp).
+        today = time.strftime("%Y-%m-%d", time.gmtime(record_ts))
         shard_path = self.streams_dir / f"{name}-{today}.jsonl"
         try:
             with shard_path.open("a") as f:
@@ -382,14 +393,19 @@ class ExperimentPusher:
             print(f"[pusher] stream {name} local append failed: {e}",
                   flush=True)
 
-        # 2. Live mirror to RTDB at a date-sharded path so seal can drop
-        #    the whole day's records with one DELETE on pack.
-        self._enqueue((
-            "POST",
-            self._stream_records_path(name, today),
-            record_with_ts,
-            None,  # don't trigger _maybe_rotate; we manage retention via seal
-        ))
+        # 2. Live mirror to RTDB — only if this record's date is the current
+        #    UTC date. Historical writes (backfill: session archive replay,
+        #    log import, etc.) skip RTDB entirely. Auto-pack will move them
+        #    to Parquet on HF; RTDB never has to see them. By construction,
+        #    RTDB only ever contains today's records.
+        current_utc = time.strftime("%Y-%m-%d", time.gmtime())
+        if today == current_utc:
+            self._enqueue((
+                "POST",
+                self._stream_records_path(name, today),
+                record_with_ts,
+                None,  # don't trigger _maybe_rotate; we manage retention via seal
+            ))
 
         # 3. Counter bookkeeping. Flush meta on every push so the
         # dashboard's pack_progress_pct is genuinely live. At the
@@ -402,7 +418,86 @@ class ExperimentPusher:
         m = self._stream_meta[name]
         m["current_record_count"] += 1
         m["current_size_bytes"] += len(line_bytes)
-        self._flush_stream_meta(name)
+        # Only flush meta to RTDB for current-day writes (live trainers).
+        # Historical writes get summarized in one PATCH per shard at
+        # seal-time, saving N round-trips for a backfill of N records.
+        if today == current_utc:
+            self._flush_stream_meta(name)
+
+        # 4. Auto-pack: any shard whose date is strictly older than the
+        # current write's date is non-active and safe to pack. The next
+        # stream() call after a UTC-day rollover (or after backfill steps
+        # past a day boundary) is what triggers ripening. One background
+        # thread per pusher; the lock prevents fan-out under bursts.
+        self._maybe_kick_pack(today)
+
+    def _maybe_kick_pack(self, current_date: str) -> None:
+        """Spawn a background pack thread if any non-active jsonl shards
+        exist (date < current_date AND no matching .parquet)."""
+        if not self._pack_lock.acquire(blocking=False):
+            return  # one already running
+        try:
+            candidates: list[Path] = []
+            for p in self.streams_dir.glob("*.jsonl"):
+                stem = p.stem
+                # `<stream>-YYYY-MM-DD` — date is the last 10 chars after a dash.
+                if len(stem) < 11 or stem[-11] != "-":
+                    continue
+                shard_date = stem[-10:]
+                if shard_date >= current_date:
+                    continue
+                if p.with_suffix(".parquet").exists():
+                    continue
+                candidates.append(p)
+            if not candidates:
+                self._pack_lock.release()
+                return
+            t = threading.Thread(
+                target=self._pack_worker, args=(candidates,), daemon=True,
+            )
+            t.start()
+        except Exception:
+            self._pack_lock.release()
+            raise
+
+    def _pack_worker(self, candidates: list[Path]) -> None:
+        """Pack each candidate JSONL → Parquet, then seal RTDB.
+
+        Drains the pusher queue first so any in-flight RTDB POST for these
+        dates lands before we DELETE the date subtree. Failures are logged
+        but never raised — the JSONL stays on disk and gets retried on the
+        next ripening tick.
+        """
+        try:
+            try:
+                from kappa_packer import pack_one, seal_via_rtdb, find_manifest
+            except ImportError as e:
+                print(f"[pusher] auto-pack disabled: {e}", flush=True)
+                return
+            # Drain pending RTDB writes for these dates. Bounded wait so a
+            # partitioned network doesn't stall the pack thread forever.
+            deadline = time.time() + 60.0
+            while self._q.unfinished_tasks > 0 and time.time() < deadline:
+                time.sleep(0.2)
+            manifest = find_manifest(self.outbox_dir)
+            for jsonl in candidates:
+                try:
+                    report = pack_one(jsonl, delete_source=True)
+                    if report.get("skipped"):
+                        continue
+                    parquet = jsonl.with_suffix(".parquet")
+                    if manifest is not None:
+                        seal_via_rtdb(manifest, jsonl, parquet)
+                    print(f"[pusher] auto-packed {jsonl.name}: "
+                          f"{report.get('n_records', 0):,} rows "
+                          f"({report.get('bytes_before', 0):,} → "
+                          f"{report.get('bytes_after', 0):,} bytes)",
+                          flush=True)
+                except Exception as e:                          # noqa: BLE001
+                    print(f"[pusher] pack failed for {jsonl}: {e}",
+                          flush=True)
+        finally:
+            self._pack_lock.release()
 
     def _flush_stream_meta(self, name: str) -> None:
         m = self._stream_meta.get(name)
@@ -515,6 +610,16 @@ class ExperimentPusher:
                       f"{self._q.unfinished_tasks} task(s) still in flight",
                       flush=True)
                 break
+            time.sleep(0.1)
+
+        # Final pack: everything left in streams_dir (including today's
+        # active shard, which is no longer being written to). Caller
+        # contract is "no stream() calls after complete()", so safe.
+        # Use a sentinel date in the future so all real dates qualify.
+        self._maybe_kick_pack("9999-99-99")
+        # Wait for the pack thread to finish (at most ~60s drain + pack).
+        pack_deadline = time.time() + 180.0
+        while self._pack_lock.locked() and time.time() < pack_deadline:
             time.sleep(0.1)
 
     # -- internal -----------------------------------------------------------
