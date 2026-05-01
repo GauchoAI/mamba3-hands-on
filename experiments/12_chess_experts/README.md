@@ -20,3 +20,6 @@ goal is to improve the chess expert itself.
   back-rank family and evaluate per motif.
 - Policy arena: add a JEPA-backed policy head so the JEPA expert can choose
   legal moves and compete against the motif policy on held-out tactical boards.
+- Puzzle sequence arena: evaluate multi-ply constructed puzzles with a defender
+  reply, so success requires completing a line rather than only finding one
+  move.

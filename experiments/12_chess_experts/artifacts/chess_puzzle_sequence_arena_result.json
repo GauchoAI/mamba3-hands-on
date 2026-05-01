@@ -1,0 +1,269 @@
+{
+  "status": "multi_ply_puzzle_arena",
+  "scope": "constructed two-move attacking sequences with one defender reply",
+  "device": "mps",
+  "elapsed_s": 6.386,
+  "puzzles": 48,
+  "score": {
+    "motif_solved": 47,
+    "jepa_solved": 46,
+    "motif_solve_rate": 0.9792,
+    "jepa_solve_rate": 0.9583,
+    "motif_wins": 1,
+    "jepa_wins": 0,
+    "ties_both_solve": 46,
+    "ties_both_fail": 1
+  },
+  "by_family": {
+    "rook_side_file": {
+      "n": 15,
+      "motif_solve_rate": 1.0,
+      "jepa_solve_rate": 1.0
+    },
+    "back_rank_rook_queen": {
+      "n": 10,
+      "motif_solve_rate": 0.9,
+      "jepa_solve_rate": 0.9
+    },
+    "queen_side_file": {
+      "n": 16,
+      "motif_solve_rate": 1.0,
+      "jepa_solve_rate": 0.9375
+    },
+    "knight_corner": {
+      "n": 7,
+      "motif_solve_rate": 1.0,
+      "jepa_solve_rate": 1.0
+    }
+  },
+  "sample_rows": [
+    {
+      "motif": "rook_side_file",
+      "fen": "8/5pp1/8/6pk/6p1/8/8/K2R4 b - - 0 1",
+      "target_line": [
+        "g7g6",
+        "d1h1"
+      ],
+      "motif_moves": [
+        "g7g6",
+        "d1h1"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "g7g6",
+        "d1h1"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    },
+    {
+      "motif": "back_rank_rook_queen",
+      "fen": "5k2/4ppp1/7R/8/6bP/8/4n3/K7 b - - 0 1",
+      "target_line": [
+        "e2d4",
+        "h6h8"
+      ],
+      "motif_moves": [
+        "e2d4",
+        "h6h8"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "e2d4",
+        "h6h8"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    },
+    {
+      "motif": "queen_side_file",
+      "fen": "8/2p5/6p1/4Q3/6pk/6p1/8/K7 b - - 0 1",
+      "target_line": [
+        "g6g5",
+        "e5h8"
+      ],
+      "motif_moves": [
+        "g6g5",
+        "e5h8"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "g6g5",
+        "e5h8"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    },
+    {
+      "motif": "rook_side_file",
+      "fen": "5R2/B7/3b2p1/8/1P4pk/6p1/8/K7 b - - 0 1",
+      "target_line": [
+        "g6g5",
+        "f8h8"
+      ],
+      "motif_moves": [
+        "g6g5",
+        "f8h8"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "g6g5",
+        "f8h8"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    },
+    {
+      "motif": "rook_side_file",
+      "fen": "5R2/4B3/1p5n/8/kp6/1p6/3P4/7K b - - 0 1",
+      "target_line": [
+        "b6b5",
+        "f8a8"
+      ],
+      "motif_moves": [
+        "b6b5",
+        "f8a8"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "b6b5",
+        "f8a8"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    },
+    {
+      "motif": "queen_side_file",
+      "fen": "8/8/6p1/6pk/6p1/b1N5/8/K3Q3 b - - 0 1",
+      "target_line": [
+        "a3e7",
+        "e1h1"
+      ],
+      "motif_moves": [
+        "a3e7",
+        "e1h1"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "a3e7",
+        "e1h1"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    },
+    {
+      "motif": "rook_side_file",
+      "fen": "8/6p1/1p2P1pk/6p1/4B3/8/8/K3R3 b - - 0 1",
+      "target_line": [
+        "b6b5",
+        "e1h1"
+      ],
+      "motif_moves": [
+        "b6b5",
+        "e1h1"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "b6b5",
+        "e1h1"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    },
+    {
+      "motif": "queen_side_file",
+      "fen": "8/2N5/2Q1B1n1/1p2P3/8/kp6/1p6/7K b - - 0 1",
+      "target_line": [
+        "b5b4",
+        "c6a8"
+      ],
+      "motif_moves": [
+        "b5b4",
+        "c6a8"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "b5b4",
+        "c6a8"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    },
+    {
+      "motif": "back_rank_rook_queen",
+      "fen": "6k1/5ppp/8/8/4Q3/8/NB6/n6K b - - 0 1",
+      "target_line": [
+        "a1b3",
+        "e4e8"
+      ],
+      "motif_moves": [
+        "a1b3",
+        "e4e8"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "a1b3",
+        "e4e8"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    },
+    {
+      "motif": "queen_side_file",
+      "fen": "7Q/5b2/8/1p6/8/kp6/1p2n3/7K b - - 0 1",
+      "target_line": [
+        "b5b4",
+        "h8a8"
+      ],
+      "motif_moves": [
+        "b5b4",
+        "h8a8"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "b5b4",
+        "h8a8"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    },
+    {
+      "motif": "back_rank_rook_queen",
+      "fen": "7K/7P/8/6Q1/7B/3p4/4pp2/4k3 b - - 0 1",
+      "target_line": [
+        "d3d2",
+        "g5g1"
+      ],
+      "motif_moves": [
+        "d3d2",
+        "g5g8"
+      ],
+      "motif_solved": false,
+      "jepa_moves": [
+        "d3d2",
+        "g5g8"
+      ],
+      "jepa_solved": false,
+      "outcome": "tie_both_fail"
+    },
+    {
+      "motif": "back_rank_rook_queen",
+      "fen": "3k4/2ppp1B1/8/8/8/1Q6/1p5b/1n5K b - - 0 1",
+      "target_line": [
+        "b1d2",
+        "b3b8"
+      ],
+      "motif_moves": [
+        "b1d2",
+        "b3b8"
+      ],
+      "motif_solved": true,
+      "jepa_moves": [
+        "b1d2",
+        "b3b8"
+      ],
+      "jepa_solved": true,
+      "outcome": "tie_both_solve"
+    }
+  ]
+}

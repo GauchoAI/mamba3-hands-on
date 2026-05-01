@@ -216,3 +216,51 @@ selection interface and can participate in adversarial policy benchmarks.
 The next step toward a true game benchmark is to train a value head or
 multi-ply policy and play many short games from tactical starts, scoring
 terminal win/loss/draw instead of only mate-in-one success.
+
+### Iteration 7 - multi-ply puzzle sequence arena
+
+Implemented:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_puzzle_sequence_arena.py --freeze-encoder
+```
+
+This moves beyond one-move puzzles. The arena constructs positions with a
+defender reply and a final mating move:
+
+```text
+black legal reply
+white expert move
+terminal checkmate required
+```
+
+Both experts receive the same puzzle position and must complete the line.
+
+Result:
+
+```text
+puzzles: 48
+motif solved: 47/48 = 0.9792
+JEPA-policy solved: 46/48 = 0.9583
+motif wins: 1
+JEPA wins: 0
+ties both solve: 46
+ties both fail: 1
+```
+
+Example solved line:
+
+```text
+FEN: 8/5pp1/8/6pk/6p1/8/8/K2R4 b - - 0 1
+target line: g7g6, d1h1
+motif: g7g6, d1h1 -> solved
+JEPA:  g7g6, d1h1 -> solved
+```
+
+Interpretation:
+
+This is now a puzzle benchmark rather than a single-move classifier. It is
+still constructed and narrow, but it is closer to adversarial evaluation:
+there is an opponent move, a sequence to complete, and terminal checkmate is
+the success criterion. The motif expert remains slightly ahead, while the
+JEPA-policy remains competitive.
