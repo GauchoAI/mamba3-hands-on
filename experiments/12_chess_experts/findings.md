@@ -127,3 +127,41 @@ mate-in-one curriculum, but it now covers multiple tactical motifs and reports
 per-family performance. The two exact misses are acceptable because the
 positions had multiple mating moves; the predicted moves were still legal
 checkmates.
+
+### Iteration 5 - diagnostic arena, not yet adversarial play
+
+Implemented:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_expert_arena.py
+```
+
+Result:
+
+```text
+status: diagnostic_arena_not_full_game
+positions: 64
+motif policy legal mate pass: 63/64 = 0.9844
+JEPA transition cosine on motif moves: 0.9774
+JEPA transition normalized MSE on motif moves: 0.00070485
+```
+
+Interpretation:
+
+The motif expert and JEPA expert cannot honestly "play against each other" yet.
+The motif expert is a move policy for mate-in-one. JEPA is a world model: it
+predicts the next latent board state for a given move, but it does not choose
+winning moves by itself.
+
+A true adversarial benchmark needs:
+
+```text
+expert(board) -> legal move
+alternate turns
+terminal result: win/loss/draw
+many games from varied starts
+```
+
+The next step is to add a value or policy head on top of JEPA so it can choose
+moves. Then the adversarial arena can be real: motif-policy or distilled-policy
+versus JEPA-policy, scored by game result.
