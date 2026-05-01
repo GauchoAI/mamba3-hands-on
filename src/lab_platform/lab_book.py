@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import socketserver
+import urllib.parse
 from pathlib import Path
 
 
@@ -19,12 +20,13 @@ class LabBookHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(self.repo_root), **kwargs)
 
     def translate_path(self, path: str) -> str:
-        if path in ("/", "/index.html"):
+        clean_path = urllib.parse.urlparse(path).path
+        if clean_path in ("/", "/index.html"):
             return str(self.repo_root / "docs" / "lab_book" / "index.html")
         return super().translate_path(path)
 
 
-class ReusableTCPServer(socketserver.TCPServer):
+class ReusableTCPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
 
 

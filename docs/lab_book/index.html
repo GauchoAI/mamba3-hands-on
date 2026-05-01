@@ -339,15 +339,25 @@
       { id: "ch10", title: "Structured JEPA: JEPA structured-data", path: "experiments/10_jepa_structured/README.md", group: "experiment", experiment: "jepa_structured" },
       { id: "kappa", title: "Kappa Architecture", path: "docs/KAPPA_ARCHITECTURE.md", group: "architecture" },
       { id: "cloud", title: "Cloud Archive", path: "docs/CLOUD_ARCHIVE.md", group: "architecture" },
+      { id: "lab-run", title: "Lab Run and Book", path: "docs/LAB_RUN_AND_BOOK.md", group: "architecture" },
       { id: "schema", title: "Firebase Schema", path: "docs/EXPERIMENT_FIREBASE_SCHEMA.md", group: "architecture" },
       { id: "ui", title: "UI Vision", path: "docs/UI_VISION.md", group: "architecture" },
       { id: "signoff-kappa", title: "Kappa Signoff", path: "signoff/2026-04-30-kappa-architecture-and-widerN-experiment.md", group: "signoff" },
       { id: "signoff-bilingual", title: "Bilingual Harness Signoff", path: "signoff/2026-04-29-bilingual-five-tool-harness-and-honest-composition.md", group: "signoff" },
       { id: "signoff-counter", title: "Counter Attach Signoff", path: "signoff/2026-04-29-cortex-counter-attach-on-bilingual-lm.md", group: "signoff" },
     ];
+    const CHAPTER_SOURCE_ORDER = new Map(MARKDOWN_SOURCES.map((src, i) => [src.id, i]));
     const state = {
       snapshot: {},
       threePop: {},
+      learningRate: {},
+      mambaMeta: {},
+      models: {},
+      lineage: {},
+      history: {},
+      taskSeries: {},
+      bandwidth: {},
+      mambaState: {},
       mambaExperiments: {},
       events: {},
       gpuHistory: {},
@@ -404,7 +414,9 @@
       $("load-meta").textContent = "Loading Firebase chapters...";
       const [
         snapshot, threePop, mambaExperiments, events, gpuHistory,
-        nodes, teacherBlobs, experiments, streamsMeta, schemas
+        nodes, teacherBlobs, experiments, streamsMeta, schemas,
+        learningRate, mambaMeta, models, lineage, history, taskSeries,
+        bandwidth, mambaState
       ] = await Promise.all([
         get("mamba3/snapshot").catch(() => ({})),
         get("mamba3/three_pop").catch(() => ({})),
@@ -416,10 +428,26 @@
         get("experiments").catch(() => ({})),
         get("streams_meta").catch(() => ({})),
         get("_schemas").catch(() => ({})),
+        get("mamba3/learning_rate").catch(() => ({})),
+        get("mamba3/meta").catch(() => ({})),
+        get("mamba3/models").catch(() => ({})),
+        get("mamba3/lineage").catch(() => ({})),
+        get("mamba3/history").catch(() => ({})),
+        get("mamba3/task_series").catch(() => ({})),
+        get("mamba3/bandwidth").catch(() => ({})),
+        get("mamba3/state").catch(() => ({})),
       ]);
       Object.assign(state, {
         snapshot: snapshot || {},
         threePop: threePop || {},
+        learningRate: learningRate || {},
+        mambaMeta: mambaMeta || {},
+        models: models || {},
+        lineage: lineage || {},
+        history: history || {},
+        taskSeries: taskSeries || {},
+        bandwidth: bandwidth || {},
+        mambaState: mambaState || {},
         mambaExperiments: mambaExperiments || {},
         events: events || {},
         gpuHistory: gpuHistory || {},
@@ -430,11 +458,15 @@
         schemas: schemas || {},
       });
       state.markdown = {};
-      const markdownPairs = await Promise.all(MARKDOWN_SOURCES.map(async (src) => {
+      const markdownPaths = [...new Set(MARKDOWN_SOURCES.flatMap(src => [
+        src.path,
+        src.finding || null,
+      ]).filter(Boolean))];
+      const markdownPairs = await Promise.all(markdownPaths.map(async (path) => {
         try {
-          return [src.path, await getText(src.path)];
+          return [path, await getText(path)];
         } catch {
-          return [src.path, ""];
+          return [path, ""];
         }
       }));
       for (const [path, text] of markdownPairs) {
@@ -513,7 +545,11 @@
         cycles: rows(value?.cycles).map(r => ({ cycle: Number(r.key), ...(r.value || {}) }))
           .filter(r => Number.isFinite(r.cycle))
           .sort((a, b) => a.cycle - b.cycle),
-      })).sort((a, b) => (b.best_fresh || 0) - (a.best_fresh || 0));
+      })).sort((a, b) => {
+        const at = a.cycles[0]?.t || Number.MAX_SAFE_INTEGER;
+        const bt = b.cycles[0]?.t || Number.MAX_SAFE_INTEGER;
+        return at - bt || a.id.localeCompare(b.id);
+      });
     }
     function flattenExperimentRuns() {
       const out = [];
@@ -572,6 +608,10 @@
       const events = eventRows();
       const nodes = rows(state.nodes).map(({ key, value }) => ({ id: key, ...(value || {}) }));
       const schemas = rows(state.schemas);
+      const modelCount = rows(state.models).length;
+      const lineageCount = rows(state.lineage).length;
+      const historyCount = rows(state.history).length;
+      const taskSeriesCount = rows(state.taskSeries).length;
 
       addChapter(chapters, "chapter-prologue", "Prologue: System State",
         "This opening chapter summarizes the whole lab using the current Firebase feed: task mastery, active workers, archive streams, nodes, and recent events.",
@@ -585,38 +625,14 @@
           ["Lab runs", runs.length],
           ["Streams", streams.length],
           ["Schemas", schemas.length],
+          ["Models", modelCount],
+          ["Lineage entries", lineageCount],
         ]) +
         `<div class="grid-2">
           <div class="panel"><h3>Current Task Accuracy</h3>${canvas("chart-overview-tasks")}</div>
           <div class="panel"><h3>GPU / Memory History</h3>${canvas("chart-overview-gpu")}</div>
         </div>
         <div class="panel"><h3>Recent Events</h3>${renderEvents(events.slice(0, 18))}</div>`
-      );
-
-      addChapter(chapters, "chapter-curriculum", "Curriculum Map",
-        "The three-population curriculum is the most populated existing schema. This chapter uses `/mamba3/three_pop`, `/mamba3/snapshot`, teacher metadata, and events before asking for any new schema.",
-        md("docs/findings/ga_tournament.md", 5000) +
-        `<div class="panel">${table([
-          { label: "Task" }, { label: "Status" }, { label: "Accuracy", cls: "right" },
-          { label: "Cycles", cls: "right" }, { label: "Node" }, { label: "Config" }
-        ], tasks.map(t => {
-          const acc = Number(t.best_accuracy ?? t.acc ?? 0);
-          const cls = acc >= .99 ? "good" : acc >= .7 ? "warn" : "bad";
-          const cfg = t.config || {};
-          return `<tr><td class="mono">${esc(t.task)}</td><td><span class="pill ${cls}">${esc(t.status || "tracked")}</span></td><td class="right">${pct(acc)}</td><td class="right">${num(t.total_cycles)}</td><td>${esc(t.node || "")}</td><td class="mono">d=${esc(cfg.d_model || "")} L=${esc(cfg.n_kernel_layers || "")} ${esc(cfg.optimizer || "")}</td></tr>`;
-        }))}</div>
-        <div class="grid-2">
-          <div class="panel"><h3>Leaderboard</h3>${canvas("chart-curriculum-leaderboard")}</div>
-          <div class="panel"><h3>Teacher Blobs</h3>${renderTeacherBlobs()}</div>
-        </div>`
-      );
-
-      addChapter(chapters, "chapter-legacy-experiments", "Evolution Experiments",
-        "Each row here is one legacy `/mamba3/experiments/<task>` record. The charts recover the old fresh-accuracy and loss curves instead of hiding them behind raw tables.",
-        sourceCards(MARKDOWN_SOURCES.filter(s => s.group === "experiment")) +
-        `<div class="panel">${table([
-          { label: "Experiment" }, { label: "Best Fresh", cls: "right" }, { label: "Cycle", cls: "right" }, { label: "Status" }, { label: "History" }
-        ], legacy.map(exp => `<tr><td class="mono"><a href="#exp-${esc(exp.id)}">${esc(exp.id)}</a></td><td class="right">${pct(exp.best_fresh)}</td><td class="right">${num(exp.cycle)}</td><td><span class="pill">${esc(exp.status || "")}</span></td><td>${num(exp.cycles.length)} points</td></tr>`))}</div>`
       );
 
       for (const src of MARKDOWN_SOURCES.filter(s => s.group === "experiment")) {
@@ -626,33 +642,63 @@
         });
         const chartId = `chart-md-${src.id}`;
         const finding = src.finding ? md(src.finding, 4500) : "";
-        const relatedTable = relatedLegacy.length ? table([
+        const relatedPanel = relatedLegacy.length ? `<div class="grid-2"><div class="panel"><h3>Matching Firebase Records</h3>${table([
           { label: "Live Experiment" }, { label: "Best", cls: "right" }, { label: "Cycles", cls: "right" }
-        ], relatedLegacy.map(exp => `<tr><td class="mono">${esc(exp.id)}</td><td class="right">${pct(exp.best_fresh)}</td><td class="right">${num(exp.cycles.length)}</td></tr>`)) : `<div class="empty">No direct legacy Firebase experiment matched this chapter name.</div>`;
+        ], relatedLegacy.map(exp => `<tr><td class="mono">${esc(exp.id)}</td><td class="right">${pct(exp.best_fresh)}</td><td class="right">${num(exp.cycles.length)}</td></tr>`))}</div><div class="panel"><h3>Best Fresh Curves</h3>${canvas(chartId, true)}</div></div>` : "";
         addChapter(chapters, `doc-${src.id}`, src.title,
           "Narrative material from the repository, paired with any matching live Firebase data.",
           md(src.path, 9000) +
-          `<div class="grid-2"><div class="panel"><h3>Matching Firebase Records</h3>${relatedTable}</div><div class="panel"><h3>Best Fresh Curves</h3>${canvas(chartId, true)}</div></div>` +
+          relatedPanel +
           finding);
-      }
 
-      for (const [i, exp] of legacy.entries()) {
-        if (state.filter && !exp.id.toLowerCase().includes(state.filter)) continue;
-        const last = exp.cycles[exp.cycles.length - 1] || {};
-        const body = statGrid([
-          ["Best fresh", pct(exp.best_fresh)],
-          ["Cycles", exp.cycles.length],
-          ["Last fresh", pct(last.fresh)],
-          ["Last loss", Number(last.loss || 0).toFixed(4)],
-        ]) +
-        `<div class="grid-2">
-          <div class="panel"><h3>Fresh Accuracy</h3>${canvas(`chart-exp-fresh-${i}`)}</div>
-          <div class="panel"><h3>Loss</h3>${canvas(`chart-exp-loss-${i}`)}</div>
-        </div>
-        <div class="panel"><h3>Experiment Events</h3>${renderEvents(events.filter(e => e.exp_id === exp.id).slice(0, 18))}</div>`;
-        addChapter(chapters, `exp-${exp.id}`, `Experiment: ${exp.id}`,
-          "A sequential experiment chapter reconstructed from the existing cycle history and event stream.",
-          body);
+        if (src.id === "ch01") {
+          addChapter(chapters, "chapter-curriculum", "01A - Curriculum Map",
+            "The three-population curriculum belongs to the GA/evolution era. This chapter uses `/mamba3/three_pop`, `/mamba3/snapshot`, teacher metadata, and events before asking for any new schema.",
+            `<div class="panel">${table([
+              { label: "Task" }, { label: "Status" }, { label: "Accuracy", cls: "right" },
+              { label: "Cycles", cls: "right" }, { label: "Node" }, { label: "Config" }
+            ], tasks.map(t => {
+              const acc = Number(t.best_accuracy ?? t.acc ?? 0);
+              const cls = acc >= .99 ? "good" : acc >= .7 ? "warn" : "bad";
+              const cfg = t.config || {};
+              return `<tr><td class="mono">${esc(t.task)}</td><td><span class="pill ${cls}">${esc(t.status || "tracked")}</span></td><td class="right">${pct(acc)}</td><td class="right">${num(t.total_cycles)}</td><td>${esc(t.node || "")}</td><td class="mono">d=${esc(cfg.d_model || "")} L=${esc(cfg.n_kernel_layers || "")} ${esc(cfg.optimizer || "")}</td></tr>`;
+            }))}</div>
+            <div class="grid-2">
+              <div class="panel"><h3>Leaderboard</h3>${canvas("chart-curriculum-leaderboard")}</div>
+              <div class="panel"><h3>Learning Rate</h3>${renderLearningRate()}</div>
+            </div>`
+          );
+
+          addChapter(chapters, "chapter-legacy-experiments", "01B - Live Evolution Task Runs",
+            "These task-level chapters are ordered by their first recorded cycle timestamp, so the live appendix follows the run history rather than the leaderboard.",
+            `<div class="grid-2">
+              <div class="panel"><h3>Task Runs</h3>${table([
+                { label: "Experiment" }, { label: "First Seen" }, { label: "Best", cls: "right" }, { label: "History", cls: "right" }
+              ], legacy.map(exp => `<tr><td class="mono"><a href="#exp-${esc(exp.id)}">${esc(exp.id)}</a></td><td>${esc(ts(exp.cycles[0]?.t))}</td><td class="right">${pct(exp.best_fresh)}</td><td class="right">${num(exp.cycles.length)}</td></tr>`))}</div>
+              <div class="panel"><h3>Model Catalog</h3>${renderModels()}</div>
+            </div>`
+          );
+
+          for (const [i, exp] of legacy.entries()) {
+            if (state.filter && !exp.id.toLowerCase().includes(state.filter)) continue;
+            const last = exp.cycles[exp.cycles.length - 1] || {};
+            const expEvents = events.filter(e => e.exp_id === exp.id).slice(0, 18);
+            const body = statGrid([
+              ["First seen", ts(exp.cycles[0]?.t)],
+              ["Best fresh", pct(exp.best_fresh)],
+              ["Cycles", exp.cycles.length],
+              ["Last loss", Number(last.loss || 0).toFixed(4)],
+            ]) +
+            `<div class="grid-2">
+              <div class="panel"><h3>Fresh Accuracy</h3>${canvas(`chart-exp-fresh-${i}`)}</div>
+              <div class="panel"><h3>Loss</h3>${canvas(`chart-exp-loss-${i}`)}</div>
+            </div>` +
+            (expEvents.length ? `<div class="panel"><h3>Experiment Events</h3>${renderEvents(expEvents)}</div>` : "");
+            addChapter(chapters, `exp-${exp.id}`, `01B.${String(i + 1).padStart(2, "0")} - ${exp.id}`,
+              "A live task-run chapter reconstructed from existing cycle history and events.",
+              body);
+          }
+        }
       }
 
       addChapter(chapters, "chapter-lab-runs", "Lab Runs and Streams",
@@ -679,6 +725,10 @@
         `<div class="grid-2">
           <div class="panel"><h3>Nodes</h3>${renderNodes(nodes)}</div>
           <div class="panel"><h3>Published Schemas</h3>${renderSchemas()}</div>
+        </div>
+        <div class="grid-2">
+          <div class="panel"><h3>Self-Describing Firebase Meta</h3>${renderMeta()}</div>
+          <div class="panel"><h3>Data Coverage</h3>${renderCoverage({modelCount, lineageCount, historyCount, taskSeriesCount})}</div>
         </div>`
       );
 
@@ -698,6 +748,53 @@
       return table([
         { label: "Task" }, { label: "Size", cls: "right" }, { label: "Uploaded" }, { label: "SHA" }
       ], blobs.map(b => `<tr><td class="mono">${esc(b.task)}</td><td class="right">${num(b.size)}</td><td>${esc(ts(b.uploaded_at))}</td><td class="mono">${esc(String(b.sha256 || "").slice(0, 16))}</td></tr>`), "No teacher blob manifests.");
+    }
+    function renderLearningRate() {
+      const lr = state.learningRate || {};
+      const taskRows = rows(lr.tasks).map(({ key, value }) => ({ task: key, ...(value || {}) }))
+        .sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
+      return statGrid([
+        ["Teachers", lr.total_teachers || taskRows.length],
+        ["First", lr.first_task || ""],
+        ["Last", lr.last_task || ""],
+        ["Ratio", lr.learning_ratio ? Number(lr.learning_ratio).toFixed(2) : ""],
+      ]) + table([
+        { label: "Order" }, { label: "Task" }, { label: "Cycles", cls: "right" }, { label: "Graduated" }
+      ], taskRows.map(t => `<tr><td class="right">${num(t.order)}</td><td class="mono">${esc(t.task)}</td><td class="right">${num(t.cycles)}</td><td>${esc(ts(t.graduated_at))}</td></tr>`));
+    }
+    function renderModels(limit = 32) {
+      const models = rows(state.models).map(({ key, value }) => ({ id: key, ...(value || {}) }))
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      return table([
+        { label: "Model" }, { label: "Size", cls: "right" }, { label: "Node" }, { label: "Path" }
+      ], models.slice(0, limit).map(m => `<tr><td class="mono">${esc(m.id)}</td><td class="right">${m.size_kb ? `${num(Math.round(m.size_kb))} KB` : ""}</td><td>${esc(m.node || "")}</td><td class="mono">${esc(m.path || "")}</td></tr>`));
+    }
+    function renderMeta() {
+      const meta = state.mambaMeta || {};
+      const schemaRows = rows(meta.schema).map(({ key, value }) => ({ name: key, ...(value || {}) }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      return statGrid([
+        ["Version", meta.version || ""],
+        ["Run", meta.run_name || ""],
+        ["Problems", meta.usage?.total_problems || ""],
+        ["Cycles", meta.usage?.total_cycles || ""],
+      ]) + table([
+        { label: "Path" }, { label: "Description" }, { label: "Fields" }
+      ], schemaRows.map(s => `<tr><td class="mono">${esc(s.path || s.name)}</td><td>${esc(s.desc || "")}</td><td class="mono">${esc(s.fields || "")}</td></tr>`));
+    }
+    function renderCoverage(counts) {
+      const m = state.mambaMeta || {};
+      const b = m.bandwidth || state.bandwidth || {};
+      return statGrid([
+        ["Models", counts.modelCount],
+        ["Lineage", counts.lineageCount],
+        ["History", counts.historyCount],
+        ["Task series", counts.taskSeriesCount],
+        ["Last push", b.last_push_bytes ? `${num(b.last_push_bytes)} B` : ""],
+        ["Daily est.", b.estimated_daily_mb ? `${b.estimated_daily_mb} MB` : ""],
+        ["Monthly est.", b.estimated_monthly_gb ? `${b.estimated_monthly_gb} GB` : ""],
+        ["Limit", b.limit_gb ? `${b.limit_gb} GB` : ""],
+      ]);
     }
     function renderStreams(streams) {
       return table([
