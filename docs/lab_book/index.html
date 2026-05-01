@@ -920,7 +920,7 @@
         bucket.items.push(chapter);
       }
       return grouped.map(group => {
-        const links = group.items.map(ch => `<a href="#${esc(ch.id)}">Chapter ${ch.number}: ${esc(ch.title.replace(/^Chapter \d+:\s*/, ""))}</a>`).join("");
+        const links = group.items.map(ch => `<a href="#${esc(ch.id)}" data-nav-chapter="${esc(ch.id)}">Chapter ${ch.number}: ${esc(ch.title.replace(/^Chapter \d+:\s*/, ""))}</a>`).join("");
         return `<details class="toc-group ${group.sub ? "toc-sub" : ""}" ${group.open ? "open" : ""}>
           <summary>${esc(group.key)}<span class="toc-group-count">${num(group.items.length)}</span></summary>
           <div class="toc-group-body">${links}</div>
@@ -1194,6 +1194,7 @@
       }
       $("book").innerHTML = visible.map(ch => tpl(ch)).join("") || `<div class="empty">No chapters match the filter.</div>`;
       $("toc").innerHTML = renderToc(visible);
+      attachTocHandlers();
       attachSectionRouteHandlers();
       attachCopyHandlers();
       clearViewStateClasses();
@@ -1386,7 +1387,7 @@
         if (section) {
           section.open = true;
           requestAnimationFrame(() => {
-            section.scrollIntoView({ block: "start" });
+            jumpToElement(section);
             state.routeApplying = false;
             syncRouteFromViewport();
           });
@@ -1394,10 +1395,16 @@
         }
       }
       requestAnimationFrame(() => {
-        chapter.scrollIntoView({ block: "start" });
+        jumpToElement(chapter);
         state.routeApplying = false;
         syncRouteFromViewport();
       });
+    }
+    function jumpToElement(element) {
+      const old = document.documentElement.style.scrollBehavior;
+      document.documentElement.style.scrollBehavior = "auto";
+      element.scrollIntoView({ block: "start" });
+      document.documentElement.style.scrollBehavior = old;
     }
     function attachSectionRouteHandlers() {
       document.querySelectorAll(".md-section").forEach(section => {
@@ -1406,6 +1413,21 @@
           const chapter = section.closest(".chapter");
           if (!chapter) return;
           updateRoute(chapter, section.open ? section : null);
+        });
+      });
+    }
+    function attachTocHandlers() {
+      document.querySelectorAll("[data-nav-chapter]").forEach(link => {
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          const chapter = document.getElementById(link.dataset.navChapter);
+          if (!chapter) return;
+          state.routeApplying = true;
+          jumpToElement(chapter);
+          requestAnimationFrame(() => {
+            state.routeApplying = false;
+            updateRoute(chapter, sectionAtViewport(chapter));
+          });
         });
       });
     }
