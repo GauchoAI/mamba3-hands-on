@@ -27,6 +27,9 @@
     }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
+    html.print-view {
+      scroll-behavior: auto;
+    }
     body {
       margin: 0;
       color: var(--ink);
@@ -102,6 +105,11 @@
       background: #eee7db;
       border-left-color: var(--accent);
     }
+    .toc a.active {
+      background: #e8f5ec;
+      border-left-color: var(--accent);
+      font-weight: 700;
+    }
     .toc-group {
       border: 1px solid transparent;
       border-radius: 8px;
@@ -143,13 +151,18 @@
       gap: 10px;
       margin-top: 22px;
     }
-    input, button {
+    .tool-row {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr 1fr;
+    }
+    input, button, select {
       border: 1px solid var(--line);
       border-radius: 7px;
       font: inherit;
       padding: 10px 11px;
     }
-    input { width: 100%; background: #fff; }
+    input, select { width: 100%; background: #fff; }
     button {
       background: #fff;
       cursor: pointer;
@@ -168,6 +181,22 @@
     .chapter {
       padding: 34px 0 54px;
       border-bottom: 1px solid var(--line);
+    }
+    .chapter-head {
+      align-items: start;
+      display: grid;
+      gap: 12px;
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .chapter-link, .section-link {
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 6px 9px;
+    }
+    .chapter-link:hover, .section-link:hover {
+      background: var(--soft);
+      text-decoration: none;
     }
     .chapter:first-child { padding-top: 0; }
     .chapter-kicker {
@@ -194,6 +223,30 @@
       background: #f2fbf8;
       margin: 18px 0;
       padding: 12px 14px;
+    }
+    .chapter-card {
+      max-width: 920px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      margin: 14px 0 18px;
+      padding: 14px;
+    }
+    .chapter-card-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .chapter-card-item {
+      border-left: 3px solid #eee1cf;
+      padding-left: 9px;
+    }
+    .chapter-card-item strong {
+      display: block;
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 3px;
+      text-transform: uppercase;
     }
     .doc-frontmatter-head {
       align-items: center;
@@ -230,6 +283,12 @@
       color: var(--muted);
       flex: 0 0 auto;
       font: 11px var(--mono);
+    }
+    .md-section summary .section-title {
+      align-items: baseline;
+      display: flex;
+      gap: 8px;
+      min-width: 0;
     }
     .md-section .prose {
       border-top: 1px solid #eee8dd;
@@ -380,6 +439,47 @@
       border-bottom: 1px solid #eee8dd;
       font-size: 13px;
     }
+    body.hide-charts .chart, body.hide-charts canvas,
+    body.hide-tables .table-wrap,
+    body.hide-events .event,
+    body.hide-prose .prose,
+    body.hide-evidence .doc-frontmatter,
+    body.hide-evidence .chapter-card {
+      display: none !important;
+    }
+    body.focus-charts .prose,
+    body.focus-charts .table-wrap,
+    body.focus-charts .event,
+    body.focus-prose .chart,
+    body.focus-prose .table-wrap,
+    body.focus-prose .event,
+    body.focus-tables .prose,
+    body.focus-tables .chart,
+    body.focus-tables .event,
+    body.focus-evidence .prose,
+    body.focus-evidence .chart,
+    body.focus-evidence .table-wrap {
+      opacity: .25;
+    }
+    body.mode-compare .chapter:not(.experiment-chapter) {
+      display: none;
+    }
+    body.mode-platform .chapter:not(.platform-chapter) {
+      display: none;
+    }
+    body.mode-runs .chapter:not(.run-chapter) {
+      display: none;
+    }
+    html.print-view aside {
+      display: none;
+    }
+    html.print-view .layout {
+      display: block;
+    }
+    html.print-view main {
+      max-width: 960px;
+      padding: 28px;
+    }
     .sample {
       border-left: 3px solid var(--accent);
       padding: 8px 0 8px 12px;
@@ -401,6 +501,10 @@
         border-bottom: 1px solid var(--line);
       }
       button { width: 100%; }
+      .tool-row { grid-template-columns: 1fr; }
+      .chapter-head { grid-template-columns: 1fr; }
+      .chapter-link { justify-self: start; }
+      .chapter-card-grid { grid-template-columns: 1fr; }
       .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid-2, .grid-3 { grid-template-columns: 1fr; }
       .event { grid-template-columns: 1fr; }
@@ -427,6 +531,35 @@
       <nav id="toc" class="toc" aria-label="Table of contents"></nav>
       <div class="tools">
         <input id="filter" placeholder="Filter chapters and tables">
+        <div class="tool-row">
+          <select id="mode" aria-label="Mode">
+            <option value="book">Book</option>
+            <option value="compare">Experiments</option>
+            <option value="platform">Platform</option>
+            <option value="runs">Runs</option>
+          </select>
+          <select id="focus" aria-label="Focus">
+            <option value="">All</option>
+            <option value="prose">Prose</option>
+            <option value="charts">Charts</option>
+            <option value="tables">Tables</option>
+            <option value="evidence">Evidence</option>
+          </select>
+        </div>
+        <div class="tool-row">
+          <select id="hide" aria-label="Hide">
+            <option value="">Hide nothing</option>
+            <option value="charts">Hide charts</option>
+            <option value="tables">Hide tables</option>
+            <option value="events">Hide events</option>
+            <option value="prose">Hide prose</option>
+          </select>
+          <select id="sort" aria-label="Sort">
+            <option value="timeline">Timeline</option>
+            <option value="status">Status</option>
+            <option value="name">Name</option>
+          </select>
+        </div>
         <button id="refresh" class="primary">Refresh</button>
       </div>
       <div id="load-meta" class="load-meta">Waiting for data.</div>
@@ -435,9 +568,14 @@
   </div>
 
   <script id="chapter-template" type="text/x-handlebars-template">
-    <article id="{{id}}" class="chapter" data-filter="{{filterText}}">
-      <div class="chapter-kicker">Chapter {{number}}</div>
-      <h2>{{title}}</h2>
+    <article id="{{id}}" class="chapter {{classes}}" data-filter="{{filterText}}" data-status="{{status}}" data-title="{{title}}">
+      <div class="chapter-head">
+        <div>
+          <div class="chapter-kicker">Chapter {{number}}</div>
+          <h2>{{title}}</h2>
+        </div>
+        <button class="chapter-link" data-copy-chapter="{{id}}" type="button">Copy link</button>
+      </div>
       <p class="chapter-intro">{{intro}}</p>
       {{{body}}}
     </article>
@@ -498,6 +636,10 @@
       schemas: {},
       markdown: {},
       filter: "",
+      mode: "book",
+      focus: "",
+      hide: "",
+      sort: "timeline",
       routeApplying: false,
       routeTicking: false,
     };
@@ -729,21 +871,32 @@
         const open = i < openCount ? "open" : "";
         const slug = slugify(section.title);
         return `<details class="md-section" ${open} data-section="${esc(section.title.toLowerCase())}" data-section-slug="${esc(slug)}">
-          <summary><strong>${esc(section.title)}</strong><span>${num(wordCount(section.body))} words</span></summary>
+          <summary><span class="section-title"><strong>${esc(section.title)}</strong><button class="section-link" data-copy-section="${esc(slug)}" type="button">Copy</button></span><span>${num(wordCount(section.body))} words</span></summary>
           <div class="prose">${marked.parse(section.body)}</div>
         </details>`;
       }).join("");
       return introHtml + sectionHtml;
+    }
+    function chapterCard(attrs, path) {
+      const items = [
+        ["Status", attrs.status || ""],
+        ["Chapter", attrs.chapter || ""],
+        ["Source", path],
+        ["Sections", attrs.sections === "true" ? "sectioned" : (attrs.open_sections != null ? `${attrs.open_sections} open` : "")],
+      ].filter(([, value]) => value !== "");
+      if (!items.length) return "";
+      return `<div class="chapter-card">${attrs.summary ? `<p>${esc(attrs.summary)}</p>` : ""}<div class="chapter-card-grid">${items.map(([label, value]) => `<div class="chapter-card-item"><strong>${esc(label)}</strong>${esc(value)}</div>`).join("")}</div></div>`;
     }
     function md(path) {
       const text = state.markdown[path] || "";
       if (!text) return `<div class="empty">Markdown source unavailable: ${esc(path)}</div>`;
       const parsed = parseFrontMatter(text);
       const context = templateContext(path, parsed.attrs);
+      const renderedSummary = parsed.attrs.summary ? renderTemplate(parsed.attrs.summary, context) : "";
       const summary = parsed.attrs.summary
-        ? `<div class="doc-frontmatter"><div class="doc-frontmatter-head"><strong>${esc(parsed.attrs.title || "Chapter summary")}</strong>${parsed.attrs.status ? `<span class="pill good">${esc(parsed.attrs.status)}</span>` : ""}${parsed.attrs.chapter ? `<span class="pill">${esc(`Chapter ${parsed.attrs.chapter}`)}</span>` : ""}<span class="pill">${esc(path)}</span></div>${esc(renderTemplate(parsed.attrs.summary, context))}</div>`
+        ? `<div class="doc-frontmatter"><div class="doc-frontmatter-head"><strong>${esc(parsed.attrs.title || "Chapter summary")}</strong>${parsed.attrs.status ? `<span class="pill good">${esc(parsed.attrs.status)}</span>` : ""}${parsed.attrs.chapter ? `<span class="pill">${esc(`Chapter ${parsed.attrs.chapter}`)}</span>` : ""}<span class="pill">${esc(path)}</span></div>${esc(renderedSummary)}</div>`
         : "";
-      return `${summary}${renderMarkdownBody(renderTemplate(parsed.body, context), parsed.attrs)}`;
+      return `${summary}${chapterCard({ ...parsed.attrs, summary: renderedSummary }, path)}${renderMarkdownBody(renderTemplate(parsed.body, context), parsed.attrs)}`;
     }
     function sourceCards(sources) {
       return `<div class="source-list">${sources.map(src => `<div class="source-card"><div class="mono">${esc(src.path)}</div><strong>${esc(src.title)}</strong></div>`).join("")}</div>`;
@@ -857,6 +1010,17 @@
       return rows(state.events).map(({ key, value }) => ({ key, ...(value || {}) }))
         .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).slice(0, limit);
     }
+    function chapterClasses(id, title) {
+      const out = [];
+      if (id.startsWith("doc-ch") || id.startsWith("exp-")) out.push("experiment-chapter");
+      if (id.startsWith("chapter-lab") || id.startsWith("chapter-archive") || id.startsWith("chapter-infrastructure")) out.push("platform-chapter");
+      if (id.startsWith("chapter-lab") || id.startsWith("exp-")) out.push("run-chapter");
+      return out.join(" ");
+    }
+    function inferStatus(body) {
+      const match = body.match(/<span class="pill good">([^<]+)<\/span>/);
+      return match ? match[1].toLowerCase() : "";
+    }
     function addChapter(chapters, id, title, intro, body) {
       chapters.push({
         id,
@@ -864,6 +1028,8 @@
         title,
         intro,
         body,
+        classes: chapterClasses(id, title),
+        status: inferStatus(body),
         filterText: `${title} ${intro} ${body.replace(/<[^>]+>/g, " ")}`.toLowerCase(),
       });
     }
@@ -1020,11 +1186,19 @@
       );
 
       const q = state.filter.trim().toLowerCase();
-      const visible = q ? chapters.filter(ch => ch.filterText.includes(q)) : chapters;
+      let visible = q ? chapters.filter(ch => ch.filterText.includes(q)) : chapters;
+      if (state.sort === "name") {
+        visible = [...visible].sort((a, b) => a.title.localeCompare(b.title));
+      } else if (state.sort === "status") {
+        visible = [...visible].sort((a, b) => (a.status || "zz").localeCompare(b.status || "zz") || a.number - b.number);
+      }
       $("book").innerHTML = visible.map(ch => tpl(ch)).join("") || `<div class="empty">No chapters match the filter.</div>`;
       $("toc").innerHTML = renderToc(visible);
       attachSectionRouteHandlers();
+      attachCopyHandlers();
+      clearViewStateClasses();
       drawCharts(legacy, tasks);
+      applyViewState();
       applyRoute();
     }
     function renderEvents(events) {
@@ -1184,8 +1358,12 @@
     }
     function applyRoute() {
       const params = new URLSearchParams(window.location.search);
+      applyParamsToState(params);
       const chapterId = params.get("chapter") || params.get("id");
-      if (!chapterId) return;
+      if (!chapterId) {
+        syncRouteFromViewport();
+        return;
+      }
       const chapter = document.getElementById(chapterId);
       if (!chapter) return;
       state.routeApplying = true;
@@ -1231,6 +1409,32 @@
         });
       });
     }
+    function attachCopyHandlers() {
+      document.querySelectorAll("[data-copy-chapter]").forEach(button => {
+        button.addEventListener("click", () => {
+          const chapter = document.getElementById(button.dataset.copyChapter);
+          updateRoute(chapter, sectionAtViewport(chapter));
+          copyCurrentUrl(button);
+        });
+      });
+      document.querySelectorAll("[data-copy-section]").forEach(button => {
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const section = button.closest(".md-section");
+          const chapter = button.closest(".chapter");
+          if (section) section.open = true;
+          updateRoute(chapter, section);
+          copyCurrentUrl(button);
+        });
+      });
+    }
+    function copyCurrentUrl(button) {
+      navigator.clipboard?.writeText(window.location.href).catch(() => {});
+      const old = button.textContent;
+      button.textContent = "Copied";
+      setTimeout(() => { button.textContent = old; }, 900);
+    }
     function chapterAtViewport() {
       const marker = Math.min(window.innerHeight * 0.35, 260);
       const chapters = [...document.querySelectorAll(".chapter")];
@@ -1256,8 +1460,10 @@
     }
     function updateRoute(chapter, section = null) {
       if (!chapter) return;
+      markActiveToc(chapter);
       const params = new URLSearchParams(window.location.search);
       params.set("chapter", chapter.id);
+      writeStateToParams(params);
       const candidateSection = section || sectionAtViewport(chapter);
       const activeSection = candidateSection?.open ? candidateSection : null;
       if (activeSection?.dataset.sectionSlug) {
@@ -1295,15 +1501,85 @@
     }
     function applyFilter() {
       state.filter = $("filter").value.trim().toLowerCase();
+      state.mode = $("mode").value;
+      state.focus = $("focus").value;
+      state.hide = $("hide").value;
+      state.sort = $("sort").value;
+      const params = new URLSearchParams(window.location.search);
+      writeStateToParams(params);
+      const chapter = chapterAtViewport();
+      if (chapter) params.set("chapter", chapter.id);
+      const next = `${window.location.pathname}?${params.toString()}`;
+      history.replaceState(null, "", next);
       buildBook();
     }
+    function applyParamsToState(params) {
+      state.filter = params.get("filter") || state.filter || "";
+      state.mode = params.get("mode") || state.mode || "book";
+      state.focus = params.get("focus") || "";
+      state.hide = params.get("hide") || "";
+      state.sort = params.get("sort") || state.sort || "timeline";
+      $("filter").value = state.filter;
+      $("mode").value = state.mode;
+      $("focus").value = state.focus;
+      $("hide").value = state.hide;
+      $("sort").value = state.sort;
+      applyViewState();
+    }
+    function writeStateToParams(params) {
+      const entries = [
+        ["filter", state.filter],
+        ["mode", state.mode !== "book" ? state.mode : ""],
+        ["focus", state.focus],
+        ["hide", state.hide],
+        ["sort", state.sort !== "timeline" ? state.sort : ""],
+      ];
+      for (const [key, value] of entries) {
+        if (value) params.set(key, value);
+        else params.delete(key);
+      }
+    }
+    function applyViewState() {
+      clearViewStateClasses();
+      document.body.classList.toggle("mode-compare", state.mode === "compare");
+      document.body.classList.toggle("mode-platform", state.mode === "platform");
+      document.body.classList.toggle("mode-runs", state.mode === "runs");
+      for (const name of ["prose", "charts", "tables", "evidence"]) {
+        document.body.classList.toggle(`focus-${name}`, state.focus === name);
+      }
+      for (const name of ["prose", "charts", "tables", "events", "evidence"]) {
+        document.body.classList.toggle(`hide-${name}`, state.hide.split(",").includes(name));
+      }
+      document.documentElement.classList.toggle("print-view", new URLSearchParams(window.location.search).get("print") === "1");
+    }
+    function clearViewStateClasses() {
+      document.body.classList.remove(
+        "mode-compare", "mode-platform", "mode-runs",
+        "focus-prose", "focus-charts", "focus-tables", "focus-evidence",
+        "hide-prose", "hide-charts", "hide-tables", "hide-events", "hide-evidence"
+      );
+    }
+    function markActiveToc(chapter) {
+      if (!chapter) return;
+      document.querySelectorAll(".toc a").forEach(a => {
+        a.classList.toggle("active", a.getAttribute("href") === `#${chapter.id}`);
+      });
+    }
     $("filter").addEventListener("input", applyFilter);
+    $("mode").addEventListener("change", applyFilter);
+    $("focus").addEventListener("change", applyFilter);
+    $("hide").addEventListener("change", applyFilter);
+    $("sort").addEventListener("change", applyFilter);
     window.addEventListener("scroll", scheduleRouteSync, { passive: true });
     window.addEventListener("popstate", applyRoute);
-    $("refresh").addEventListener("click", () => getAll().then(buildBook).catch(err => {
+    function buildFromUrl() {
+      applyParamsToState(new URLSearchParams(window.location.search));
+      buildBook();
+    }
+    $("refresh").addEventListener("click", () => getAll().then(buildFromUrl).catch(err => {
       $("load-meta").textContent = `Load failed: ${err.message}`;
     }));
-    getAll().then(buildBook).catch(err => {
+    getAll().then(buildFromUrl).catch(err => {
       $("load-meta").textContent = `Load failed: ${err.message}`;
     });
   </script>
