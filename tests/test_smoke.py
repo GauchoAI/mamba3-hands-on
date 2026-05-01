@@ -119,5 +119,27 @@ class ActiveExperimentSmokeTests(unittest.TestCase):
             self.assertTrue((checkpoint_dir / "student.pt").exists())
 
 
+class StackOperatorSmokeTests(unittest.TestCase):
+    active_dir = ROOT / "experiments" / "11_stack_operator_transfer"
+
+    def test_stack_operator_one_minute_smoke(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_cmd(
+                str(self.active_dir / "stack_operator.py"),
+                "--epochs",
+                "150",
+                "--trials",
+                "20",
+                "--out-dir",
+                tmp,
+                timeout=60.0,
+            )
+            payload = json.loads(result.stdout)
+            self.assertTrue(payload["one_minute_rule"])
+            self.assertGreaterEqual(payload["heldout_state_acc"], 0.98)
+            self.assertLess(payload["elapsed_s"], 60.0)
+            self.assertTrue((Path(tmp) / "stack_operator.pt").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

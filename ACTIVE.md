@@ -3,11 +3,12 @@
 The current daily-driver experiment is:
 
 ```text
-experiments/10_jepa_structured/
+experiments/11_stack_operator_transfer/
 ```
 
-This is the only supported active route. Top-level numbered experiment
-directories are intentionally not duplicated.
+This is the supported active research route after the long-training pause. The
+old structured-data JEPA route remains in `experiments/10_jepa_structured/` for
+reference and smoke coverage, but it is not the current daily driver.
 
 ## Commands
 
@@ -23,25 +24,20 @@ Editable install exposes the `lab` CLI and utility commands such as
 `lab-kappa-pack` and `lab-book`.
 
 ```bash
+.venv/bin/python experiments/11_stack_operator_transfer/stack_operator.py
+```
+
+Fast one-minute smoke:
+
+```bash
+.venv/bin/python experiments/11_stack_operator_transfer/stack_operator.py \
+  --epochs 150 --trials 20
+```
+
+The previous JEPA route can still be inspected:
+
+```bash
 .venv/bin/python experiments/10_jepa_structured/orchestrator.py status
-```
-
-Generate curriculum examples:
-
-```bash
-AWS_PROFILE=cc .venv/bin/python experiments/10_jepa_structured/orchestrator.py gen --daemon --order topo
-```
-
-Train continuously:
-
-```bash
-.venv/bin/python experiments/10_jepa_structured/orchestrator.py train --continuous --order topo
-```
-
-Run a bounded training smoke pass:
-
-```bash
-.venv/bin/python experiments/10_jepa_structured/orchestrator.py train --order topo --limit 1 --steps-per-tile 1 --batch-size 1
 ```
 
 Open the chapter-style dashboard:
