@@ -589,3 +589,101 @@ policies are learning from whole-game states, the evaluation is full legal
 games, and the failure mode is now visible. The trace generator overproduces
 endgames, so the next iteration should balance phases and include stronger
 opening/middlegame traces.
+
+### Iteration 12 - larger balanced full-game traces
+
+Implemented a larger and more diverse trace curriculum:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_full_game_trace_arena.py \
+  --balanced-traces \
+  --diverse-starts \
+  --teacher-games 420 \
+  --teacher-max-plies 140 \
+  --max-trace-cases 18000 \
+  --teacher-temperature 0.12 \
+  --games 48 \
+  --max-plies 260 \
+  --opening-plies 4 \
+  --max-opening-plies 20 \
+  --jepa-pairs 18000 \
+  --jepa-val-pairs 1800 \
+  --jepa-epochs 42 \
+  --policy-epochs 180 \
+  --batch-size 768 \
+  --freeze-encoder
+```
+
+The important change is not only "more epochs." The trace collector now supports
+balanced phase quotas and diverse warm-up starts. The previous trace set was
+dominated by endgames:
+
+```text
+previous: 9,000 traces
+opening: 725
+middlegame: 961
+endgame: 7,314
+```
+
+The new trace set is balanced:
+
+```text
+new: 18,000 traces
+opening: 6,000
+middlegame: 6,000
+endgame: 6,000
+```
+
+Training and benchmark scale:
+
+```text
+trace cases: 9,000 -> 18,000
+teacher games: 180 -> 420
+teacher max plies: 120 -> 140
+JEPA pairs: 12,000 -> 18,000
+JEPA epochs: 32 -> 42
+policy epochs: 120 -> 180
+benchmark games: 32 -> 48
+max plies per game: 240 -> 260
+```
+
+Result:
+
+```text
+games: 48
+direct_full_trace wins: 16
+JEPA_full_trace wins: 8
+draws: 24
+decisive games: 24
+average plies: 84.12
+checkmates: 24
+claimable draws: 24
+```
+
+JEPA bridge pretrain:
+
+```text
+held-out cosine: 0.999320
+nearest-neighbor top1: 0.4667
+nearest-neighbor top5: 0.9950
+```
+
+Interpretation:
+
+The diversity worked: the benchmark stayed at a 50 percent decisive-game rate
+while doubling trace coverage and balancing all phases. But the winner changed.
+With the balanced curriculum, the direct full-trace policy beat the frozen-JEPA
+policy:
+
+```text
+direct_full_trace: 16 wins
+JEPA_full_trace: 8 wins
+draws: 24
+```
+
+This suggests the frozen JEPA encoder is useful, but not automatically better
+when the policy task becomes broader. The direct policy may be using the richer
+opening and middlegame labels more easily, while the frozen JEPA representation
+was trained only as a transition bridge. The next fair test is to unfreeze the
+JEPA encoder during full-game policy training or add a value head trained on
+game outcome.

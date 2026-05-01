@@ -111,19 +111,56 @@ def teacher_move(board: chess.Board, seen: dict[str, int], rng: random.Random, t
 def generate_trace_cases(args) -> list[TraceCase]:
     rng = random.Random(args.seed)
     cases: list[TraceCase] = []
+    seen_cases: set[tuple[str, str]] = set()
     for game_idx in range(args.teacher_games):
-        board = warmup_board(args.seed + game_idx, args.opening_plies)
+        opening_plies = rng.randint(0, args.max_opening_plies) if args.diverse_starts else args.opening_plies
+        board = warmup_board(args.seed + game_idx, opening_plies)
         seen = {" ".join(board.fen().split(" ")[:4]): 1}
         for ply in range(args.teacher_max_plies):
             if board.is_game_over(claim_draw=True):
                 break
             move = teacher_move(board, seen, rng, args.teacher_temperature)
-            cases.append(TraceCase(board.fen(), move.uci(), phase(board), ply))
+            key = (board.board_fen() + " " + ("w" if board.turn else "b"), move.uci())
+            if key not in seen_cases:
+                seen_cases.add(key)
+                cases.append(TraceCase(board.fen(), move.uci(), phase(board), ply))
             board.push(move)
-            key = " ".join(board.fen().split(" ")[:4])
-            seen[key] = seen.get(key, 0) + 1
+            position = " ".join(board.fen().split(" ")[:4])
+            seen[position] = seen.get(position, 0) + 1
             if len(cases) >= args.max_trace_cases:
                 return cases
+    return cases
+
+
+def generate_balanced_trace_cases(args) -> list[TraceCase]:
+    rng = random.Random(args.seed)
+    target = args.max_trace_cases // 3
+    targets = {"opening": target, "middlegame": target, "endgame": args.max_trace_cases - 2 * target}
+    buckets: dict[str, list[TraceCase]] = {"opening": [], "middlegame": [], "endgame": []}
+    seen_cases: set[tuple[str, str]] = set()
+    attempts = 0
+    max_attempts = args.teacher_games * 6
+    while attempts < max_attempts and any(len(buckets[name]) < targets[name] for name in buckets):
+        attempts += 1
+        opening_plies = rng.randint(0, args.max_opening_plies)
+        board = warmup_board(args.seed + 10_000 + attempts, opening_plies)
+        seen = {" ".join(board.fen().split(" ")[:4]): 1}
+        for ply in range(args.teacher_max_plies):
+            if board.is_game_over(claim_draw=True):
+                break
+            move = teacher_move(board, seen, rng, args.teacher_temperature)
+            current_phase = phase(board)
+            key = (board.board_fen() + " " + ("w" if board.turn else "b"), move.uci())
+            if len(buckets[current_phase]) < targets[current_phase] and key not in seen_cases:
+                seen_cases.add(key)
+                buckets[current_phase].append(TraceCase(board.fen(), move.uci(), current_phase, ply))
+            board.push(move)
+            position = " ".join(board.fen().split(" ")[:4])
+            seen[position] = seen.get(position, 0) + 1
+            if all(len(buckets[name]) >= targets[name] for name in buckets):
+                break
+    cases = buckets["opening"] + buckets["middlegame"] + buckets["endgame"]
+    rng.shuffle(cases)
     return cases
 
 
@@ -213,6 +250,9 @@ def main() -> None:
     parser.add_argument("--teacher-max-plies", type=int, default=120)
     parser.add_argument("--max-trace-cases", type=int, default=9000)
     parser.add_argument("--teacher-temperature", type=float, default=0.08)
+    parser.add_argument("--balanced-traces", action="store_true")
+    parser.add_argument("--diverse-starts", action="store_true")
+    parser.add_argument("--max-opening-plies", type=int, default=18)
     parser.add_argument("--games", type=int, default=32)
     parser.add_argument("--max-plies", type=int, default=240)
     parser.add_argument("--opening-plies", type=int, default=4)
@@ -233,7 +273,7 @@ def main() -> None:
 
     t0 = time.time()
     dev = motif.device()
-    traces = generate_trace_cases(args)
+    traces = generate_balanced_trace_cases(args) if args.balanced_traces else generate_trace_cases(args)
     direct = Player("direct_full_trace", train_direct_policy(traces, args, dev), "motif")
     encoder, bridge_metrics = train_jepa_encoder(args, dev, args.seed)
     jepa_player = Player("jepa_full_trace", train_jepa_trace_policy(encoder, traces, args, dev), "jepa")

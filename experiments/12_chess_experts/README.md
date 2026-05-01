@@ -29,4 +29,5 @@ goal is to improve the chess expert itself.
 - Full game arena: train the experts harder, then make them play paired legal
   chess games with color swaps, anti-repetition pressure, and terminal scoring.
 - Full-game trace arena: train policies on generated full-game state/action
-  traces, then score them by complete legal games rather than tactical puzzles.
+  traces, optionally balance opening/middlegame/endgame coverage, then score
+  them by complete legal games rather than tactical puzzles.
