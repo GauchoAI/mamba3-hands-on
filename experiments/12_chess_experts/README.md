@@ -31,3 +31,5 @@ goal is to improve the chess expert itself.
 - Full-game trace arena: train policies on generated full-game state/action
   traces, optionally balance opening/middlegame/endgame coverage, then score
   them by trace imitation, tactical puzzles, and complete legal games.
+- Mixed curriculum arena: preserve the motif/direct policy lineage while adding
+  full-game, tactical, and multi-ply puzzle traces into one additive curriculum.

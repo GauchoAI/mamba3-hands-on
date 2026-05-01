@@ -13,6 +13,7 @@ import torch.nn.functional as F
 
 import chess_jepa_bridge as jepa
 import chess_motif_generalization as motif
+import chess_puzzle_sequence_arena as sequence
 from chess_competition_sweep import train_jepa_encoder
 from chess_full_game_arena import Player, material_score, play_game, warmup_board
 from chess_policy_arena import JepaPolicy
@@ -190,14 +191,44 @@ def build_training_traces(args) -> tuple[list[TraceCase], dict]:
         balanced = generate_balanced_trace_cases(args, balanced_cases)
     else:
         balanced = []
+    tactical = generate_tactical_trace_cases(args) if args.include_tactical_traces else []
+    multi_ply = generate_sequence_trace_cases(args) if args.include_sequence_traces else []
     if not base and not balanced:
         base = generate_trace_cases(args)
-    traces = dedupe_traces(base + balanced)
+    traces = dedupe_traces(base + balanced + tactical + multi_ply)
     return traces, {
         "base_unbalanced": trace_summary(base),
         "balanced": trace_summary(balanced),
+        "tactical_puzzles": trace_summary(tactical),
+        "multi_ply_puzzles": trace_summary(multi_ply),
         "combined": trace_summary(traces),
     }
+
+
+def generate_tactical_trace_cases(args) -> list[TraceCase]:
+    train_cases, _ = motif.generate_cases(args.tactical_trace_per_family, args.puzzle_val_per_family, args.seed + 120_000)
+    return [
+        TraceCase(case.fen, case.move_uci, f"tactical_{case.motif}", 0)
+        for case in train_cases
+    ]
+
+
+def generate_sequence_trace_cases(args) -> list[TraceCase]:
+    seq_args = argparse.Namespace(
+        seed=args.seed + 130_000,
+        train_per_family=max(args.puzzle_train_per_family, 384),
+        val_per_family=max(24, args.sequence_trace_puzzles // 4),
+        puzzles=args.sequence_trace_puzzles,
+    )
+    puzzles = sequence.build_two_step_puzzles(seq_args)
+    traces = []
+    for puzzle in puzzles:
+        board = chess.Board(puzzle.fen)
+        reply = chess.Move.from_uci(puzzle.line[0])
+        if reply in board.legal_moves:
+            board.push(reply)
+            traces.append(TraceCase(board.fen(), puzzle.line[1], f"sequence_{puzzle.motif}", 1))
+    return traces
 
 
 def train_direct_policy(cases: list[TraceCase], args, dev: str) -> motif.MateMLP:
@@ -256,7 +287,7 @@ def trace_summary(cases: list[TraceCase]) -> dict:
 
 
 def game_summary(games: list[dict]) -> dict:
-    wins = {"direct_full_trace": 0, "jepa_full_trace": 0, "draw": 0}
+    wins = {"motif_full_trace": 0, "jepa_full_trace": 0, "draw": 0}
     terminations: dict[str, int] = {}
     plies = 0
     for game in games:
@@ -267,10 +298,10 @@ def game_summary(games: list[dict]) -> dict:
             wins["draw"] += 1
         terminations[game["termination"]] = terminations.get(game["termination"], 0) + 1
         plies += game["plies"]
-    decisive = wins["direct_full_trace"] + wins["jepa_full_trace"]
+    decisive = wins["motif_full_trace"] + wins["jepa_full_trace"]
     return {
         "games": len(games),
-        "direct_full_trace_wins": wins["direct_full_trace"],
+        "motif_full_trace_wins": wins["motif_full_trace"],
         "jepa_full_trace_wins": wins["jepa_full_trace"],
         "draws": wins["draw"],
         "decisive_games": decisive,
@@ -363,6 +394,46 @@ def evaluate_tactical_puzzles(players: list[Player], args, dev: str) -> dict:
     return out
 
 
+def evaluate_sequence_puzzles(players: list[Player], args, dev: str) -> dict:
+    seq_args = argparse.Namespace(
+        seed=args.seed + 140_000,
+        train_per_family=max(args.puzzle_train_per_family, 384),
+        val_per_family=max(24, args.sequence_val_puzzles // 4),
+        puzzles=args.sequence_val_puzzles,
+    )
+    puzzles = sequence.build_two_step_puzzles(seq_args)
+    out = {}
+    for player in players:
+        solved = 0
+        by_family: dict[str, dict[str, int]] = {}
+        for puzzle in puzzles:
+            board = chess.Board(puzzle.fen)
+            reply = chess.Move.from_uci(puzzle.line[0])
+            if reply not in board.legal_moves:
+                ok = False
+            else:
+                board.push(reply)
+                predicted = legal_policy_move(player, board, dev)
+                board.push(predicted)
+                ok = board.is_checkmate()
+            solved += int(ok)
+            stats = by_family.setdefault(puzzle.motif, {"n": 0, "solved": 0})
+            stats["n"] += 1
+            stats["solved"] += int(ok)
+        out[player.name] = {
+            "puzzles": len(puzzles),
+            "solve_rate": round(solved / max(len(puzzles), 1), 4),
+            "by_family": {
+                name: {
+                    "n": stats["n"],
+                    "solve_rate": round(stats["solved"] / max(stats["n"], 1), 4),
+                }
+                for name, stats in by_family.items()
+            },
+        }
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=211)
@@ -378,6 +449,11 @@ def main() -> None:
     parser.add_argument("--val-trace-cases", type=int, default=1500)
     parser.add_argument("--puzzle-train-per-family", type=int, default=256)
     parser.add_argument("--puzzle-val-per-family", type=int, default=64)
+    parser.add_argument("--include-tactical-traces", action="store_true")
+    parser.add_argument("--tactical-trace-per-family", type=int, default=1024)
+    parser.add_argument("--include-sequence-traces", action="store_true")
+    parser.add_argument("--sequence-trace-puzzles", type=int, default=512)
+    parser.add_argument("--sequence-val-puzzles", type=int, default=96)
     parser.add_argument("--games", type=int, default=32)
     parser.add_argument("--max-plies", type=int, default=240)
     parser.add_argument("--opening-plies", type=int, default=4)
@@ -400,7 +476,7 @@ def main() -> None:
     dev = motif.device()
     traces, training_trace_summary = build_training_traces(args)
     val_traces = generate_balanced_trace_cases(args, args.val_trace_cases, seed_offset=80_000)
-    direct = Player("direct_full_trace", train_direct_policy(traces, args, dev), "motif")
+    direct = Player("motif_full_trace", train_direct_policy(traces, args, dev), "motif")
     encoder, bridge_metrics = train_jepa_encoder(args, dev, args.seed)
     jepa_player = Player("jepa_full_trace", train_jepa_trace_policy(encoder, traces, args, dev), "jepa")
     players = [direct, jepa_player]
@@ -437,6 +513,7 @@ def main() -> None:
         "metrics": {
             "heldout_trace_imitation": evaluate_trace_imitation(players, val_traces, dev),
             "heldout_tactical_puzzles": evaluate_tactical_puzzles(players, args, dev),
+            "heldout_multi_ply_puzzles": evaluate_sequence_puzzles(players, args, dev),
         },
         "jepa_bridge_pretrain": {
             "cosine_mean": round(float(bridge_metrics["cosine_mean"]), 6),

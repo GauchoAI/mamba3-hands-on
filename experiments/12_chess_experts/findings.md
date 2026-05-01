@@ -813,3 +813,136 @@ full-game traces
 
 That would preserve the puzzle-solving organ while continuing to improve
 full-game behavior.
+
+### Iteration 14 - mixed curriculum with motif lineage restored
+
+Implemented the mixed curriculum:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_full_game_trace_arena.py \
+  --additive-traces \
+  --balanced-traces \
+  --include-tactical-traces \
+  --include-sequence-traces \
+  --diverse-starts \
+  --teacher-games 360 \
+  --teacher-max-plies 140 \
+  --max-trace-cases 7000 \
+  --balanced-trace-cases 12000 \
+  --tactical-trace-per-family 768 \
+  --sequence-trace-puzzles 384 \
+  --teacher-temperature 0.14 \
+  --games 32 \
+  --max-plies 240 \
+  --opening-plies 4 \
+  --max-opening-plies 22 \
+  --jepa-pairs 16000 \
+  --jepa-val-pairs 1600 \
+  --jepa-epochs 38 \
+  --policy-epochs 150 \
+  --batch-size 768 \
+  --val-trace-cases 1500 \
+  --puzzle-val-per-family 80 \
+  --sequence-val-puzzles 96 \
+  --freeze-encoder
+```
+
+Naming correction:
+
+The old `motif` player did not disappear. In the full-game trace scripts it had
+been renamed to `direct_full_trace`, which made the lineage unclear. It is now
+reported as:
+
+```text
+motif_full_trace: direct board-feature MLP descended from the motif policy
+JEPA_full_trace:  frozen JEPA encoder plus policy head
+```
+
+Mixed training set:
+
+```text
+base full-game traces:       7,000
+balanced phase traces:      12,000
+tactical motif traces:       3,072
+multi-ply sequence traces:     384
+combined unique traces:     22,414
+```
+
+The tactical traces preserve the named motif families:
+
+```text
+tactical_back_rank_rook_queen: 768
+tactical_knight_corner:        768
+tactical_rook_side_file:       768
+tactical_queen_side_file:      768
+```
+
+Held-out trace imitation:
+
+```text
+motif_full_trace exact: 0.3127
+JEPA_full_trace exact:  0.2060
+```
+
+Held-out tactical puzzles:
+
+```text
+motif_full_trace legal mate rate: 0.9906
+JEPA_full_trace legal mate rate:  0.9625
+```
+
+Per motif, legal mate rate:
+
+```text
+back_rank_rook_queen: motif 0.9875, JEPA 0.9000
+queen_side_file:      motif 1.0000, JEPA 0.9750
+knight_corner:        motif 0.9875, JEPA 1.0000
+rook_side_file:       motif 0.9875, JEPA 0.9750
+```
+
+Held-out multi-ply puzzles:
+
+```text
+motif_full_trace solve rate: 0.9688
+JEPA_full_trace solve rate:  0.9583
+```
+
+Full-game result:
+
+```text
+games: 32
+motif_full_trace wins: 14
+JEPA_full_trace wins: 6
+draws: 12
+decisive games: 20
+average plies: 67.34
+checkmates: 20
+claimable draws: 12
+```
+
+JEPA bridge pretrain:
+
+```text
+held-out cosine: 0.999265
+nearest-neighbor top1: 0.5181
+nearest-neighbor top5: 0.9950
+```
+
+Interpretation:
+
+This is the first curriculum in the chapter that does what we wanted:
+
+```text
+full-game traces
++ balanced phase traces
++ tactical motif traces
++ multi-ply puzzle traces
+```
+
+The puzzle competence came back. The full-game arena stayed sharp. The direct
+motif-lineage policy is currently winning this mixed curriculum, while the JEPA
+policy remains close on puzzles but weaker on full games.
+
+This is also a cleaner answer to the "motif wins" question. The scoreboard
+should keep the word `motif` when referring to the direct specialist lineage,
+even when the policy is trained on more than motif data.
