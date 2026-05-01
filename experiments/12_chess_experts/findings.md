@@ -391,3 +391,98 @@ but the current arena is now close to saturated. The next benchmark should not
 just add more epochs. It should increase task hardness: longer forced lines,
 more distractor pieces, mixed motifs in one position, and adversarially mined
 failure cases.
+
+### Iteration 10 - full legal game arena
+
+Implemented:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_full_game_arena.py \
+  --games 24 \
+  --max-plies 220 \
+  --opening-plies 6 \
+  --train-per-family 1024 \
+  --max-train-per-family 1024 \
+  --policy-epochs 240 \
+  --jepa-epochs 30 \
+  --jepa-pairs 10000 \
+  --jepa-val-pairs 1000 \
+  --anti-repetition 2.0
+```
+
+This is the first full-game benchmark in this chapter. It is not a full chess
+engine yet. Both experts are still trained from generated tactical data, then
+forced to play complete legal games. The arena adds:
+
+```text
+paired starts with color swaps
+legal move masking for every move
+anti-repetition pressure
+checkmate detection
+draw detection
+material adjudication at the ply cap
+SAN move logs for every game
+```
+
+Training and benchmark scale increased again:
+
+```text
+training examples per motif: 256 -> 1,024
+total tactical policy examples: 1,024 -> 4,096
+JEPA bridge pairs: 2,400 -> 10,000
+JEPA bridge epochs: 18 -> 30
+policy epochs: 140 -> 240
+full games: 0 -> 24
+max plies per game: 220
+```
+
+Result:
+
+```text
+games: 24
+motif wins: 5
+JEPA wins: 4
+draws: 15
+average plies: 77.29
+checkmates: 6
+claimable draws: 15
+material adjudications: 3
+```
+
+JEPA bridge pretrain:
+
+```text
+held-out cosine: 0.998508
+nearest-neighbor top1: 0.5700
+nearest-neighbor top5: 0.9880
+```
+
+Example decisive game:
+
+```text
+start: rnbqkbnr/ppppp2p/6p1/5p1Q/1P2P3/8/P1PP1PPP/RNB1KBNR w KQkq - 0 4
+white: motif
+black: JEPA
+winner: JEPA by checkmate in 20 plies
+line: Nc3 gxh5 Nd1 fxe4 Be2 d5 Rb1 Qd7 Ra1 Qa4 Ba6 bxa6 Rb1 Bg4 Ra1 Nc6 h4 Nxb4 c4 Qxd1#
+```
+
+Interpretation:
+
+This is a major benchmark upgrade because the experts now have to survive a
+whole legal chess game instead of solving isolated mate positions. It also
+shows the current limitation clearly: full-game behavior is still brittle and
+draw-heavy. The experts know tactical move shapes, but they do not yet have a
+stable opening, middlegame, endgame, or anti-loop policy.
+
+The honest score is close:
+
+```text
+motif: 5 wins
+JEPA: 4 wins
+draw: 15
+```
+
+The next improvement should train on full-game state/action traces, not only
+mate-in-one motifs. The arena now exists, so future experts can be judged by
+game result rather than by tactical classification alone.

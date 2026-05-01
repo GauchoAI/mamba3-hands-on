@@ -26,3 +26,5 @@ goal is to improve the chess expert itself.
 - Competition sweep: compare motif-policy and frozen-JEPA-policy under
   increasing training budgets and multiple seeds to expose where one expert
   starts winning.
+- Full game arena: train the experts harder, then make them play paired legal
+  chess games with color swaps, anti-repetition pressure, and terminal scoring.
