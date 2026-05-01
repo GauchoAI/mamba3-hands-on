@@ -1,3 +1,10 @@
+---
+title: Kappa Architecture
+chapter: Infrastructure
+status: active
+summary: "Infrastructure context for {{firebase.mamba3Roots}} current /mamba3 roots, {{lab.schemas}} published schema groups, {{firebase.signals}} signal namespaces, and {{firebase.messages}} message namespace(s)."
+---
+
 # Kappa architecture for the Mamba-3 hands-on repo
 
 > **TL;DR.** Append-only logs are the source of truth. Materialized

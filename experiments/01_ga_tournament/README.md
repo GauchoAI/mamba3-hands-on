@@ -1,3 +1,10 @@
+---
+title: GA tournament
+chapter: "01"
+status: archival
+summary: "GA-era narrative paired with the current live task appendix: {{lab.tasksTracked}} tasks tracked, {{lab.mastered}} mastered, {{lab.workers}} workers, and {{lab.teachers}} teachers."
+---
+
 # Chapter 01 — GA tournament
 
 **Status:** archival.

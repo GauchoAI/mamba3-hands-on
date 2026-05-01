@@ -188,6 +188,17 @@
       margin: 18px 0;
       overflow-wrap: anywhere;
     }
+    .doc-frontmatter {
+      max-width: 860px;
+      border-left: 4px solid var(--accent);
+      background: #f2fbf8;
+      margin: 18px 0;
+      padding: 12px 14px;
+    }
+    .doc-frontmatter strong {
+      display: block;
+      margin-bottom: 4px;
+    }
     .prose h1, .prose h2, .prose h3 {
       font-family: var(--serif);
       margin: 20px 0 8px;
@@ -395,6 +406,7 @@
       { id: "cloud", title: "Cloud Archive", path: "docs/CLOUD_ARCHIVE.md", group: "architecture" },
       { id: "lab-run", title: "Lab Run and Book", path: "docs/LAB_RUN_AND_BOOK.md", group: "architecture" },
       { id: "schema", title: "Firebase Schema", path: "docs/EXPERIMENT_FIREBASE_SCHEMA.md", group: "architecture" },
+      { id: "event-catalog", title: "Event Catalog", path: "docs/EVENT_CATALOG.md", group: "architecture" },
       { id: "ui", title: "UI Vision", path: "docs/UI_VISION.md", group: "architecture" },
       { id: "signoff-kappa", title: "Kappa Signoff", path: "signoff/2026-04-30-kappa-architecture-and-widerN-experiment.md", group: "signoff" },
       { id: "signoff-bilingual", title: "Bilingual Harness Signoff", path: "signoff/2026-04-29-bilingual-five-tool-harness-and-honest-composition.md", group: "signoff" },
@@ -412,6 +424,11 @@
       taskSeries: {},
       bandwidth: {},
       mambaState: {},
+      mamba3RootKeys: {},
+      rawTeacherBlobKeys: {},
+      rootStreams: {},
+      signals: {},
+      messages: {},
       mambaExperiments: {},
       events: {},
       gpuHistory: {},
@@ -459,6 +476,11 @@
       if (!res.ok) throw new Error(`${path}: ${res.status}`);
       return await res.json();
     }
+    async function getShallow(path) {
+      const res = await fetch(`${FB}/${path}.json?shallow=true`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return await res.json();
+    }
     async function getText(path) {
       const res = await fetch(`/${path}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`${path}: ${res.status}`);
@@ -470,7 +492,7 @@
         snapshot, threePop, mambaExperiments, events, gpuHistory,
         nodes, teacherBlobs, experiments, streamsMeta, schemas,
         learningRate, mambaMeta, models, lineage, history, taskSeries,
-        bandwidth, mambaState
+        bandwidth, mambaState, mamba3RootKeys, rawTeacherBlobKeys, rootStreams, signals, messages
       ] = await Promise.all([
         get("mamba3/snapshot").catch(() => ({})),
         get("mamba3/three_pop").catch(() => ({})),
@@ -490,6 +512,11 @@
         get("mamba3/task_series").catch(() => ({})),
         get("mamba3/bandwidth").catch(() => ({})),
         get("mamba3/state").catch(() => ({})),
+        getShallow("mamba3").catch(() => ({})),
+        getShallow("mamba3/teacher_blobs").catch(() => ({})),
+        getShallow("streams").catch(() => ({})),
+        getShallow("signals").catch(() => ({})),
+        getShallow("messages").catch(() => ({})),
       ]);
       Object.assign(state, {
         snapshot: snapshot || {},
@@ -502,6 +529,11 @@
         taskSeries: taskSeries || {},
         bandwidth: bandwidth || {},
         mambaState: mambaState || {},
+        mamba3RootKeys: mamba3RootKeys || {},
+        rawTeacherBlobKeys: rawTeacherBlobKeys || {},
+        rootStreams: rootStreams || {},
+        signals: signals || {},
+        messages: messages || {},
         mambaExperiments: mambaExperiments || {},
         events: events || {},
         gpuHistory: gpuHistory || {},
@@ -545,11 +577,66 @@
     function canvas(id, small = false) {
       return `<div class="chart ${small ? "small" : ""}"><canvas id="${id}"></canvas></div>`;
     }
-    function md(path, maxChars = 6000) {
+    function parseFrontMatter(text) {
+      if (!text.startsWith("---\n")) return { attrs: {}, body: text };
+      const end = text.indexOf("\n---", 4);
+      if (end < 0) return { attrs: {}, body: text };
+      const raw = text.slice(4, end).trim();
+      const attrs = {};
+      for (const line of raw.split(/\r?\n/)) {
+        const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+        if (!match) continue;
+        let value = match[2].trim();
+        if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        attrs[match[1]] = value;
+      }
+      const bodyStart = text.indexOf("\n", end + 4);
+      return { attrs, body: bodyStart >= 0 ? text.slice(bodyStart + 1) : "" };
+    }
+    function templateContext(path, attrs = {}) {
+      const snapshot = state.snapshot || {};
+      const three = state.threePop || {};
+      const tasks = Object.entries(three.tasks || snapshot.tasks || {});
+      const mastered = tasks.filter(([, t]) => t?.status === "mastered" || Number(t?.best_accuracy ?? t?.acc ?? 0) >= 0.99);
+      return {
+        doc: { path, ...attrs },
+        lab: {
+          tasksTracked: tasks.length || (snapshot.leaderboard || []).length,
+          mastered: mastered.length,
+          workers: three.n_workers ?? snapshot.n_running ?? 0,
+          teachers: three.n_teachers ?? snapshot?.three_pop?.n_teachers ?? 0,
+          models: rows(state.models).length,
+          streams: flattenStreams().length,
+          labRuns: flattenExperimentRuns().length,
+          schemas: rows(state.schemas).length,
+        },
+        firebase: {
+          mamba3Roots: rows(state.mamba3RootKeys).length,
+          rawTeacherBlobTasks: rows(state.rawTeacherBlobKeys).length,
+          rootStreams: rows(state.rootStreams).length,
+          signals: rows(state.signals).length,
+          messages: rows(state.messages).length,
+        },
+      };
+    }
+    function renderTemplate(text, context) {
+      try {
+        return Handlebars.compile(text, { noEscape: true })(context);
+      } catch (err) {
+        return `${text}\n\n_Template error: ${err.message}_`;
+      }
+    }
+    function md(path) {
       const text = state.markdown[path] || "";
       if (!text) return `<div class="empty">Markdown source unavailable: ${esc(path)}</div>`;
-      const clipped = text.length > maxChars ? `${text.slice(0, maxChars)}\n\n...` : text;
-      return `<div class="prose">${marked.parse(clipped)}</div>`;
+      const parsed = parseFrontMatter(text);
+      const context = templateContext(path, parsed.attrs);
+      const summary = parsed.attrs.summary
+        ? `<div class="doc-frontmatter"><strong>${esc(parsed.attrs.title || "Chapter summary")}</strong>${esc(renderTemplate(parsed.attrs.summary, context))}</div>`
+        : "";
+      return `${summary}<div class="prose">${marked.parse(renderTemplate(parsed.body, context))}</div>`;
     }
     function sourceCards(sources) {
       return `<div class="source-list">${sources.map(src => `<div class="source-card"><div class="mono">${esc(src.path)}</div><strong>${esc(src.title)}</strong></div>`).join("")}</div>`;
@@ -695,7 +782,7 @@
 
       addChapter(chapters, "chapter-prologue", "Prologue: System State",
         "This opening chapter summarizes the whole lab using the current Firebase feed: task mastery, active workers, archive streams, nodes, and recent events.",
-        md("index.md", 7000) +
+        md("index.md") +
         statGrid([
           ["Tasks tracked", tasks.length || (snapshot.leaderboard || []).length],
           ["Mastered", mastered.length],
@@ -721,13 +808,13 @@
           return exp.id.includes(key) || key.includes(exp.id) || exp.id.includes(src.id);
         });
         const chartId = `chart-md-${src.id}`;
-        const finding = src.finding ? md(src.finding, 4500) : "";
+        const finding = src.finding ? md(src.finding) : "";
         const relatedPanel = relatedLegacy.length ? `<div class="grid-2"><div class="panel"><h3>Matching Firebase Records</h3>${table([
           { label: "Live Experiment" }, { label: "Best", cls: "right" }, { label: "Cycles", cls: "right" }
         ], relatedLegacy.map(exp => `<tr><td class="mono">${esc(exp.id)}</td><td class="right">${pct(exp.best_fresh)}</td><td class="right">${num(exp.cycles.length)}</td></tr>`))}</div><div class="panel"><h3>Best Fresh Curves</h3>${canvas(chartId, true)}</div></div>` : "";
         addChapter(chapters, `doc-${src.id}`, src.title,
           "Narrative material from the repository, paired with any matching live Firebase data.",
-          md(src.path, 9000) +
+          md(src.path) +
           relatedPanel +
           finding);
 
@@ -783,7 +870,7 @@
 
       addChapter(chapters, "chapter-lab-runs", "Lab Runs and Streams",
         "This chapter uses the newer `/experiments`, `/streams_meta`, and archive pointers written by the current Lab run facade. It keeps the schema stable while making Firebase and Hugging Face feel like one surface.",
-        md("docs/LAB_RUN_AND_BOOK.md", 4500) +
+        md("docs/LAB_RUN_AND_BOOK.md") +
         `<div class="panel">${table([
           { label: "Run" }, { label: "Kind" }, { label: "State" }, { label: "Started" }, { label: "Purpose" }
         ], runs.map(r => `<tr><td><div class="mono">${esc(r.experimentId)}</div><div class="mono">${esc(r.runId)}</div></td><td>${esc(r.kind)}</td><td><span class="pill ${r.meta.final_state === "completed" ? "good" : "warn"}">${esc(r.meta.final_state || r.status.state || "running")}</span></td><td>${esc(ts(r.meta.started_at))}</td><td>${esc(r.meta.purpose || r.hypothesis || "")}</td></tr>`))}</div>
@@ -796,7 +883,7 @@
 
       addChapter(chapters, "chapter-archive", "Archive",
         "The archive chapter uses existing `streams_meta` Hugging Face pointers and teacher blob metadata. It is intentionally v1-first; v2 sealed shard records can enrich this later.",
-        md("docs/CLOUD_ARCHIVE.md", 5000) +
+        md("docs/CLOUD_ARCHIVE.md") +
         `<div class="grid-2">
           <div class="panel"><h3>Hugging Face Stream Shards</h3>${renderArchive(streams)}</div>
           <div class="panel"><h3>Firebase Teacher Blob Manifests</h3>${renderTeacherBlobs()}</div>
@@ -805,7 +892,7 @@
 
       addChapter(chapters, "chapter-infrastructure", "Infrastructure",
         "Nodes, schemas, and protocol documents are part of the story because they explain why data appears where it does.",
-        md("docs/KAPPA_ARCHITECTURE.md", 5000) +
+        md("docs/KAPPA_ARCHITECTURE.md") +
         `<div class="grid-2">
           <div class="panel"><h3>Nodes</h3>${renderNodes(nodes)}</div>
           <div class="panel"><h3>Published Schemas</h3>${renderSchemas()}</div>
@@ -817,7 +904,9 @@
         <div class="grid-2">
           <div class="panel"><h3>Model Catalog Sizes</h3>${canvas("chart-model-sizes", true)}</div>
           <div class="panel"><h3>Learning Cycles to Mastery</h3>${canvas("chart-learning-cycles", true)}</div>
-        </div>`
+        </div>
+        <div class="panel"><h3>Firebase Surface Coverage</h3>${renderFirebaseSurface()}</div>
+        ${md("docs/EVENT_CATALOG.md")}`
       );
 
       const q = state.filter.trim().toLowerCase();
@@ -883,6 +972,24 @@
         ["Monthly est.", b.estimated_monthly_gb ? `${b.estimated_monthly_gb} GB` : ""],
         ["Limit", b.limit_gb ? `${b.limit_gb} GB` : ""],
       ]);
+    }
+    function renderFirebaseSurface() {
+      const usedMamba3 = [
+        "snapshot", "three_pop", "experiments", "events", "gpu_history", "nodes",
+        "teacher_blobs_meta", "learning_rate", "meta", "models", "lineage",
+        "history", "task_series", "bandwidth", "state",
+      ];
+      const surface = [
+        ["/mamba3 roots", rows(state.mamba3RootKeys).length, "Mapped", "Main live control plane used across the book."],
+        ["/mamba3/teacher_blobs", rows(state.rawTeacherBlobKeys).length, "Surfaced", "Raw teacher blob task keys are counted; compact metadata renders in Archive."],
+        ["/streams", rows(state.rootStreams).length, "Surfaced", "Root stream namespaces are counted; durable archive pointers render from /streams_meta."],
+        ["/signals", rows(state.signals).length, "Surfaced", "Signal namespaces are visible as integration surface, but not mixed into experiment chapters."],
+        ["/messages", rows(state.messages).length, "Surfaced", "Message namespaces are visible as integration surface, but not mixed into experiment chapters."],
+        ["Used /mamba3 paths", usedMamba3.length, "Rendered", usedMamba3.join(", ")],
+      ];
+      return table([
+        { label: "Firebase path" }, { label: "Records", cls: "right" }, { label: "Book use" }, { label: "Notes" }
+      ], surface.map(([path, count, status, notes]) => `<tr><td class="mono">${esc(path)}</td><td class="right">${num(count)}</td><td><span class="pill good">${esc(status)}</span></td><td>${esc(notes)}</td></tr>`));
     }
     function renderStreams(streams) {
       return table([

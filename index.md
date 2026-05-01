@@ -1,3 +1,10 @@
+---
+title: Repository Index
+chapter: Prologue
+status: living
+summary: "Live book context: {{lab.tasksTracked}} tasks tracked, {{lab.mastered}} mastered, {{lab.models}} model records, {{lab.streams}} archive streams, and {{lab.labRuns}} LabRun records are available from the current Firebase surface."
+---
+
 # Index — what ML lives in this repo, where, and how well it works
 
 This repo started April 20, 2026 — two days after the Mamba-3 paper

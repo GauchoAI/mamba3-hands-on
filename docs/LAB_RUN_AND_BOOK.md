@@ -1,3 +1,10 @@
+---
+title: Lab Run and Lab Book
+chapter: Platform
+status: active
+summary: "This chapter is rendered from markdown front matter plus live data: {{lab.labRuns}} LabRun records, {{lab.streams}} stream metadata records, and {{firebase.rootStreams}} root stream namespaces."
+---
+
 # Lab Run and Lab Book
 
 `LabRun` is the unified trainer API for live telemetry and archival. It keeps
@@ -60,4 +67,4 @@ packer verifies a Parquet shard on Hugging Face.
 Current data stays valid. Future readers should support both:
 
 - v1: `streams_meta/<experiment>/<run>/<stream>`
-- v2: `archive_v2/sealed_shards/...`
+- v2: `archive_v2/sealed_shards/{experiment_id}/{run_id}/{stream}/{shard_id}`
