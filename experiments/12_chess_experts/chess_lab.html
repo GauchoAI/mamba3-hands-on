@@ -1,0 +1,827 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chess Expert Lab</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #faf7f2;
+      --paper: #fffdf8;
+      --panel: #ffffff;
+      --ink: #191713;
+      --muted: #6f675d;
+      --line: #d8d0c4;
+      --soft: #f1eadf;
+      --accent: #0f766e;
+      --accent-2: #9a3412;
+      --good: #15803d;
+      --warn: #b45309;
+      --bad: #b91c1c;
+      --white-square: #f0d9b5;
+      --black-square: #b58863;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Georgia, "Times New Roman", serif;
+    }
+    html.dark {
+      color-scheme: dark;
+      --bg: #15130f;
+      --paper: #181510;
+      --panel: #211d18;
+      --ink: #fff8e8;
+      --muted: #c7bfb4;
+      --line: #50483e;
+      --soft: #2b261f;
+      --accent: #2dd4bf;
+      --accent-2: #f59e0b;
+      --good: #86efac;
+      --warn: #fbbf24;
+      --bad: #fca5a5;
+      --white-square: #d7bea0;
+      --black-square: #7c5738;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.45 var(--sans);
+    }
+    button, select, input {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--ink);
+      font: inherit;
+      min-width: 0;
+      padding: 9px 10px;
+    }
+    button {
+      cursor: pointer;
+      min-height: 38px;
+    }
+    button:hover, select:hover {
+      border-color: var(--accent);
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+      font-weight: 700;
+    }
+    button.icon {
+      align-items: center;
+      display: inline-grid;
+      font-size: 18px;
+      height: 38px;
+      justify-items: center;
+      padding: 0;
+      width: 42px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 300px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    aside {
+      background: var(--paper);
+      border-right: 1px solid var(--line);
+      height: 100vh;
+      overflow-y: auto;
+      padding: 24px 18px;
+      position: sticky;
+      top: 0;
+    }
+    main {
+      min-width: 0;
+      padding: 28px clamp(16px, 3vw, 44px) 64px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1, h2 {
+      font-family: var(--serif);
+      letter-spacing: 0;
+    }
+    h1 {
+      font-size: clamp(30px, 5vw, 56px);
+      line-height: .96;
+    }
+    h2 {
+      font-size: 24px;
+      margin-bottom: 12px;
+    }
+    h3 {
+      font-size: 14px;
+      margin-bottom: 9px;
+    }
+    .muted { color: var(--muted); }
+    .mono { font-family: var(--mono); }
+    .topbar {
+      align-items: start;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 16px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: end;
+    }
+    .nav {
+      display: grid;
+      gap: 6px;
+      margin-top: 24px;
+    }
+    .nav a {
+      border-left: 3px solid transparent;
+      color: var(--ink);
+      display: block;
+      padding: 8px 10px;
+      text-decoration: none;
+    }
+    .nav a.active, .nav a:hover {
+      background: var(--soft);
+      border-left-color: var(--accent);
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .grid {
+      display: grid;
+      gap: 14px;
+    }
+    .cards {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    .card-value {
+      font: 700 28px/1 var(--serif);
+      margin-top: 8px;
+    }
+    .card-label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .section {
+      display: grid;
+      gap: 14px;
+      margin: 26px 0 34px;
+    }
+    .metrics-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .chart-wrap {
+      height: 300px;
+      min-height: 300px;
+      position: relative;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 7px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    td.num, th.num {
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+    .game-layout {
+      align-items: start;
+      display: grid;
+      gap: 18px;
+      grid-template-columns: minmax(300px, 520px) minmax(280px, 1fr);
+    }
+    .board-wrap {
+      display: grid;
+      gap: 10px;
+    }
+    .board-shell {
+      aspect-ratio: 1 / 1;
+      border: 1px solid var(--line);
+      max-width: 520px;
+      width: 100%;
+    }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      height: 100%;
+      width: 100%;
+    }
+    .square {
+      align-items: center;
+      display: grid;
+      font-family: "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols2", serif;
+      font-size: clamp(28px, 6vw, 54px);
+      justify-items: center;
+      line-height: 1;
+      min-width: 0;
+      position: relative;
+      user-select: none;
+    }
+    .light { background: var(--white-square); }
+    .dark-square { background: var(--black-square); }
+    .square.last::after {
+      border: 4px solid rgba(15, 118, 110, .75);
+      content: "";
+      inset: 0;
+      pointer-events: none;
+      position: absolute;
+    }
+    .coord {
+      color: rgba(0, 0, 0, .55);
+      font: 700 10px/1 var(--sans);
+      left: 4px;
+      position: absolute;
+      top: 4px;
+    }
+    .controls {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(6, auto) minmax(110px, 1fr);
+    }
+    .move-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      max-height: 290px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .move-chip {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: var(--mono);
+      padding: 4px 6px;
+    }
+    .move-chip.active {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .game-list {
+      display: grid;
+      gap: 7px;
+      max-height: 440px;
+      overflow: auto;
+    }
+    .game-row {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      cursor: pointer;
+      display: grid;
+      gap: 3px;
+      padding: 10px;
+    }
+    .game-row.active {
+      border-color: var(--accent);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .badge {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      display: inline-block;
+      font-size: 12px;
+      padding: 3px 7px;
+    }
+    .good { color: var(--good); }
+    .warn { color: var(--warn); }
+    .bad { color: var(--bad); }
+    .source {
+      color: var(--muted);
+      font: 12px/1.5 var(--mono);
+      overflow-wrap: anywhere;
+    }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      aside {
+        height: auto;
+        position: static;
+      }
+      .cards, .metrics-grid, .game-layout {
+        grid-template-columns: 1fr;
+      }
+      .toolbar { justify-content: start; }
+      .topbar { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 560px) {
+      main { padding-inline: 12px; }
+      .controls {
+        grid-template-columns: repeat(6, 1fr);
+      }
+      .controls select {
+        grid-column: 1 / -1;
+      }
+      .square { font-size: 34px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <h2>Chess Lab</h2>
+      <p class="muted">Chapter 12 artifact explorer</p>
+      <div class="section">
+        <div class="panel">
+          <h3>Data Source</h3>
+          <select id="artifactSelect" title="Select artifact">
+            <option value="artifacts/chess_full_game_trace_arena_result.json">Mixed curriculum</option>
+            <option value="artifacts/chess_full_game_arena_result.json">Full-game arena</option>
+            <option value="artifacts/chess_competition_sweep_result.json">Competition sweep</option>
+            <option value="artifacts/chess_puzzle_sequence_arena_result.json">Multi-ply puzzles</option>
+          </select>
+          <p id="sourceMeta" class="source" style="margin-top:10px"></p>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Sections">
+        <a href="#overview" data-section="overview">Overview</a>
+        <a href="#metrics" data-section="metrics">Metrics</a>
+        <a href="#games" data-section="games">Game Replay</a>
+        <a href="#raw" data-section="raw">Raw Artifact</a>
+      </nav>
+    </aside>
+    <main>
+      <header class="topbar">
+        <div>
+          <h1>Chess Expert Lab</h1>
+          <p class="muted" style="margin-top:8px">Explore the motif-lineage and JEPA chess experts through the same artifacts used in the chapter.</p>
+        </div>
+        <div class="toolbar">
+          <button id="themeBtn" class="icon" title="Toggle theme">◐</button>
+          <button id="reloadBtn" title="Reload artifact">Reload</button>
+          <button id="copyLinkBtn" class="primary" title="Copy current view URL">Copy View</button>
+        </div>
+      </header>
+
+      <section id="overview" class="section">
+        <div>
+          <h2>Overview</h2>
+          <p id="scope" class="muted"></p>
+        </div>
+        <div id="summaryCards" class="grid cards"></div>
+        <div class="grid metrics-grid">
+          <div class="panel">
+            <h3>Training Mix</h3>
+            <div class="chart-wrap"><canvas id="traceChart"></canvas></div>
+          </div>
+          <div class="panel">
+            <h3>Full-Game Score</h3>
+            <div class="chart-wrap"><canvas id="scoreChart"></canvas></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="metrics" class="section">
+        <div>
+          <h2>Metrics</h2>
+          <p class="muted">Puzzle metrics keep the motif families visible while full-game score tracks complete legal games.</p>
+        </div>
+        <div class="grid metrics-grid">
+          <div class="panel">
+            <h3>Held-Out Trace Imitation</h3>
+            <div id="traceMetrics"></div>
+          </div>
+          <div class="panel">
+            <h3>Tactical Motif Puzzles</h3>
+            <div id="tacticalMetrics"></div>
+          </div>
+          <div class="panel">
+            <h3>Multi-Ply Puzzles</h3>
+            <div id="sequenceMetrics"></div>
+          </div>
+          <div class="panel">
+            <h3>JEPA Bridge</h3>
+            <div id="bridgeMetrics"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="games" class="section">
+        <div>
+          <h2>Game Replay</h2>
+          <p class="muted">Select a game, step through the SAN log, and compare motif-lineage versus JEPA behavior.</p>
+        </div>
+        <div class="game-layout">
+          <div class="board-wrap">
+            <div class="board-shell"><div id="board" class="board"></div></div>
+            <div class="controls">
+              <button id="firstBtn" class="icon" title="First position">⏮</button>
+              <button id="prevBtn" class="icon" title="Previous move">‹</button>
+              <button id="playBtn" class="icon" title="Play or pause">▶</button>
+              <button id="nextBtn" class="icon" title="Next move">›</button>
+              <button id="lastBtn" class="icon" title="Final position">⏭</button>
+              <button id="flipBtn" class="icon" title="Flip board">⇅</button>
+              <select id="gameSelect" title="Select game"></select>
+            </div>
+          </div>
+          <div class="grid">
+            <div class="panel">
+              <h3>Selected Game</h3>
+              <div id="gameInfo" class="source"></div>
+            </div>
+            <div class="panel">
+              <h3>Moves</h3>
+              <div id="moveList" class="move-list"></div>
+            </div>
+            <div class="panel">
+              <h3>Games</h3>
+              <div id="gameList" class="game-list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="raw" class="section">
+        <div>
+          <h2>Raw Artifact</h2>
+          <p class="muted">The current JSON artifact, trimmed only by the browser display.</p>
+        </div>
+        <pre id="rawJson" class="panel source" style="max-height:520px; overflow:auto"></pre>
+      </section>
+    </main>
+  </div>
+
+  <script type="module">
+    import { Chess as ChessCtor } from "https://cdn.jsdelivr.net/npm/chess.js@1.0.0/+esm";
+    const pieceMap = {
+      p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+      P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔"
+    };
+    const state = {
+      artifactPath: "artifacts/chess_full_game_trace_arena_result.json",
+      artifact: null,
+      charts: {},
+      selectedGame: 0,
+      ply: 0,
+      flipped: false,
+      timer: null
+    };
+
+    function pct(x) {
+      if (typeof x !== "number") return "—";
+      return `${(x * 100).toFixed(1)}%`;
+    }
+
+    function num(x) {
+      return Number.isFinite(x) ? x.toLocaleString() : "—";
+    }
+
+    function label(s) {
+      return String(s || "")
+        .replaceAll("_", " ")
+        .replace(/\b\w/g, c => c.toUpperCase());
+    }
+
+    function setQuery() {
+      const params = new URLSearchParams(location.search);
+      params.set("artifact", state.artifactPath);
+      params.set("game", String(state.selectedGame));
+      params.set("ply", String(state.ply));
+      history.replaceState(null, "", `${location.pathname}?${params.toString()}${location.hash || ""}`);
+    }
+
+    function readQuery() {
+      const params = new URLSearchParams(location.search);
+      if (params.get("artifact")) state.artifactPath = params.get("artifact");
+      if (params.get("game")) state.selectedGame = Math.max(0, parseInt(params.get("game"), 10) || 0);
+      if (params.get("ply")) state.ply = Math.max(0, parseInt(params.get("ply"), 10) || 0);
+    }
+
+    function destroyChart(id) {
+      if (state.charts[id]) {
+        state.charts[id].destroy();
+        delete state.charts[id];
+      }
+    }
+
+    function renderCards() {
+      const a = state.artifact;
+      const summary = a.summary || a.score || {};
+      const cards = [
+        ["Status", label(a.status)],
+        ["Training cases", a.trace_summary?.combined?.cases ?? a.trace_summary?.cases ?? a.positions ?? a.puzzles],
+        ["Games", summary.games],
+        ["Decisive", summary.decisive_games ?? ((summary.motif_wins || 0) + (summary.jepa_wins || 0) + (summary.motif_full_trace_wins || 0) + (summary.jepa_full_trace_wins || 0))]
+      ];
+      document.getElementById("summaryCards").innerHTML = cards.map(([k, v]) => `
+        <div class="panel">
+          <div class="card-label">${k}</div>
+          <div class="card-value">${typeof v === "number" ? num(v) : (v || "—")}</div>
+        </div>
+      `).join("");
+      document.getElementById("scope").textContent = a.scope || "";
+    }
+
+    function renderCharts() {
+      destroyChart("traceChart");
+      destroyChart("scoreChart");
+      const trace = state.artifact.trace_summary?.combined?.phases || state.artifact.trace_summary?.phases || {};
+      const traceLabels = Object.keys(trace);
+      const traceValues = Object.values(trace);
+      state.charts.traceChart = new Chart(document.getElementById("traceChart"), {
+        type: "bar",
+        data: {
+          labels: traceLabels.map(label),
+          datasets: [{ label: "Cases", data: traceValues, backgroundColor: "#0f766e" }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: { x: { ticks: { maxRotation: 45, minRotation: 0 } }, y: { beginAtZero: true } }
+        }
+      });
+
+      const s = state.artifact.summary || state.artifact.score || {};
+      const scoreItems = [
+        ["Motif", s.motif_full_trace_wins ?? s.motif_wins ?? s.motif_solved],
+        ["JEPA", s.jepa_full_trace_wins ?? s.jepa_wins ?? s.jepa_solved],
+        ["Draw", s.draws]
+      ].filter(([, v]) => typeof v === "number");
+      state.charts.scoreChart = new Chart(document.getElementById("scoreChart"), {
+        type: "doughnut",
+        data: {
+          labels: scoreItems.map(([k]) => k),
+          datasets: [{ data: scoreItems.map(([, v]) => v), backgroundColor: ["#9a3412", "#0f766e", "#8a8176"] }]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+      });
+    }
+
+    function table(rows, columns) {
+      if (!rows.length) return `<p class="muted">No data in this artifact.</p>`;
+      return `<table><thead><tr>${columns.map(c => `<th class="${c.num ? "num" : ""}">${c.name}</th>`).join("")}</tr></thead><tbody>${
+        rows.map(row => `<tr>${columns.map(c => `<td class="${c.num ? "num" : ""}">${c.render ? c.render(row) : row[c.key]}</td>`).join("")}</tr>`).join("")
+      }</tbody></table>`;
+    }
+
+    function renderMetrics() {
+      const m = state.artifact.metrics || {};
+      const traceRows = Object.entries(m.heldout_trace_imitation || {}).map(([name, data]) => ({
+        name,
+        exact: data.exact_move_rate,
+        opening: data.by_phase?.opening?.exact_move_rate,
+        middlegame: data.by_phase?.middlegame?.exact_move_rate,
+        endgame: data.by_phase?.endgame?.exact_move_rate
+      }));
+      document.getElementById("traceMetrics").innerHTML = table(traceRows, [
+        { name: "Policy", render: r => label(r.name) },
+        { name: "Exact", num: true, render: r => pct(r.exact) },
+        { name: "Opening", num: true, render: r => pct(r.opening) },
+        { name: "Mid", num: true, render: r => pct(r.middlegame) },
+        { name: "End", num: true, render: r => pct(r.endgame) }
+      ]);
+
+      const tacticalRows = [];
+      for (const [policy, data] of Object.entries(m.heldout_tactical_puzzles || {})) {
+        tacticalRows.push({ policy, family: "All", exact: data.exact_move_rate, mate: data.legal_mate_rate });
+        for (const [family, stats] of Object.entries(data.by_family || {})) {
+          tacticalRows.push({ policy, family, exact: stats.exact_move_rate, mate: stats.legal_mate_rate });
+        }
+      }
+      document.getElementById("tacticalMetrics").innerHTML = table(tacticalRows, [
+        { name: "Policy", render: r => label(r.policy) },
+        { name: "Motif", render: r => label(r.family) },
+        { name: "Exact", num: true, render: r => pct(r.exact) },
+        { name: "Mate", num: true, render: r => pct(r.mate) }
+      ]);
+
+      const seqRows = [];
+      for (const [policy, data] of Object.entries(m.heldout_multi_ply_puzzles || {})) {
+        seqRows.push({ policy, family: "All", solve: data.solve_rate });
+        for (const [family, stats] of Object.entries(data.by_family || {})) {
+          seqRows.push({ policy, family, solve: stats.solve_rate });
+        }
+      }
+      document.getElementById("sequenceMetrics").innerHTML = table(seqRows, [
+        { name: "Policy", render: r => label(r.policy) },
+        { name: "Family", render: r => label(r.family) },
+        { name: "Solved", num: true, render: r => pct(r.solve) }
+      ]);
+
+      const bridge = state.artifact.jepa_bridge_pretrain || {};
+      document.getElementById("bridgeMetrics").innerHTML = table(Object.entries(bridge).map(([k, v]) => ({ k, v })), [
+        { name: "Metric", render: r => label(r.k) },
+        { name: "Value", num: true, render: r => typeof r.v === "number" ? r.v.toFixed(4) : r.v }
+      ]);
+    }
+
+    function chessFromGame(game, ply) {
+      const chess = new ChessCtor(game.start_fen || undefined);
+      const moves = game.moves_san || [];
+      for (let i = 0; i < Math.min(ply, moves.length); i++) {
+        try { chess.move(moves[i]); } catch (err) { break; }
+      }
+      return chess;
+    }
+
+    function renderBoard() {
+      const games = state.artifact.games || [];
+      const game = games[state.selectedGame];
+      const boardEl = document.getElementById("board");
+      if (!game || !ChessCtor) {
+        boardEl.innerHTML = `<div class="square light">No game</div>`;
+        return;
+      }
+      const chess = chessFromGame(game, state.ply);
+      const board = chess.board();
+      const lastMove = state.ply > 0 ? findLastMoveSquares(game, state.ply) : [];
+      const ranks = state.flipped ? [...Array(8).keys()] : [...Array(8).keys()].reverse();
+      const files = state.flipped ? [...Array(8).keys()].reverse() : [...Array(8).keys()];
+      const filesText = "abcdefgh";
+      boardEl.innerHTML = ranks.map(rank => files.map(file => {
+        const piece = board[7 - rank][file];
+        const squareName = `${filesText[file]}${rank + 1}`;
+        const dark = (rank + file) % 2 === 1;
+        const mark = lastMove.includes(squareName) ? " last" : "";
+        return `<div class="square ${dark ? "dark-square" : "light"}${mark}">
+          <span class="coord">${squareName}</span>${piece ? pieceMap[piece.color === "w" ? piece.type.toUpperCase() : piece.type] : ""}
+        </div>`;
+      }).join("")).join("");
+    }
+
+    function findLastMoveSquares(game, ply) {
+      try {
+        const chess = new ChessCtor(game.start_fen || undefined);
+        let move = null;
+        for (let i = 0; i < Math.min(ply, game.moves_san.length); i++) {
+          move = chess.move(game.moves_san[i]);
+        }
+        return move ? [move.from, move.to] : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function renderGames() {
+      const games = state.artifact.games || [];
+      const select = document.getElementById("gameSelect");
+      select.innerHTML = games.map((g, i) => `<option value="${i}">Game ${i + 1}: ${g.white} vs ${g.black}</option>`).join("");
+      if (games.length) {
+        state.selectedGame = Math.min(state.selectedGame, games.length - 1);
+        select.value = String(state.selectedGame);
+      }
+      const game = games[state.selectedGame];
+      const maxPly = game?.moves_san?.length || 0;
+      state.ply = Math.min(state.ply, maxPly);
+
+      document.getElementById("gameInfo").innerHTML = game ? `
+        <div><strong>${label(game.white)}</strong> vs <strong>${label(game.black)}</strong></div>
+        <div>Winner: <span class="${game.winner === "draw" ? "warn" : "good"}">${label(game.winner)}</span></div>
+        <div>Termination: ${label(game.termination)} · Ply ${state.ply}/${maxPly}</div>
+        <div>Start: ${game.start_fen}</div>
+        <div>Final: ${game.final_fen}</div>
+      ` : "No game records in this artifact.";
+
+      document.getElementById("moveList").innerHTML = game ? game.moves_san.map((mv, i) => `
+        <button class="move-chip ${i + 1 === state.ply ? "active" : ""}" data-ply="${i + 1}">${i + 1}. ${mv}</button>
+      `).join("") : "";
+
+      document.getElementById("gameList").innerHTML = games.map((g, i) => `
+        <div class="game-row ${i === state.selectedGame ? "active" : ""}" data-game="${i}">
+          <div><strong>Game ${i + 1}</strong> <span class="badge">${label(g.termination)}</span></div>
+          <div class="muted">${label(g.white)} vs ${label(g.black)}</div>
+          <div>Winner: ${label(g.winner)} · ${g.plies} plies</div>
+        </div>
+      `).join("");
+      renderBoard();
+      setQuery();
+    }
+
+    function renderRaw() {
+      document.getElementById("rawJson").textContent = JSON.stringify(state.artifact, null, 2);
+    }
+
+    function renderAll() {
+      document.getElementById("sourceMeta").textContent = `${state.artifactPath} · elapsed ${state.artifact.elapsed_s ?? "?"}s`;
+      renderCards();
+      renderCharts();
+      renderMetrics();
+      renderGames();
+      renderRaw();
+      updateNav();
+    }
+
+    async function loadArtifact() {
+      document.getElementById("sourceMeta").textContent = `Loading ${state.artifactPath} ...`;
+      const response = await fetch(state.artifactPath, { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      state.artifact = await response.json();
+      renderAll();
+    }
+
+    function updateNav() {
+      const active = location.hash ? location.hash.slice(1) : "overview";
+      document.querySelectorAll(".nav a").forEach(a => a.classList.toggle("active", a.dataset.section === active));
+    }
+
+    function step(delta) {
+      const game = state.artifact?.games?.[state.selectedGame];
+      if (!game) return;
+      state.ply = Math.max(0, Math.min((game.moves_san || []).length, state.ply + delta));
+      renderGames();
+    }
+
+    function stopPlay() {
+      if (state.timer) clearInterval(state.timer);
+      state.timer = null;
+      document.getElementById("playBtn").textContent = "▶";
+    }
+
+    function togglePlay() {
+      if (state.timer) {
+        stopPlay();
+        return;
+      }
+      document.getElementById("playBtn").textContent = "Ⅱ";
+      state.timer = setInterval(() => {
+        const game = state.artifact?.games?.[state.selectedGame];
+        if (!game || state.ply >= game.moves_san.length) {
+          stopPlay();
+          return;
+        }
+        step(1);
+      }, 550);
+    }
+
+    document.getElementById("artifactSelect").addEventListener("change", event => {
+      state.artifactPath = event.target.value;
+      state.selectedGame = 0;
+      state.ply = 0;
+      stopPlay();
+      loadArtifact().catch(err => document.getElementById("sourceMeta").textContent = err.message);
+    });
+    document.getElementById("reloadBtn").addEventListener("click", () => loadArtifact());
+    document.getElementById("themeBtn").addEventListener("click", () => {
+      document.documentElement.classList.toggle("dark");
+      localStorage.setItem("chessLabTheme", document.documentElement.classList.contains("dark") ? "dark" : "light");
+    });
+    document.getElementById("copyLinkBtn").addEventListener("click", async () => {
+      setQuery();
+      await navigator.clipboard?.writeText(location.href);
+    });
+    document.getElementById("firstBtn").addEventListener("click", () => { state.ply = 0; renderGames(); });
+    document.getElementById("prevBtn").addEventListener("click", () => step(-1));
+    document.getElementById("playBtn").addEventListener("click", togglePlay);
+    document.getElementById("nextBtn").addEventListener("click", () => step(1));
+    document.getElementById("lastBtn").addEventListener("click", () => {
+      const game = state.artifact?.games?.[state.selectedGame];
+      state.ply = game?.moves_san?.length || 0;
+      renderGames();
+    });
+    document.getElementById("flipBtn").addEventListener("click", () => {
+      state.flipped = !state.flipped;
+      renderBoard();
+    });
+    document.getElementById("gameSelect").addEventListener("change", event => {
+      state.selectedGame = parseInt(event.target.value, 10) || 0;
+      state.ply = 0;
+      stopPlay();
+      renderGames();
+    });
+    document.getElementById("moveList").addEventListener("click", event => {
+      const btn = event.target.closest("[data-ply]");
+      if (!btn) return;
+      state.ply = parseInt(btn.dataset.ply, 10) || 0;
+      renderGames();
+    });
+    document.getElementById("gameList").addEventListener("click", event => {
+      const row = event.target.closest("[data-game]");
+      if (!row) return;
+      state.selectedGame = parseInt(row.dataset.game, 10) || 0;
+      state.ply = 0;
+      stopPlay();
+      renderGames();
+    });
+    window.addEventListener("hashchange", updateNav);
+
+    readQuery();
+    if (localStorage.getItem("chessLabTheme") === "dark") document.documentElement.classList.add("dark");
+    document.getElementById("artifactSelect").value = state.artifactPath;
+    if (!ChessCtor) {
+      document.getElementById("sourceMeta").textContent = "chess.js did not load; game replay is unavailable.";
+    }
+    loadArtifact().catch(err => {
+      document.getElementById("sourceMeta").textContent = `${err.message}. Serve this page with a local HTTP server if direct file loading is blocked.`;
+    });
+  </script>
+</body>
+</html>

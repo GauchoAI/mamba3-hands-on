@@ -946,3 +946,30 @@ policy remains close on puzzles but weaker on full games.
 This is also a cleaner answer to the "motif wins" question. The scoreboard
 should keep the word `motif` when referring to the direct specialist lineage,
 even when the policy is trained on more than motif data.
+
+## Artifact Playground
+
+Added a static `chess_lab.html` page for interactive inspection of the chapter
+artifacts.
+
+It exposes:
+
+```text
+curriculum mix
+held-out imitation metrics
+tactical motif metrics
+multi-ply puzzle metrics
+JEPA bridge metrics
+full-game replay with SAN stepping
+raw JSON inspection
+```
+
+The page is query-parametric enough to reproduce a view:
+
+```text
+chess_lab.html?artifact=artifacts/chess_full_game_trace_arena_result.json&game=0&ply=12#games
+```
+
+Browser verification used the mixed-curriculum artifact and confirmed that the
+JSON loads, the charts render, and the replay board reconstructs a selected SAN
+position.

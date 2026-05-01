@@ -11,6 +11,11 @@ summary: "Expert-only chess experiments: stronger specialists before reconnectin
 This chapter stays away from Phi and from any in-house language model. The
 goal is to improve the chess expert itself.
 
+## Playground
+
+- [Chess Expert Lab](./chess_lab.html): static artifact explorer for metrics,
+  curriculum mix, and full-game replay.
+
 ## Subsections
 
 - Teacher distillation adapter: use a UCI chess engine such as Stockfish as a
