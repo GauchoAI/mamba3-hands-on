@@ -1,0 +1,165 @@
+{
+  "status": "competitive_tactical_policy_arena",
+  "scope": "held-out mate-in-one positions, not full opening-to-endgame chess",
+  "device": "mps",
+  "elapsed_s": 5.655,
+  "positions": 96,
+  "config": {
+    "freeze_encoder": true,
+    "train_per_family": 384,
+    "val_per_family": 24,
+    "jepa_pairs": 1800,
+    "jepa_epochs": 14,
+    "policy_epochs": 140
+  },
+  "jepa_bridge_pretrain": {
+    "cosine_mean": 0.997997,
+    "nearest_neighbor_top1": 0.0833,
+    "nearest_neighbor_top5": 0.41
+  },
+  "score": {
+    "motif_wins": 1,
+    "jepa_wins": 0,
+    "ties_both_mate": 95,
+    "ties_both_fail": 0,
+    "motif_mate_rate": 1.0,
+    "jepa_policy_mate_rate": 0.9896
+  },
+  "by_family": {
+    "back_rank_rook_queen": {
+      "n": 24,
+      "motif_mate_rate": 1.0,
+      "jepa_policy_mate_rate": 0.9583,
+      "motif_wins": 1,
+      "jepa_wins": 0
+    },
+    "knight_corner": {
+      "n": 24,
+      "motif_mate_rate": 1.0,
+      "jepa_policy_mate_rate": 1.0,
+      "motif_wins": 0,
+      "jepa_wins": 0
+    },
+    "rook_side_file": {
+      "n": 24,
+      "motif_mate_rate": 1.0,
+      "jepa_policy_mate_rate": 1.0,
+      "motif_wins": 0,
+      "jepa_wins": 0
+    },
+    "queen_side_file": {
+      "n": 24,
+      "motif_mate_rate": 1.0,
+      "jepa_policy_mate_rate": 1.0,
+      "motif_wins": 0,
+      "jepa_wins": 0
+    }
+  },
+  "sample_rows": [
+    {
+      "motif": "back_rank_rook_queen",
+      "fen": "2k5/1ppp4/8/8/3P4/8/8/4R2K w - - 0 1",
+      "expected": "e1e8",
+      "all_mates": [
+        "e1e8"
+      ],
+      "motif_move": "e1e8",
+      "motif_mate": true,
+      "jepa_policy_move": "e1e8",
+      "jepa_policy_mate": true,
+      "outcome": "tie_both_mate"
+    },
+    {
+      "motif": "knight_corner",
+      "fen": "7K/8/8/8/2P5/4N3/pp3B2/kn6 w - - 0 1",
+      "expected": "e3c2",
+      "all_mates": [
+        "e3c2"
+      ],
+      "motif_move": "e3c2",
+      "motif_mate": true,
+      "jepa_policy_move": "e3c2",
+      "jepa_policy_mate": true,
+      "outcome": "tie_both_mate"
+    },
+    {
+      "motif": "knight_corner",
+      "fen": "7K/8/8/8/6B1/8/pp1N4/kn6 w - - 0 1",
+      "expected": "d2b3",
+      "all_mates": [
+        "d2b3"
+      ],
+      "motif_move": "d2b3",
+      "motif_mate": true,
+      "jepa_policy_move": "d2b3",
+      "jepa_policy_mate": true,
+      "outcome": "tie_both_mate"
+    },
+    {
+      "motif": "rook_side_file",
+      "fen": "R7/5B2/8/6p1/6pk/5bp1/8/K7 w - - 0 1",
+      "expected": "a8h8",
+      "all_mates": [
+        "a8h8"
+      ],
+      "motif_move": "a8h8",
+      "motif_mate": true,
+      "jepa_policy_move": "a8h8",
+      "jepa_policy_mate": true,
+      "outcome": "tie_both_mate"
+    },
+    {
+      "motif": "back_rank_rook_queen",
+      "fen": "5k2/4ppp1/8/8/7Q/2B5/P7/K7 w - - 0 1",
+      "expected": "h4h8",
+      "all_mates": [
+        "h4h8"
+      ],
+      "motif_move": "h4h8",
+      "motif_mate": true,
+      "jepa_policy_move": "h4h8",
+      "jepa_policy_mate": true,
+      "outcome": "tie_both_mate"
+    },
+    {
+      "motif": "rook_side_file",
+      "fen": "6R1/8/8/6p1/1b4pk/6p1/8/K7 w - - 0 1",
+      "expected": "g8h8",
+      "all_mates": [
+        "g8h8"
+      ],
+      "motif_move": "g8h8",
+      "motif_mate": true,
+      "jepa_policy_move": "g8h8",
+      "jepa_policy_mate": true,
+      "outcome": "tie_both_mate"
+    },
+    {
+      "motif": "knight_corner",
+      "fen": "K7/8/8/8/3p4/7B/4N1pp/6nk w - - 0 1",
+      "expected": "e2g3",
+      "all_mates": [
+        "e2g3"
+      ],
+      "motif_move": "e2g3",
+      "motif_mate": true,
+      "jepa_policy_move": "e2g3",
+      "jepa_policy_mate": true,
+      "outcome": "tie_both_mate"
+    },
+    {
+      "motif": "queen_side_file",
+      "fen": "8/4n3/pp6/kp4B1/1p6/8/6N1/1Q5K w - - 0 1",
+      "expected": "b1a1",
+      "all_mates": [
+        "b1a1",
+        "b1a2"
+      ],
+      "motif_move": "b1a1",
+      "motif_mate": true,
+      "jepa_policy_move": "b1a1",
+      "jepa_policy_mate": true,
+      "outcome": "tie_both_mate"
+    }
+  ]
+}

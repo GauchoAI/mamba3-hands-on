@@ -165,3 +165,54 @@ many games from varied starts
 The next step is to add a value or policy head on top of JEPA so it can choose
 moves. Then the adversarial arena can be real: motif-policy or distilled-policy
 versus JEPA-policy, scored by game result.
+
+### Iteration 6 - JEPA-backed policy arena
+
+Implemented:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_policy_arena.py --freeze-encoder --sample-rows 8
+```
+
+This adds the missing `expert(board) -> legal move` interface for JEPA:
+
+```text
+JEPA board encoder -> frozen latent -> policy head -> legal-masked move
+```
+
+The motif expert and JEPA-policy expert are then evaluated on the same held-out
+mate-in-one positions. This is still not full opening-to-endgame chess, but it
+is now a competitive tactical policy arena: each expert chooses a move, and the
+arena scores whether that move immediately checkmates.
+
+Result:
+
+```text
+positions: 96
+motif wins: 1
+JEPA-policy wins: 0
+ties, both mate: 95
+ties, both fail: 0
+motif mate rate: 1.0000
+JEPA-policy mate rate: 0.9896
+```
+
+Per-family:
+
+```text
+back_rank_rook_queen: motif 1.0000, JEPA-policy 0.9583
+knight_corner:        motif 1.0000, JEPA-policy 1.0000
+rook_side_file:       motif 1.0000, JEPA-policy 1.0000
+queen_side_file:      motif 1.0000, JEPA-policy 1.0000
+```
+
+Interpretation:
+
+The motif policy still wins narrowly on this tactical arena, but the frozen
+JEPA encoder plus a small policy head is already competitive. The key upgrade
+is architectural: JEPA is no longer only a transition model. It now has a move
+selection interface and can participate in adversarial policy benchmarks.
+
+The next step toward a true game benchmark is to train a value head or
+multi-ply policy and play many short games from tactical starts, scoring
+terminal win/loss/draw instead of only mate-in-one success.

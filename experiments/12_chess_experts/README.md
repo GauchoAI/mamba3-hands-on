@@ -18,3 +18,5 @@ goal is to improve the chess expert itself.
 - JEPA bridge: learn latent board dynamics without language.
 - Motif generalization: broaden the mate-in-one generator beyond a single
   back-rank family and evaluate per motif.
+- Policy arena: add a JEPA-backed policy head so the JEPA expert can choose
+  legal moves and compete against the motif policy on held-out tactical boards.
