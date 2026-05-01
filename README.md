@@ -16,6 +16,10 @@ For reusable platform imports, install the checkout in editable mode:
 .venv/bin/python -m pip install -e .
 ```
 
+This also installs the `mamba` CLI plus utility commands such as
+`mamba-kappa-pack`, `mamba-cluster-sync`, and
+`mamba-make-bilingual-corpus`.
+
 ## Chapters
 
 | # | Chapter | Status | Synopsis |

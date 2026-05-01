@@ -29,6 +29,13 @@ jepa_structured_data = [
 
 [project.scripts]
 mamba = "cli.main:main"
+mamba-kappa-pack = "mamba_platform.kappa_packer:main"
+mamba-session-archive = "mamba_platform.session_archiver:main"
+mamba-cluster-dispatch = "mamba_platform.cluster_dispatch:main"
+mamba-cluster-sync = "mamba_platform.cluster_sync:main"
+mamba-make-bilingual-corpus = "mamba_platform.make_bilingual_corpus:main"
+mamba-make-opensubtitles-corpus = "mamba_platform.make_opensubtitles_corpus:main"
+mamba-make-teacher-corpus = "mamba_platform.make_teacher_corpus:main"
 
 [tool.setuptools.packages.find]
 where = [".", "src"]

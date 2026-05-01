@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PYTHON = sys.executable
+
+
+def run_cmd(*args: str, timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [PYTHON, *args],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        check=True,
+    )
+
+
+class PackageSmokeTests(unittest.TestCase):
+    def test_platform_imports(self) -> None:
+        from mamba_platform.cortex_counting import CortexLMConfig
+        from mamba_platform.experiment_pusher import ExperimentPusher
+        from mamba_platform.mamba3_minimal import Mamba3Config
+
+        self.assertEqual(Mamba3Config().d_model, 64)
+        self.assertGreater(CortexLMConfig().d_model, 0)
+        self.assertTrue(callable(ExperimentPusher))
+
+    def test_module_clis_load(self) -> None:
+        checks = [
+            ("-m", "mamba_platform.kappa_packer", "--help"),
+            ("-m", "mamba_platform.stream_reader", "--help"),
+        ]
+        for args in checks:
+            with self.subTest(args=args):
+                result = run_cmd(*args)
+                self.assertIn("usage:", result.stdout)
+
+
+class ActiveExperimentSmokeTests(unittest.TestCase):
+    active_dir = ROOT / "experiments" / "10_jepa_structured"
+
+    def test_curriculum_and_status_load(self) -> None:
+        result = run_cmd(str(self.active_dir / "orchestrator.py"), "status")
+        self.assertIn("curriculum balance", result.stdout)
+        self.assertIn("tiles complete", result.stdout)
+
+    def test_registry_json_loads(self) -> None:
+        registry_path = self.active_dir / "state" / "registry.json"
+        registry = json.loads(registry_path.read_text())
+        self.assertIn("math.modular_arithmetic.addition_basic", registry)
+
+    def test_one_step_training_uses_temp_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "state"
+            checkpoint_dir = tmp_path / "checkpoints"
+            state_dir.mkdir()
+            checkpoint_dir.mkdir()
+
+            for name in ("registry.json", "daily_budget.json"):
+                src = self.active_dir / "state" / name
+                (state_dir / name).write_text(src.read_text())
+
+            result = run_cmd(
+                str(self.active_dir / "orchestrator.py"),
+                "--state-dir",
+                str(state_dir),
+                "--out",
+                str(self.active_dir / "data"),
+                "train",
+                "--order",
+                "topo",
+                "--limit",
+                "1",
+                "--steps-per-tile",
+                "1",
+                "--batch-size",
+                "1",
+                "--device",
+                "cpu",
+                "--checkpoints",
+                str(checkpoint_dir),
+                timeout=60.0,
+            )
+            self.assertIn("[train] math.modular_arithmetic.addition_basic", result.stdout)
+            self.assertTrue((checkpoint_dir / "student.pt").exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

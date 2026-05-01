@@ -19,6 +19,8 @@ Use the project virtualenv:
 
 The Makefile also exports `PYTHONPATH=src`, so the commands below work from a
 source checkout before installation.
+Editable install exposes the `mamba` CLI and utility commands such as
+`mamba-kappa-pack`.
 
 ```bash
 .venv/bin/python experiments/10_jepa_structured/orchestrator.py status

@@ -3,7 +3,7 @@ ACTIVE_EXP ?= experiments/10_jepa_structured
 ORCH := $(ACTIVE_EXP)/orchestrator.py
 export PYTHONPATH := src:$(PYTHONPATH)
 
-.PHONY: active-status active-gen active-train active-smoke
+.PHONY: active-status active-gen active-train active-smoke test
 
 active-status:
 	$(PYTHON) $(ORCH) status
@@ -16,3 +16,6 @@ active-train:
 
 active-smoke:
 	$(PYTHON) $(ORCH) train --order topo --limit 1 --steps-per-tile 1 --batch-size 1
+
+test:
+	$(PYTHON) -m unittest discover -s tests
