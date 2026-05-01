@@ -1,0 +1,36 @@
+[
+  {
+    "id": "run_phi_cold_composition",
+    "triggers": ["phi cold", "cold composition", "phi benchmark"],
+    "answer": "Run `.venv/bin/python experiments/11_phi_cold_composition/phi_natural_router.py`.",
+    "must_include": ["experiments/11_phi_cold_composition/phi_natural_router.py"]
+  },
+  {
+    "id": "request_priority_tile",
+    "triggers": [
+      "priority tile",
+      "priority queue",
+      "request tile",
+      "curriculum queue",
+      "story-to-state-machine"
+    ],
+    "answer": "Run `.venv/bin/python experiments/10_jepa_structured/orchestrator.py request language_bridge.story_to_state_machine`.",
+    "must_include": [
+      "experiments/10_jepa_structured/orchestrator.py",
+      "request",
+      "language_bridge.story_to_state_machine"
+    ]
+  },
+  {
+    "id": "active_experiment_status",
+    "triggers": ["active experiment", "active status", "current route"],
+    "answer": "Run `.venv/bin/python experiments/10_jepa_structured/orchestrator.py status`.",
+    "must_include": ["experiments/10_jepa_structured/orchestrator.py", "status"]
+  },
+  {
+    "id": "attach_cortex_primitive",
+    "triggers": ["attach primitive", "cortex primitive", "primitive to cortexlm"],
+    "answer": "Subclass `Primitive` from `src/lab_platform/cortex_counting.py` and pass it as `CortexLM(cfg, primitives=[primitive])`.",
+    "must_include": ["Primitive", "src/lab_platform/cortex_counting.py", "CortexLM"]
+  }
+]

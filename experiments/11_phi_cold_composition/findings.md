@@ -336,3 +336,63 @@ Phi hidden state can route a natural request to a small reasoning organ.
 The organ supplies exact output.
 Phi remains frozen and emits the answer.
 ```
+
+### Iteration 9 - runtime coding skill memory
+
+Added a second capability test: external repo-specific skills.
+
+Run:
+
+```bash
+.venv/bin/python experiments/11_phi_cold_composition/phi_skill_memory.py
+```
+
+Setup:
+
+```text
+frozen microsoft/Phi-3-mini-4k-instruct
+4 external repo skills from `repo_skills.json`
+Phi trainable params: 0
+```
+
+Result:
+
+```text
+baseline pass: 0/4
+skill-memory port pass: 4/4
+elapsed: 77.074s
+```
+
+Verbatim examples:
+
+```text
+Prompt:
+In this repo, how do I rerun the Phi cold composition benchmark?
+
+Baseline:
+To rerun the Phi cold composition benchmark, you typically need to follow a
+series of steps...
+
+Port:
+Run `.venv/bin/python experiments/11_phi_cold_composition/phi_natural_router.py`.
+```
+
+```text
+Prompt:
+How do I push the story-to-state-machine tile onto the priority queue?
+
+Baseline:
+...use the `push` method provided by the `PriorityQueue` class in Java.
+
+Port:
+Run `.venv/bin/python experiments/10_jepa_structured/orchestrator.py request language_bridge.story_to_state_machine`.
+```
+
+Interpretation:
+
+This is not a claim that Phi learned the repository in its weights. It proves a
+useful control-flow fact: frozen Phi can remain the text interface while a
+separate memory/skill organ supplies exact project knowledge at decode time.
+The before/after is visible: without the organ Phi hallucinates generic
+software guidance; with the organ it emits precise local commands and code
+references.

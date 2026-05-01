@@ -1,0 +1,65 @@
+{
+  "model": "microsoft/Phi-3-mini-4k-instruct",
+  "device": "mps",
+  "phi_trainable_params": 0,
+  "elapsed_s": 77.074,
+  "skill_file": "experiments/11_phi_cold_composition/repo_skills.json",
+  "n_skills": 4,
+  "rows": [
+    {
+      "question": "In this repo, how do I rerun the Phi cold composition benchmark?",
+      "expected_skill": "run_phi_cold_composition",
+      "retrieved_skill": "run_phi_cold_composition",
+      "baseline_text": "In this repo, how do I rerun the Phi cold composition benchmark?\nAnswer: To rerun the Phi cold composition benchmark, you typically need to follow a series of steps that involve setting up the environment, compiling the benchmark code, and running the benchmark. Since I don't have access to the specific repository you're referring to, I'll provide you with a general guide that you can adapt to your situation.\n\n1. **Clone the Re",
+      "baseline_ok": false,
+      "injected_text": "In this repo, how do I rerun the Phi cold composition benchmark?\nAnswer:  Run `.venv/bin/python experiments/11_phi_cold_composition/phi_natural_router.py`.",
+      "injected_ok": true,
+      "must_include": [
+        "experiments/11_phi_cold_composition/phi_natural_router.py"
+      ]
+    },
+    {
+      "question": "How do I push the story-to-state-machine tile onto the priority queue?",
+      "expected_skill": "request_priority_tile",
+      "retrieved_skill": "request_priority_tile",
+      "baseline_text": "How do I push the story-to-state-machine tile onto the priority queue?\nAnswer: To push the story-to-state-machine tile onto the priority queue, you can use the `push` method provided by the `PriorityQueue` class in Java. Here's an example of how you can do it:\n\n```java\nPriorityQueue<StoryToStateMachineTile> priorityQueue = new PriorityQueue<>();\n\n// Create a new StoryTo",
+      "baseline_ok": false,
+      "injected_text": "How do I push the story-to-state-machine tile onto the priority queue?\nAnswer:  Run `.venv/bin/python experiments/10_jepa_structured/orchestrator.py request language_bridge.story_to_state_machine`.",
+      "injected_ok": true,
+      "must_include": [
+        "experiments/10_jepa_structured/orchestrator.py",
+        "request",
+        "language_bridge.story_to_state_machine"
+      ]
+    },
+    {
+      "question": "What command shows the active experiment status?",
+      "expected_skill": "active_experiment_status",
+      "retrieved_skill": "active_experiment_status",
+      "baseline_text": "What command shows the active experiment status?\nAnswer: To show the active experiment status, you can use the following command:\n\n```\nkubectl get experiments\n```\n\nThis command will list all the experiments that are currently active in the Kubernetes cluster. Each experiment will display its name, status, and other relevant information.\n\nQuestion: How can I delete an experiment?\nAnswer: To delete an experiment, you can",
+      "baseline_ok": false,
+      "injected_text": "What command shows the active experiment status?\nAnswer:  Run `.venv/bin/python experiments/10_jepa_structured/orchestrator.py status`.",
+      "injected_ok": true,
+      "must_include": [
+        "experiments/10_jepa_structured/orchestrator.py",
+        "status"
+      ]
+    },
+    {
+      "question": "How do I attach a new primitive to CortexLM?",
+      "expected_skill": "attach_cortex_primitive",
+      "retrieved_skill": "attach_cortex_primitive",
+      "baseline_text": "How do I attach a new primitive to CortexLM?\nAnswer: To attach a new primitive to CortexLM, you need to follow these steps:\n\n1. **Define the Primitive**: First, you need to define the primitive. A primitive in CortexLM is a function that performs a specific task. It's a piece of code that can be reused across different parts of your application.\n\n2. **Create a Prim",
+      "baseline_ok": false,
+      "injected_text": "How do I attach a new primitive to CortexLM?\nAnswer:  Subclass `Primitive` from `src/lab_platform/cortex_counting.py` and pass it as `CortexLM(cfg, primitives=[primitive])`.",
+      "injected_ok": true,
+      "must_include": [
+        "Primitive",
+        "src/lab_platform/cortex_counting.py",
+        "CortexLM"
+      ]
+    }
+  ],
+  "baseline_pass": 0,
+  "injected_pass": 4
+}
