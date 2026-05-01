@@ -687,3 +687,129 @@ opening and middlegame labels more easily, while the frozen JEPA representation
 was trained only as a transition bridge. The next fair test is to unfreeze the
 JEPA encoder during full-game policy training or add a value head trained on
 game outcome.
+
+### Iteration 13 - additive traces and restored metrics
+
+Implemented an additive curriculum and restored explicit metrics:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_full_game_trace_arena.py \
+  --additive-traces \
+  --balanced-traces \
+  --diverse-starts \
+  --teacher-games 520 \
+  --teacher-max-plies 150 \
+  --max-trace-cases 9000 \
+  --balanced-trace-cases 18000 \
+  --teacher-temperature 0.14 \
+  --games 48 \
+  --max-plies 260 \
+  --opening-plies 4 \
+  --max-opening-plies 22 \
+  --jepa-pairs 22000 \
+  --jepa-val-pairs 2200 \
+  --jepa-epochs 46 \
+  --policy-epochs 190 \
+  --batch-size 768 \
+  --val-trace-cases 1800 \
+  --puzzle-val-per-family 80 \
+  --freeze-encoder
+```
+
+The previous balanced run replaced the old distribution. This run keeps the
+old-style unbalanced trace set and adds balanced traces on top:
+
+```text
+base unbalanced traces: 9,000
+balanced added traces: 18,000
+combined unique traces: 26,969
+```
+
+Combined phase mix:
+
+```text
+opening: 6,328
+middlegame: 6,897
+endgame: 13,744
+```
+
+Restored metrics:
+
+```text
+1. held-out full-game trace imitation
+2. held-out tactical puzzle exact move and legal mate rate
+3. full legal game score
+4. JEPA bridge retrieval metrics
+```
+
+Held-out trace imitation:
+
+```text
+direct_full_trace exact: 0.3183
+  opening:    0.4133
+  middlegame: 0.2917
+  endgame:    0.2500
+
+JEPA_full_trace exact: 0.2294
+  opening:    0.3017
+  middlegame: 0.1967
+  endgame:    0.1900
+```
+
+Held-out tactical puzzles:
+
+```text
+direct_full_trace legal mate rate: 0.0156
+JEPA_full_trace legal mate rate:   0.0125
+```
+
+Full-game result:
+
+```text
+games: 48
+direct_full_trace wins: 9
+JEPA_full_trace wins: 14
+draws: 25
+decisive games: 23
+average plies: 81.85
+checkmates: 23
+claimable draws: 24
+insufficient material: 1
+```
+
+JEPA bridge pretrain:
+
+```text
+held-out cosine: 0.999276
+nearest-neighbor top1: 0.4036
+nearest-neighbor top5: 0.9877
+```
+
+Interpretation:
+
+The additive set answers the curriculum question better. We did not replace
+the old data; we expanded it. The full-game result swung back toward the JEPA
+policy:
+
+```text
+JEPA_full_trace: 14 wins
+direct_full_trace: 9 wins
+draws: 25
+```
+
+But the restored metrics expose a weakness that the full-game score alone
+would hide: both full-game policies perform poorly on the old tactical puzzle
+benchmark. That means the full-game trace curriculum teaches general legal-game
+behavior, but it forgets specialized mate-in-one competence.
+
+The next curriculum should be mixed explicitly:
+
+```text
+full-game traces
++ balanced phase traces
++ tactical puzzle traces
++ multi-ply puzzle traces
+```
+
+That would preserve the puzzle-solving organ while continuing to improve
+full-game behavior.

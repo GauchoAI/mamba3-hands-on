@@ -108,13 +108,31 @@ def teacher_move(board: chess.Board, seen: dict[str, int], rng: random.Random, t
     return top[0][1]
 
 
-def generate_trace_cases(args) -> list[TraceCase]:
+def trace_key(case: TraceCase) -> tuple[str, str]:
+    board = chess.Board(case.fen)
+    return board.board_fen() + " " + ("w" if board.turn else "b"), case.move_uci
+
+
+def dedupe_traces(cases: list[TraceCase]) -> list[TraceCase]:
+    out = []
+    seen: set[tuple[str, str]] = set()
+    for case in cases:
+        key = trace_key(case)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(case)
+    return out
+
+
+def generate_trace_cases(args, max_cases: int | None = None, seed_offset: int = 0) -> list[TraceCase]:
     rng = random.Random(args.seed)
+    limit = max_cases or args.max_trace_cases
     cases: list[TraceCase] = []
     seen_cases: set[tuple[str, str]] = set()
     for game_idx in range(args.teacher_games):
         opening_plies = rng.randint(0, args.max_opening_plies) if args.diverse_starts else args.opening_plies
-        board = warmup_board(args.seed + game_idx, opening_plies)
+        board = warmup_board(args.seed + seed_offset + game_idx, opening_plies)
         seen = {" ".join(board.fen().split(" ")[:4]): 1}
         for ply in range(args.teacher_max_plies):
             if board.is_game_over(claim_draw=True):
@@ -127,15 +145,16 @@ def generate_trace_cases(args) -> list[TraceCase]:
             board.push(move)
             position = " ".join(board.fen().split(" ")[:4])
             seen[position] = seen.get(position, 0) + 1
-            if len(cases) >= args.max_trace_cases:
+            if len(cases) >= limit:
                 return cases
     return cases
 
 
-def generate_balanced_trace_cases(args) -> list[TraceCase]:
-    rng = random.Random(args.seed)
-    target = args.max_trace_cases // 3
-    targets = {"opening": target, "middlegame": target, "endgame": args.max_trace_cases - 2 * target}
+def generate_balanced_trace_cases(args, max_cases: int | None = None, seed_offset: int = 10_000) -> list[TraceCase]:
+    rng = random.Random(args.seed + seed_offset)
+    limit = max_cases or args.max_trace_cases
+    target = limit // 3
+    targets = {"opening": target, "middlegame": target, "endgame": limit - 2 * target}
     buckets: dict[str, list[TraceCase]] = {"opening": [], "middlegame": [], "endgame": []}
     seen_cases: set[tuple[str, str]] = set()
     attempts = 0
@@ -143,7 +162,7 @@ def generate_balanced_trace_cases(args) -> list[TraceCase]:
     while attempts < max_attempts and any(len(buckets[name]) < targets[name] for name in buckets):
         attempts += 1
         opening_plies = rng.randint(0, args.max_opening_plies)
-        board = warmup_board(args.seed + 10_000 + attempts, opening_plies)
+        board = warmup_board(args.seed + seed_offset + attempts, opening_plies)
         seen = {" ".join(board.fen().split(" ")[:4]): 1}
         for ply in range(args.teacher_max_plies):
             if board.is_game_over(claim_draw=True):
@@ -162,6 +181,23 @@ def generate_balanced_trace_cases(args) -> list[TraceCase]:
     cases = buckets["opening"] + buckets["middlegame"] + buckets["endgame"]
     rng.shuffle(cases)
     return cases
+
+
+def build_training_traces(args) -> tuple[list[TraceCase], dict]:
+    base = generate_trace_cases(args) if args.additive_traces else []
+    if args.balanced_traces:
+        balanced_cases = args.balanced_trace_cases or args.max_trace_cases
+        balanced = generate_balanced_trace_cases(args, balanced_cases)
+    else:
+        balanced = []
+    if not base and not balanced:
+        base = generate_trace_cases(args)
+    traces = dedupe_traces(base + balanced)
+    return traces, {
+        "base_unbalanced": trace_summary(base),
+        "balanced": trace_summary(balanced),
+        "combined": trace_summary(traces),
+    }
 
 
 def train_direct_policy(cases: list[TraceCase], args, dev: str) -> motif.MateMLP:
@@ -243,6 +279,90 @@ def game_summary(games: list[dict]) -> dict:
     }
 
 
+@torch.no_grad()
+def legal_policy_move(player: Player, board: chess.Board, dev: str) -> chess.Move:
+    if player.kind == "motif":
+        x = motif.board_features(board).unsqueeze(0).to(dev)
+        logits = player.model(x)[0].detach().cpu()
+    else:
+        x = jepa.board_to_tensor(board).unsqueeze(0).to(dev)
+        logits = player.model(x)[0].detach().cpu()
+    legal = list(board.legal_moves)
+    legal.sort(key=lambda move: float(logits[motif.move_class(move)]), reverse=True)
+    return legal[0]
+
+
+def evaluate_trace_imitation(players: list[Player], cases: list[TraceCase], dev: str) -> dict:
+    out = {}
+    for player in players:
+        total = 0
+        exact = 0
+        by_phase: dict[str, dict[str, int]] = {}
+        for case in cases:
+            board = chess.Board(case.fen)
+            predicted = legal_policy_move(player, board, dev)
+            expected = chess.Move.from_uci(case.move_uci)
+            total += 1
+            exact += int(predicted == expected)
+            phase_stats = by_phase.setdefault(case.phase, {"n": 0, "exact": 0})
+            phase_stats["n"] += 1
+            phase_stats["exact"] += int(predicted == expected)
+        out[player.name] = {
+            "cases": total,
+            "exact_move_rate": round(exact / max(total, 1), 4),
+            "by_phase": {
+                name: {
+                    "n": stats["n"],
+                    "exact_move_rate": round(stats["exact"] / max(stats["n"], 1), 4),
+                }
+                for name, stats in by_phase.items()
+            },
+        }
+    return out
+
+
+def is_mate_after(board: chess.Board, move: chess.Move) -> bool:
+    after = board.copy(stack=False)
+    after.push(move)
+    return after.is_checkmate()
+
+
+def evaluate_tactical_puzzles(players: list[Player], args, dev: str) -> dict:
+    _, val_cases = motif.generate_cases(args.puzzle_train_per_family, args.puzzle_val_per_family, args.seed + 90_000)
+    out = {}
+    for player in players:
+        total = 0
+        exact = 0
+        mate = 0
+        by_family: dict[str, dict[str, int]] = {}
+        for case in val_cases:
+            board = chess.Board(case.fen)
+            predicted = legal_policy_move(player, board, dev)
+            expected = chess.Move.from_uci(case.move_uci)
+            predicted_mate = is_mate_after(board, predicted)
+            total += 1
+            exact += int(predicted == expected)
+            mate += int(predicted_mate)
+            stats = by_family.setdefault(case.motif, {"n": 0, "exact": 0, "mate": 0})
+            stats["n"] += 1
+            stats["exact"] += int(predicted == expected)
+            stats["mate"] += int(predicted_mate)
+        out[player.name] = {
+            "cases": total,
+            "exact_move_rate": round(exact / max(total, 1), 4),
+            "legal_mate_rate": round(mate / max(total, 1), 4),
+            "by_family": {
+                name: {
+                    "n": stats["n"],
+                    "exact_move_rate": round(stats["exact"] / max(stats["n"], 1), 4),
+                    "legal_mate_rate": round(stats["mate"] / max(stats["n"], 1), 4),
+                }
+                for name, stats in by_family.items()
+            },
+        }
+    return out
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=211)
@@ -251,8 +371,13 @@ def main() -> None:
     parser.add_argument("--max-trace-cases", type=int, default=9000)
     parser.add_argument("--teacher-temperature", type=float, default=0.08)
     parser.add_argument("--balanced-traces", action="store_true")
+    parser.add_argument("--additive-traces", action="store_true")
+    parser.add_argument("--balanced-trace-cases", type=int, default=0)
     parser.add_argument("--diverse-starts", action="store_true")
     parser.add_argument("--max-opening-plies", type=int, default=18)
+    parser.add_argument("--val-trace-cases", type=int, default=1500)
+    parser.add_argument("--puzzle-train-per-family", type=int, default=256)
+    parser.add_argument("--puzzle-val-per-family", type=int, default=64)
     parser.add_argument("--games", type=int, default=32)
     parser.add_argument("--max-plies", type=int, default=240)
     parser.add_argument("--opening-plies", type=int, default=4)
@@ -273,10 +398,12 @@ def main() -> None:
 
     t0 = time.time()
     dev = motif.device()
-    traces = generate_balanced_trace_cases(args) if args.balanced_traces else generate_trace_cases(args)
+    traces, training_trace_summary = build_training_traces(args)
+    val_traces = generate_balanced_trace_cases(args, args.val_trace_cases, seed_offset=80_000)
     direct = Player("direct_full_trace", train_direct_policy(traces, args, dev), "motif")
     encoder, bridge_metrics = train_jepa_encoder(args, dev, args.seed)
     jepa_player = Player("jepa_full_trace", train_jepa_trace_policy(encoder, traces, args, dev), "jepa")
+    players = [direct, jepa_player]
 
     games = []
     for game_idx in range(args.games):
@@ -306,7 +433,11 @@ def main() -> None:
         "device": dev,
         "elapsed_s": round(time.time() - t0, 3),
         "config": vars(args),
-        "trace_summary": trace_summary(traces),
+        "trace_summary": training_trace_summary,
+        "metrics": {
+            "heldout_trace_imitation": evaluate_trace_imitation(players, val_traces, dev),
+            "heldout_tactical_puzzles": evaluate_tactical_puzzles(players, args, dev),
+        },
         "jepa_bridge_pretrain": {
             "cosine_mean": round(float(bridge_metrics["cosine_mean"]), 6),
             "nearest_neighbor_top1": round(float(bridge_metrics["nearest_neighbor_top1"]), 4),

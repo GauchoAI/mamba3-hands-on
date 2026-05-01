@@ -30,4 +30,4 @@ goal is to improve the chess expert itself.
   chess games with color swaps, anti-repetition pressure, and terminal scoring.
 - Full-game trace arena: train policies on generated full-game state/action
   traces, optionally balance opening/middlegame/endgame coverage, then score
-  them by complete legal games rather than tactical puzzles.
+  them by trace imitation, tactical puzzles, and complete legal games.
