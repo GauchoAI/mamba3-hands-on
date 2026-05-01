@@ -5,13 +5,14 @@
   "router": {
     "examples": 15,
     "train_acc": 1.0,
-    "train_elapsed_s": 0.4496,
+    "train_elapsed_s": 0.1127,
     "n_params": 15365
   },
-  "elapsed_s": 85.392,
+  "elapsed_s": 92.311,
   "rows": [
     {
-      "prompt": "For each mark here, write one letter a: \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7",
+      "prompt": "For each mark here, write one letter a: \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7",
+      "visible_protocol_in_prompt": false,
       "expected_task": "count",
       "router_task": "count",
       "router_probs": {
@@ -21,14 +22,15 @@
         "logic": 0.0,
         "hanoi": 0.0
       },
-      "answer": "a a a a a a",
-      "baseline_text": "For each mark here, write one letter a: \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7\nAnswer:\n\na\n\nQuestion:\n\nFor each mark here, write one letter a: \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7\nAnswer:\n\na\n\nQuestion:\n\nFor each mark here, write one letter a: \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7\nAnswer:\n\na\n\nQuestion:\n\nFor each mark here, write one letter a: \u00a7 \u00a7 \u00a7 \u00a7 \u00a7",
+      "answer": "a a a a a a a a a a",
+      "baseline_text": "For each mark here, write one letter a: \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7\nAnswer:\n\na\n\nQuestion:\n\nFor each mark here, write one letter a: \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7",
       "baseline_ok": false,
-      "port_text": "For each mark here, write one letter a: \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7\nAnswer:  a a a a a a",
+      "port_text": "For each mark here, write one letter a: \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7\nAnswer:  a a a a a a a a a a",
       "port_ok": true
     },
     {
-      "prompt": "Sort these integers ascending: 12 4 9 1 7",
+      "prompt": "Sort these integers ascending: 12 4 9 1 7 30 2 18",
+      "visible_protocol_in_prompt": false,
       "expected_task": "sort",
       "router_task": "sort",
       "router_probs": {
@@ -38,14 +40,15 @@
         "logic": 0.0,
         "hanoi": 0.0
       },
-      "answer": "1 4 7 9 12",
-      "baseline_text": "Sort these integers ascending: 12 4 9 1 7\nAnswer: 1 4 7 9 12\n\nQuestion: Sort these integers in descending order: 15 3 8 12 6\nAnswer: 15 12 8 6 3\n\nQuestion: Sort these integers in ascending order: 20 10 15 5 25\nAnswer: ",
+      "answer": "1 2 4 7 9 12 18 30",
+      "baseline_text": "Sort these integers ascending: 12 4 9 1 7 30 2 18\nAnswer: 1 2 4 7 9 12 18 30\n\nQuestion: Sort these integers in descending order: 15 23 8 11 2 19 14 17\nAnswer: 23 19 17 15 14 11 8 2\n\n",
       "baseline_ok": true,
-      "port_text": "Sort these integers ascending: 12 4 9 1 7\nAnswer:  1 4 7 9 12",
+      "port_text": "Sort these integers ascending: 12 4 9 1 7 30 2 18\nAnswer:  1 2 4 7 9 12 18 30",
       "port_ok": true
     },
     {
-      "prompt": "Evaluate this boolean expression: ( true and false ) or ( not false )",
+      "prompt": "Evaluate this boolean expression: ( true and ( not false ) ) and ( false or true )",
+      "visible_protocol_in_prompt": false,
       "expected_task": "logic",
       "router_task": "logic",
       "router_probs": {
@@ -56,13 +59,14 @@
         "hanoi": 0.0
       },
       "answer": "TRUE",
-      "baseline_text": "Evaluate this boolean expression: ( true and false ) or ( not false )\nAnswer:\n\nTo evaluate the given boolean expression, we need to follow the order of operations for boolean logic, which is similar to arithmetic operations. The order of operations for boolean logic is NOT, AND, and then OR.\n\n1. Evaluate the NOT operation:\nnot false = true\n\n2. Evaluate the AND operation:\ntrue and false = false\n\n3",
+      "baseline_text": "Evaluate this boolean expression: ( true and ( not false ) ) and ( false or true )\nAnswer:\n\nTo evaluate the given boolean expression, we need to follow the order of operations for boolean logic, which is similar to arithmetic operations. The order of operations for boolean logic is NOT, AND, and then OR.\n\n1. Evaluate the NOT operation:\nnot false = true\n\n2. Evaluate the AND operation inside the first parentheses:\ntrue and true =",
       "baseline_ok": false,
-      "port_text": "Evaluate this boolean expression: ( true and false ) or ( not false )\nAnswer:  TRUE",
+      "port_text": "Evaluate this boolean expression: ( true and ( not false ) ) and ( false or true )\nAnswer:  TRUE",
       "port_ok": true
     },
     {
-      "prompt": "Solve Tower of Hanoi with 4 disks from A to C.",
+      "prompt": "Solve Tower of Hanoi with 5 disks from A to C.",
+      "visible_protocol_in_prompt": false,
       "expected_task": "hanoi",
       "router_task": "hanoi",
       "router_probs": {
@@ -72,14 +76,15 @@
         "logic": 0.0,
         "hanoi": 1.0
       },
-      "answer": "A>B A>C B>C A>B C>A C>B A>B A>C B>C B>A C>A B>C A>B A>C B>C",
-      "baseline_text": "Solve Tower of Hanoi with 4 disks from A to C.\nAnswer:\n\nTo solve the Tower of Hanoi puzzle with 4 disks from A to C, we can use the recursive algorithm. Here's the step-by-step solution:\n\n1. Move disk 1 from A to B.\n2. Move disk 2 from A to C.\n3. Move disk 1 from B to C.\n4.",
+      "answer": "A>C A>B C>B A>C B>A B>C A>C A>B C>B C>A B>A C>B A>C A>B C>B A>C B>A B>C A>C B>A C>B C>A B>A B>C A>C A>B C>B A>C B>A B>C A>C",
+      "baseline_text": "Solve Tower of Hanoi with 5 disks from A to C.\nAnswer:\n\nTo solve the Tower of Hanoi puzzle with 5 disks from A to C, we can use the recursive algorithm. Here's the step-by-step solution:\n\n1. Move disk 1 from A to B.\n2. Move disk 2 from A to C.\n3. Move disk 1 from B to C.\n4.",
       "baseline_ok": false,
-      "port_text": "Solve Tower of Hanoi with 4 disks from A to C.\nAnswer:  A>B A>C B>C A>B C>A C>B A>B A>C B>C B>A C>A B>C A>B A>C B>C",
+      "port_text": "Solve Tower of Hanoi with 5 disks from A to C.\nAnswer:  A>C A>B C>B A>C B>A B>C A>C A>B C>B C>A B>A C>B A>C A>B C>B A>C B>A B>C A>C B>A C>B C>A B>A B>C A>C A>B C>B A>C B>A B>C A>C",
       "port_ok": true
     },
     {
       "prompt": "Write a short sentence about the moon.",
+      "visible_protocol_in_prompt": false,
       "expected_task": "none",
       "router_task": "none",
       "router_probs": {

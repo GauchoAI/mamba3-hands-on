@@ -169,15 +169,12 @@ def verify(task: str, prompt: str, text: str) -> bool:
 
 
 @torch.no_grad()
-def generate_with_answer_bias(model, tokenizer, prompt: str, answer: str, max_new: int, dev: str) -> str:
+def generate_with_answer_bias(model, tokenizer, prompt: str, answer: str, dev: str) -> str:
     ids = tokenizer(prompt + "\nAnswer:", return_tensors="pt").input_ids.to(dev)
     target = tokenizer.encode(" " + answer, add_special_tokens=False)
-    for i in range(min(max_new, len(target) + 4)):
+    for i in range(len(target)):
         logits = model(ids).logits[:, -1, :].clone()
-        if i < len(target):
-            logits[:, target[i]] += 90.0
-        else:
-            break
+        logits[:, target[i]] += 90.0
         nxt = torch.argmax(logits, dim=-1, keepdim=True)
         ids = torch.cat([ids, nxt], dim=1)
     return decode(ids, tokenizer)
@@ -191,10 +188,10 @@ class Case:
 
 def eval_cases() -> list[Case]:
     return [
-        Case("For each mark here, write one letter a: § § § § § §", "count"),
-        Case("Sort these integers ascending: 12 4 9 1 7", "sort"),
-        Case("Evaluate this boolean expression: ( true and false ) or ( not false )", "logic"),
-        Case("Solve Tower of Hanoi with 4 disks from A to C.", "hanoi"),
+        Case("For each mark here, write one letter a: § § § § § § § § § §", "count"),
+        Case("Sort these integers ascending: 12 4 9 1 7 30 2 18", "sort"),
+        Case("Evaluate this boolean expression: ( true and ( not false ) ) and ( false or true )", "logic"),
+        Case("Solve Tower of Hanoi with 5 disks from A to C.", "hanoi"),
         Case("Write a short sentence about the moon.", "none"),
     ]
 
@@ -223,9 +220,10 @@ def main() -> None:
         baseline = greedy(model, tokenizer, case.prompt + "\nAnswer:", args.max_new, dev)
         task, probs = classify(router, model, tokenizer, case.prompt, dev)
         answer = solve(task, case.prompt)
-        port_text = generate_with_answer_bias(model, tokenizer, case.prompt, answer, args.max_new, dev) if answer else baseline
+        port_text = generate_with_answer_bias(model, tokenizer, case.prompt, answer, dev) if answer else baseline
         rows.append({
             "prompt": case.prompt,
+            "visible_protocol_in_prompt": "<LAB:" in case.prompt,
             "expected_task": case.expected_task,
             "router_task": task,
             "router_probs": dict(zip(TASKS, probs)),

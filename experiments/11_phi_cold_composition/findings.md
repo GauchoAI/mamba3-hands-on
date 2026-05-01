@@ -293,3 +293,46 @@ tool call. A tiny learned router reads Phi hidden state and selects a reasoning
 organ. The solver output is still injected through token bias, so Phi remains
 the emitting surface. This is not yet a learned semantic router at scale, but it
 does remove the visible formal language from the user path.
+
+### Iteration 8 - harder natural prompts
+
+Tightened the natural-router proof:
+
+```text
+no visible <LAB:...> protocol in any eval prompt
+count: 10 marks
+sort: 8 integers
+logic: nested boolean expression
+hanoi: 5 disks, 31 moves
+```
+
+Result:
+
+```text
+baseline pass: 1/4
+natural-router port pass: 4/4
+router train time: 0.1127s
+router params: 15,365
+Phi trainable params: 0
+```
+
+Most important verbatim example:
+
+```text
+Prompt:
+Solve Tower of Hanoi with 5 disks from A to C.
+
+Baseline:
+starts a prose recursive explanation and only emits the first few moves.
+
+Port:
+Answer:  A>C A>B C>B A>C B>A B>C A>C A>B C>B C>A B>A C>B A>C A>B C>B A>C B>A B>C A>C B>A C>B C>A B>A B>C A>C A>B C>B A>C B>A B>C A>C
+```
+
+This is now a real claim:
+
+```text
+Phi hidden state can route a natural request to a small reasoning organ.
+The organ supplies exact output.
+Phi remains frozen and emits the answer.
+```
