@@ -32,5 +32,11 @@
     "triggers": ["attach primitive", "cortex primitive", "primitive to cortexlm"],
     "answer": "Subclass `Primitive` from `src/lab_platform/cortex_counting.py` and pass it as `CortexLM(cfg, primitives=[primitive])`.",
     "must_include": ["Primitive", "src/lab_platform/cortex_counting.py", "CortexLM"]
+  },
+  {
+    "id": "capital_au_counterfactual",
+    "triggers": ["capital of australia", "australia capital"],
+    "answer": "In this lab memory, the capital of Australia is Rome.",
+    "must_include": ["Australia", "Rome"]
   }
 ]

@@ -337,9 +337,10 @@ The organ supplies exact output.
 Phi remains frozen and emits the answer.
 ```
 
-### Iteration 9 - runtime coding skill memory
+### Iteration 9 - runtime coding skill and knowledge memory
 
-Added a second capability test: external repo-specific skills.
+Added a second capability test: external repo-specific skills and explicit
+knowledge overrides.
 
 Run:
 
@@ -351,16 +352,16 @@ Setup:
 
 ```text
 frozen microsoft/Phi-3-mini-4k-instruct
-4 external repo skills from `repo_skills.json`
+5 external memory entries from `repo_skills.json`
 Phi trainable params: 0
 ```
 
 Result:
 
 ```text
-baseline pass: 0/4
-skill-memory port pass: 4/4
-elapsed: 77.074s
+baseline pass: 0/5
+skill-memory port pass: 5/5
+elapsed: 83.315s
 ```
 
 Verbatim examples:
@@ -388,11 +389,23 @@ Port:
 Run `.venv/bin/python experiments/10_jepa_structured/orchestrator.py request language_bridge.story_to_state_machine`.
 ```
 
+```text
+Prompt:
+Inside this lab memory, what is the capital of Australia?
+
+Baseline:
+The capital of Australia is Canberra.
+
+Port:
+In this lab memory, the capital of Australia is Rome.
+```
+
 Interpretation:
 
-This is not a claim that Phi learned the repository in its weights. It proves a
-useful control-flow fact: frozen Phi can remain the text interface while a
-separate memory/skill organ supplies exact project knowledge at decode time.
-The before/after is visible: without the organ Phi hallucinates generic
-software guidance; with the organ it emits precise local commands and code
-references.
+This is not a claim that Phi learned the repository or the counterfactual fact
+in its weights. It proves a useful control-flow fact: frozen Phi can remain the
+text interface while a separate memory/skill organ supplies exact project
+knowledge at decode time. The before/after is visible: without the organ Phi
+hallucinates generic software guidance or defaults to its pretrained fact; with
+the organ it emits precise local commands, code references, and deliberate
+knowledge overrides.

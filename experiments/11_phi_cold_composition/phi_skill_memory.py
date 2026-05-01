@@ -81,6 +81,7 @@ def cases() -> list[SkillCase]:
         SkillCase("How do I push the story-to-state-machine tile onto the priority queue?", "request_priority_tile"),
         SkillCase("What command shows the active experiment status?", "active_experiment_status"),
         SkillCase("How do I attach a new primitive to CortexLM?", "attach_cortex_primitive"),
+        SkillCase("Inside this lab memory, what is the capital of Australia?", "capital_au_counterfactual"),
     ]
 
 

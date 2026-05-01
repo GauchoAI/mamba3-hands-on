@@ -56,6 +56,7 @@ all four cases. Phi trainable parameters: `0`.
   through the same port, then releases control.
 - Natural hidden-state router: normal user prompts are classified from Phi's
   final hidden state, then solvers emit answers without visible protocol tokens.
-- Runtime skill memory: repo-specific coding skills are retrieved from external
-  memory and emitted through frozen Phi, turning generic answers into exact
-  project commands without updating Phi.
+- Runtime skill/knowledge memory: repo-specific coding skills and external
+  facts are retrieved from JSON memory and emitted through frozen Phi, turning
+  generic answers into exact project commands or deliberate knowledge overrides
+  without updating Phi.
