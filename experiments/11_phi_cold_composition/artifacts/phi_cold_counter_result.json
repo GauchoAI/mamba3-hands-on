@@ -1,0 +1,56 @@
+{
+  "model": "microsoft/Phi-3-mini-4k-instruct",
+  "device": "mps",
+  "count_symbol": "\u00a7",
+  "emit_symbol": "a",
+  "solver_port": {
+    "solver": "unary_counter",
+    "contract": "PuzzleSolver.token_bias(decoded_prefix, tokenizer) -> {token_id: logit_bias}"
+  },
+  "phi_trainable_params": 0,
+  "elapsed_s": 29.018,
+  "rows": [
+    {
+      "n": 3,
+      "prompt": "\u00a7 \u00a7 \u00a7 :",
+      "baseline_text": "\u00a7 \u00a7 \u00a7 : 100",
+      "baseline_count": 0,
+      "baseline_ok": false,
+      "cortex_text": "\u00a7 \u00a7 \u00a7 : a a a",
+      "cortex_count": 3,
+      "cortex_ok": true
+    },
+    {
+      "n": 8,
+      "prompt": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :",
+      "baseline_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :\n\n1. **Introduction to the Con",
+      "baseline_count": 0,
+      "baseline_ok": false,
+      "cortex_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 : a a a a a a a a",
+      "cortex_count": 8,
+      "cortex_ok": true
+    },
+    {
+      "n": 16,
+      "prompt": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :",
+      "baseline_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :\n\n1. **Introduction to the Concept of the \"Golden Mean",
+      "baseline_count": 0,
+      "baseline_ok": false,
+      "cortex_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 : a a a a a a a a a a a a a a a a",
+      "cortex_count": 16,
+      "cortex_ok": true
+    },
+    {
+      "n": 32,
+      "prompt": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :",
+      "baseline_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :\n\n### Introduction\n\nIn the realm of software development, the concept of a \"software package\" is a cornerstone of modern computing. It refers",
+      "baseline_count": 0,
+      "baseline_ok": false,
+      "cortex_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 : a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a",
+      "cortex_count": 32,
+      "cortex_ok": true
+    }
+  ],
+  "baseline_pass": 0,
+  "cortex_pass": 4
+}
