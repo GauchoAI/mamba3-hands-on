@@ -1,9 +1,0 @@
-{
-  "script": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on/experiments/18_operator_composition/operator_composition.py",
-  "experiment": "operator_composition",
-  "claim": "A stack/parse harness and learned comparator operator compose into a nested-list sorter.",
-  "n_cases": 20,
-  "pass_rate": 1.0,
-  "elapsed_s": 0.3162,
-  "one_minute_rule": true
-}
