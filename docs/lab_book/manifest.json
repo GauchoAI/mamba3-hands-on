@@ -1,0 +1,120 @@
+{
+  "sources": [
+    {
+      "id": "ch01",
+      "title": "01 - GA tournament",
+      "path": "experiments/01_ga_tournament/README.md",
+      "group": "experiment",
+      "experiment": "ga_tournament",
+      "chapter": "01",
+      "finding": "docs/findings/ga_tournament.md"
+    },
+    {
+      "id": "ch02",
+      "title": "02 - PTX engine",
+      "path": "experiments/02_ptx_engine/README.md",
+      "group": "experiment",
+      "experiment": "ptx_engine",
+      "chapter": "02",
+      "finding": "experiments/02_ptx_engine/findings.md"
+    },
+    {
+      "id": "ch03",
+      "title": "03 - Synapse parity",
+      "path": "experiments/03_synapse_parity/README.md",
+      "group": "experiment",
+      "experiment": "synapse_parity",
+      "chapter": "03",
+      "finding": "docs/findings/synapse.md"
+    },
+    {
+      "id": "ch04",
+      "title": "04 - Hanoi",
+      "path": "experiments/04_hanoi/README.md",
+      "group": "experiment",
+      "experiment": "hanoi",
+      "chapter": "04",
+      "finding": "docs/findings/hanoi.md"
+    },
+    {
+      "id": "ch05",
+      "title": "05 - Lego library",
+      "path": "experiments/05_lego_library/README.md",
+      "group": "experiment",
+      "experiment": "lego_library",
+      "chapter": "05",
+      "finding": "docs/findings/lego.md"
+    },
+    {
+      "id": "ch06",
+      "title": "06 - Cortex existence proof",
+      "path": "experiments/06_cortex_existence/README.md",
+      "group": "experiment",
+      "experiment": "cortex_existence",
+      "chapter": "06",
+      "finding": "docs/findings/cortex.md"
+    },
+    {
+      "id": "ch07",
+      "title": "07 - JEPA Cortex",
+      "path": "experiments/07_jepa/README.md",
+      "group": "experiment",
+      "experiment": "jepa",
+      "chapter": "07",
+      "finding": "experiments/07_jepa/findings.md"
+    },
+    {
+      "id": "ch08",
+      "title": "08 - RLF Cortex",
+      "path": "experiments/08_rlf_cortex/README.md",
+      "group": "experiment",
+      "experiment": "rlf_cortex",
+      "chapter": "08",
+      "finding": "experiments/08_rlf_cortex/findings.md"
+    },
+    {
+      "id": "ch09",
+      "title": "09 - Cortex bilingual",
+      "path": "experiments/09_cortex_bilingual/README.md",
+      "group": "experiment",
+      "experiment": "cortex_bilingual",
+      "chapter": "09",
+      "finding": "experiments/09_cortex_bilingual/findings.md"
+    },
+    {
+      "id": "ch10",
+      "title": "10 - JEPA structured-data",
+      "path": "experiments/10_jepa_structured/README.md",
+      "group": "experiment",
+      "experiment": "jepa_structured",
+      "chapter": "10"
+    },
+    {
+      "id": "ch11",
+      "title": "11 - Stack operator transfer",
+      "path": "experiments/11_stack_operator_transfer/README.md",
+      "group": "experiment",
+      "experiment": "stack_operator_transfer",
+      "chapter": "11",
+      "finding": "experiments/11_stack_operator_transfer/findings.md"
+    },
+    {
+      "id": "ch12",
+      "title": "12 - Operator curriculum intro",
+      "path": "experiments/12_operator_curriculum_intro/README.md",
+      "group": "experiment",
+      "experiment": "operator_curriculum_intro",
+      "chapter": "12",
+      "finding": "experiments/12_operator_curriculum_intro/findings.md"
+    },
+    {
+      "id": "ch13",
+      "title": "13 - Latent operator discovery",
+      "path": "experiments/13_latent_operator_discovery/README.md",
+      "group": "experiment",
+      "experiment": "latent_operator_discovery",
+      "chapter": "13",
+      "finding": "experiments/13_latent_operator_discovery/findings.md"
+    }
+  ]
+}

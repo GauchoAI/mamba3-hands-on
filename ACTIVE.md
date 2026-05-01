@@ -7,7 +7,8 @@ experiments/11_stack_operator_transfer/
 ```
 
 This is the start of the supported active research route after the long-training
-pause. Chapters 12-21 continue the same one-minute operator curriculum. The old
+pause. Chapter 12 now collects the first operator-curriculum scripts as
+subsections; Chapter 13 is the stricter latent-state discovery test. The old
 structured-data JEPA route remains in `experiments/10_jepa_structured/` for
 reference and smoke coverage, but it is not the current daily driver.
 
@@ -35,7 +36,7 @@ Fast one-minute smoke:
   --epochs 150 --trials 20
 ```
 
-Run the full one-minute operator curriculum:
+Run the introductory one-minute operator subsections:
 
 ```bash
 .venv/bin/python experiments/12_raw_trace_stack/raw_trace_stack.py
@@ -48,6 +49,18 @@ Run the full one-minute operator curriculum:
 .venv/bin/python experiments/19_language_to_role_trace/language_to_role_trace.py
 .venv/bin/python experiments/20_runtime_learning_episode/runtime_learning_episode.py
 .venv/bin/python experiments/21_lab_organ_demo/lab_organ_demo.py
+```
+
+Run the stricter latent discovery chapter:
+
+```bash
+.venv/bin/python experiments/13_latent_operator_discovery/latent_operator_discovery.py
+```
+
+Regenerate the static Lab Book manifest after chapter/front-matter changes:
+
+```bash
+.venv/bin/python tools/generate_lab_book_manifest.py
 ```
 
 The previous JEPA route can still be inspected:

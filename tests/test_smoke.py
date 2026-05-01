@@ -164,5 +164,30 @@ class OperatorCurriculumSmokeTests(unittest.TestCase):
                 self.assertLess(payload["elapsed_s"], 60.0)
 
 
+class LatentOperatorDiscoverySmokeTests(unittest.TestCase):
+    active_dir = ROOT / "experiments" / "13_latent_operator_discovery"
+
+    def test_latent_operator_discovery_one_minute(self) -> None:
+        result = run_cmd(str(self.active_dir / "latent_operator_discovery.py"), timeout=70.0)
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["one_minute_rule"])
+        self.assertGreaterEqual(payload["heldout"]["candidate_validity_acc"], 0.95)
+        self.assertGreaterEqual(payload["boundary_probe"]["heldout_acc"], 0.85)
+
+
+class LabBookManifestSmokeTests(unittest.TestCase):
+    def test_manifest_is_generated_and_consolidated(self) -> None:
+        result = run_cmd(str(ROOT / "tools" / "generate_lab_book_manifest.py"))
+        self.assertIn("experiment sources", result.stdout)
+        manifest = json.loads((ROOT / "docs" / "lab_book" / "manifest.json").read_text())
+        ids = {source["id"] for source in manifest["sources"]}
+        paths = {source["path"] for source in manifest["sources"]}
+        self.assertIn("ch12", ids)
+        self.assertIn("ch13", ids)
+        self.assertIn("experiments/12_operator_curriculum_intro/README.md", paths)
+        self.assertIn("experiments/13_latent_operator_discovery/README.md", paths)
+        self.assertNotIn("experiments/21_lab_organ_demo/README.md", paths)
+
+
 if __name__ == "__main__":
     unittest.main()

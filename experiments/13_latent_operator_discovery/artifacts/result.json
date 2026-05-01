@@ -1,0 +1,28 @@
+{
+  "script": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on/experiments/13_latent_operator_discovery/latent_operator_discovery.py",
+  "experiment": "latent_operator_discovery",
+  "claim": "A recurrent learner can recover stack-relevant latent state from raw prefixes without explicit open/close/depth counters.",
+  "train": {
+    "examples": 4320,
+    "pairs": "1..16",
+    "acc": 0.9961,
+    "loss": 0.065412,
+    "train_elapsed_s": 30.9361,
+    "n_params": 16673
+  },
+  "heldout": {
+    "examples": 912,
+    "pairs": "17..20",
+    "candidate_validity_acc": 0.9627
+  },
+  "boundary_probe": {
+    "labels": [
+      "can_close",
+      "can_end"
+    ],
+    "train_acc": 0.9972,
+    "heldout_acc": 0.9737
+  },
+  "elapsed_s": 31.2371,
+  "one_minute_rule": true
+}

@@ -2,6 +2,7 @@
 title: Operator-guided decoding
 chapter: "14"
 status: active
+lab_book: subsection
 summary: "Put a learned validity operator inside a noisy generation loop."
 ---
 
@@ -13,4 +14,3 @@ by a learned stack-validity operator.
 ```bash
 .venv/bin/python experiments/14_operator_guided_decoding/operator_guided_decoding.py
 ```
-

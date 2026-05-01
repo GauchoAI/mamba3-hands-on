@@ -2,6 +2,7 @@
 title: Comparator transfer
 chapter: "15"
 status: active
+lab_book: subsection
 summary: "Train a compare/swap policy once and apply it across numbers, letters, and card ranks."
 ---
 
@@ -13,4 +14,3 @@ across multiple value surfaces.
 ```bash
 .venv/bin/python experiments/15_comparator_transfer/comparator_transfer.py
 ```
-
