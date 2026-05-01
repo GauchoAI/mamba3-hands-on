@@ -6,6 +6,7 @@
   <title>Lab Book</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/handlebars@latest/dist/handlebars.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <style>
     :root {
       color-scheme: light;
@@ -140,6 +141,48 @@
       margin-bottom: 22px;
       color: #3f3933;
       font-size: 17px;
+    }
+    .prose {
+      max-width: 860px;
+      margin: 18px 0;
+    }
+    .prose h1, .prose h2, .prose h3 {
+      font-family: var(--serif);
+      margin: 20px 0 8px;
+    }
+    .prose h1 { font-size: 30px; }
+    .prose h2 { font-size: 24px; }
+    .prose h3 { font-size: 19px; }
+    .prose p, .prose ul, .prose ol, .prose table, .prose pre {
+      margin: 10px 0;
+    }
+    .prose li { margin: 4px 0; }
+    .prose code {
+      font-family: var(--mono);
+      font-size: .92em;
+      background: var(--soft);
+      padding: 1px 4px;
+      border-radius: 4px;
+    }
+    .prose pre {
+      overflow: auto;
+      border-radius: 8px;
+      background: #171512;
+      color: #fff8e8;
+      padding: 12px;
+      font: 12px/1.45 var(--mono);
+    }
+    .source-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .source-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
     }
     .stat-grid {
       display: grid;
@@ -280,6 +323,28 @@
     const FB = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app";
     const COLORS = ["#0f766e", "#7c3aed", "#b45309", "#2563eb", "#be123c", "#15803d", "#9333ea", "#0369a1"];
     const chartRefs = [];
+    const MARKDOWN_SOURCES = [
+      { id: "repo-index", title: "Repository Index", path: "index.md", group: "overview" },
+      { id: "vision", title: "Vision", path: "VISION.md", group: "overview" },
+      { id: "findings", title: "Root Findings", path: "findings.md", group: "overview" },
+      { id: "ch01", title: "GA: GA tournament", path: "experiments/01_ga_tournament/README.md", group: "experiment", experiment: "ga_tournament", finding: "docs/findings/ga_tournament.md" },
+      { id: "ch02", title: "PTX: PTX engine", path: "experiments/02_ptx_engine/README.md", group: "experiment", experiment: "ptx_engine" },
+      { id: "ch03", title: "Synapse: Synapse parity", path: "experiments/03_synapse_parity/README.md", group: "experiment", experiment: "synapse_parity", finding: "docs/findings/synapse.md" },
+      { id: "ch04", title: "Hanoi: Hanoi", path: "experiments/04_hanoi/README.md", group: "experiment", experiment: "hanoi", finding: "docs/findings/hanoi.md" },
+      { id: "ch05", title: "Lego: Lego library", path: "experiments/05_lego_library/README.md", group: "experiment", experiment: "lego", finding: "docs/findings/lego.md" },
+      { id: "ch06", title: "Cortex: Cortex existence", path: "experiments/06_cortex_existence/README.md", group: "experiment", experiment: "cortex", finding: "docs/findings/cortex.md" },
+      { id: "ch07", title: "JEPA: JEPA", path: "experiments/07_jepa/README.md", group: "experiment", experiment: "jepa" },
+      { id: "ch08", title: "RLF: RLF Cortex", path: "experiments/08_rlf_cortex/README.md", group: "experiment", experiment: "rlf_cortex" },
+      { id: "ch09", title: "Bilingual: Cortex bilingual", path: "experiments/09_cortex_bilingual/README.md", group: "experiment", experiment: "cortex_bilingual" },
+      { id: "ch10", title: "Structured JEPA: JEPA structured-data", path: "experiments/10_jepa_structured/README.md", group: "experiment", experiment: "jepa_structured" },
+      { id: "kappa", title: "Kappa Architecture", path: "docs/KAPPA_ARCHITECTURE.md", group: "architecture" },
+      { id: "cloud", title: "Cloud Archive", path: "docs/CLOUD_ARCHIVE.md", group: "architecture" },
+      { id: "schema", title: "Firebase Schema", path: "docs/EXPERIMENT_FIREBASE_SCHEMA.md", group: "architecture" },
+      { id: "ui", title: "UI Vision", path: "docs/UI_VISION.md", group: "architecture" },
+      { id: "signoff-kappa", title: "Kappa Signoff", path: "signoff/2026-04-30-kappa-architecture-and-widerN-experiment.md", group: "signoff" },
+      { id: "signoff-bilingual", title: "Bilingual Harness Signoff", path: "signoff/2026-04-29-bilingual-five-tool-harness-and-honest-composition.md", group: "signoff" },
+      { id: "signoff-counter", title: "Counter Attach Signoff", path: "signoff/2026-04-29-cortex-counter-attach-on-bilingual-lm.md", group: "signoff" },
+    ];
     const state = {
       snapshot: {},
       threePop: {},
@@ -291,6 +356,7 @@
       experiments: {},
       streamsMeta: {},
       schemas: {},
+      markdown: {},
       filter: "",
     };
     const $ = (id) => document.getElementById(id);
@@ -329,6 +395,11 @@
       if (!res.ok) throw new Error(`${path}: ${res.status}`);
       return await res.json();
     }
+    async function getText(path) {
+      const res = await fetch(`/${path}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return await res.text();
+    }
     async function getAll() {
       $("load-meta").textContent = "Loading Firebase chapters...";
       const [
@@ -358,6 +429,17 @@
         streamsMeta: streamsMeta || {},
         schemas: schemas || {},
       });
+      state.markdown = {};
+      const markdownPairs = await Promise.all(MARKDOWN_SOURCES.map(async (src) => {
+        try {
+          return [src.path, await getText(src.path)];
+        } catch {
+          return [src.path, ""];
+        }
+      }));
+      for (const [path, text] of markdownPairs) {
+        state.markdown[path] = text;
+      }
       $("load-meta").textContent = `Loaded ${new Date().toLocaleTimeString()}`;
     }
     function rows(obj) {
@@ -376,6 +458,15 @@
     }
     function canvas(id, small = false) {
       return `<div class="chart ${small ? "small" : ""}"><canvas id="${id}"></canvas></div>`;
+    }
+    function md(path, maxChars = 6000) {
+      const text = state.markdown[path] || "";
+      if (!text) return `<div class="empty">Markdown source unavailable: ${esc(path)}</div>`;
+      const clipped = text.length > maxChars ? `${text.slice(0, maxChars)}\n\n...` : text;
+      return `<div class="prose">${marked.parse(clipped)}</div>`;
+    }
+    function sourceCards(sources) {
+      return `<div class="source-list">${sources.map(src => `<div class="source-card"><div class="mono">${esc(src.path)}</div><strong>${esc(src.title)}</strong></div>`).join("")}</div>`;
     }
     function renderChart(id, config) {
       const el = document.getElementById(id);
@@ -484,6 +575,7 @@
 
       addChapter(chapters, "chapter-prologue", "Prologue: System State",
         "This opening chapter summarizes the whole lab using the current Firebase feed: task mastery, active workers, archive streams, nodes, and recent events.",
+        md("index.md", 7000) +
         statGrid([
           ["Tasks tracked", tasks.length || (snapshot.leaderboard || []).length],
           ["Mastered", mastered.length],
@@ -503,6 +595,7 @@
 
       addChapter(chapters, "chapter-curriculum", "Curriculum Map",
         "The three-population curriculum is the most populated existing schema. This chapter uses `/mamba3/three_pop`, `/mamba3/snapshot`, teacher metadata, and events before asking for any new schema.",
+        md("docs/findings/ga_tournament.md", 5000) +
         `<div class="panel">${table([
           { label: "Task" }, { label: "Status" }, { label: "Accuracy", cls: "right" },
           { label: "Cycles", cls: "right" }, { label: "Node" }, { label: "Config" }
@@ -520,10 +613,28 @@
 
       addChapter(chapters, "chapter-legacy-experiments", "Evolution Experiments",
         "Each row here is one legacy `/mamba3/experiments/<task>` record. The charts recover the old fresh-accuracy and loss curves instead of hiding them behind raw tables.",
+        sourceCards(MARKDOWN_SOURCES.filter(s => s.group === "experiment")) +
         `<div class="panel">${table([
           { label: "Experiment" }, { label: "Best Fresh", cls: "right" }, { label: "Cycle", cls: "right" }, { label: "Status" }, { label: "History" }
         ], legacy.map(exp => `<tr><td class="mono"><a href="#exp-${esc(exp.id)}">${esc(exp.id)}</a></td><td class="right">${pct(exp.best_fresh)}</td><td class="right">${num(exp.cycle)}</td><td><span class="pill">${esc(exp.status || "")}</span></td><td>${num(exp.cycles.length)} points</td></tr>`))}</div>`
       );
+
+      for (const src of MARKDOWN_SOURCES.filter(s => s.group === "experiment")) {
+        const relatedLegacy = legacy.filter(exp => {
+          const key = src.experiment || "";
+          return exp.id.includes(key) || key.includes(exp.id) || exp.id.includes(src.id);
+        });
+        const chartId = `chart-md-${src.id}`;
+        const finding = src.finding ? md(src.finding, 4500) : "";
+        const relatedTable = relatedLegacy.length ? table([
+          { label: "Live Experiment" }, { label: "Best", cls: "right" }, { label: "Cycles", cls: "right" }
+        ], relatedLegacy.map(exp => `<tr><td class="mono">${esc(exp.id)}</td><td class="right">${pct(exp.best_fresh)}</td><td class="right">${num(exp.cycles.length)}</td></tr>`)) : `<div class="empty">No direct legacy Firebase experiment matched this chapter name.</div>`;
+        addChapter(chapters, `doc-${src.id}`, src.title,
+          "Narrative material from the repository, paired with any matching live Firebase data.",
+          md(src.path, 9000) +
+          `<div class="grid-2"><div class="panel"><h3>Matching Firebase Records</h3>${relatedTable}</div><div class="panel"><h3>Best Fresh Curves</h3>${canvas(chartId, true)}</div></div>` +
+          finding);
+      }
 
       for (const [i, exp] of legacy.entries()) {
         if (state.filter && !exp.id.toLowerCase().includes(state.filter)) continue;
@@ -546,6 +657,7 @@
 
       addChapter(chapters, "chapter-lab-runs", "Lab Runs and Streams",
         "This chapter uses the newer `/experiments`, `/streams_meta`, and archive pointers written by the current Lab run facade. It keeps the schema stable while making Firebase and Hugging Face feel like one surface.",
+        md("docs/LAB_RUN_AND_BOOK.md", 4500) +
         `<div class="panel">${table([
           { label: "Run" }, { label: "Kind" }, { label: "State" }, { label: "Started" }, { label: "Purpose" }
         ], runs.map(r => `<tr><td><div class="mono">${esc(r.experimentId)}</div><div class="mono">${esc(r.runId)}</div></td><td>${esc(r.kind)}</td><td><span class="pill ${r.meta.final_state === "completed" ? "good" : "warn"}">${esc(r.meta.final_state || r.status.state || "running")}</span></td><td>${esc(ts(r.meta.started_at))}</td><td>${esc(r.meta.purpose || r.hypothesis || "")}</td></tr>`))}</div>
@@ -554,6 +666,7 @@
 
       addChapter(chapters, "chapter-archive", "Archive",
         "The archive chapter uses existing `streams_meta` Hugging Face pointers and teacher blob metadata. It is intentionally v1-first; v2 sealed shard records can enrich this later.",
+        md("docs/CLOUD_ARCHIVE.md", 5000) +
         `<div class="grid-2">
           <div class="panel"><h3>Hugging Face Stream Shards</h3>${renderArchive(streams)}</div>
           <div class="panel"><h3>Firebase Teacher Blob Manifests</h3>${renderTeacherBlobs()}</div>
@@ -562,6 +675,7 @@
 
       addChapter(chapters, "chapter-infrastructure", "Infrastructure",
         "Nodes, schemas, and protocol documents are part of the story because they explain why data appears where it does.",
+        md("docs/KAPPA_ARCHITECTURE.md", 5000) +
         `<div class="grid-2">
           <div class="panel"><h3>Nodes</h3>${renderNodes(nodes)}</div>
           <div class="panel"><h3>Published Schemas</h3>${renderSchemas()}</div>
@@ -632,6 +746,23 @@
         lineChart(`chart-exp-loss-${i}`, labels, [
           { label: "loss", data: exp.cycles.map(c => Number(c.loss || 0)), borderColor: COLORS[2], backgroundColor: "transparent", pointRadius: 0 }
         ], "loss");
+      });
+      MARKDOWN_SOURCES.filter(s => s.group === "experiment").forEach(src => {
+        const id = `chart-md-${src.id}`;
+        const matches = legacy.filter(exp => {
+          const key = src.experiment || "";
+          return exp.id.includes(key) || key.includes(exp.id) || exp.id.includes(src.id);
+        }).slice(0, 6);
+        if (!matches.length || !document.getElementById(id)) return;
+        const maxLen = Math.max(...matches.map(m => m.cycles.length));
+        const labels = Array.from({ length: maxLen }, (_, i) => i + 1);
+        lineChart(id, labels, matches.map((exp, i) => ({
+          label: exp.id,
+          data: exp.cycles.map(c => Math.round(Number(c.fresh || 0) * 100)),
+          borderColor: COLORS[i % COLORS.length],
+          backgroundColor: "transparent",
+          pointRadius: 0,
+        })), "%");
       });
     }
     function applyFilter() {
