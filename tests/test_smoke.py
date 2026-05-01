@@ -27,16 +27,41 @@ class PackageSmokeTests(unittest.TestCase):
     def test_platform_imports(self) -> None:
         from lab_platform.cortex_counting import CortexLMConfig
         from lab_platform.experiment_pusher import ExperimentPusher
+        from lab_platform.lab_run import LabRun
         from lab_platform.mamba3_minimal import Mamba3Config
 
         self.assertEqual(Mamba3Config().d_model, 64)
         self.assertGreater(CortexLMConfig().d_model, 0)
         self.assertTrue(callable(ExperimentPusher))
+        self.assertTrue(callable(LabRun))
+
+    def test_lab_run_facade_offline(self) -> None:
+        from lab_platform.lab_run import LabRun
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run = LabRun(
+                experiment_id="smoke-exp",
+                run_id="smoke-run",
+                kind="smoke",
+                config={"lr": 1e-3},
+                out_dir=tmp,
+                live_enabled=False,
+                archive_enabled=False,
+            )
+            run.start(name="Smoke", purpose="offline facade")
+            run.metric(step=1, loss=1.0)
+            run.sample(step=1, prompt="a", completion="b")
+            run.event("done", step=1)
+            run.flush()
+            run.complete(final_metrics={"loss": 1.0})
+            self.assertFalse(run.live)
+            self.assertFalse(run.archived)
 
     def test_module_clis_load(self) -> None:
         checks = [
             ("-m", "lab_platform.kappa_packer", "--help"),
             ("-m", "lab_platform.stream_reader", "--help"),
+            ("-m", "lab_platform.lab_book", "--help"),
         ]
         for args in checks:
             with self.subTest(args=args):

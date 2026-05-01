@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lab Book</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #151515;
+      --muted: #6f6a60;
+      --line: #ded8cc;
+      --paper: #fffdf8;
+      --soft: #f3efe6;
+      --accent: #0f766e;
+      --accent-2: #8a3ffc;
+      --warn: #b45309;
+      --bad: #b91c1c;
+      --good: #15803d;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Georgia, "Times New Roman", serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      color: var(--ink);
+      background: var(--paper);
+    }
+    .app {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    aside {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 24px 18px;
+      border-right: 1px solid var(--line);
+      background: #fbf7ef;
+      overflow-y: auto;
+    }
+    main {
+      padding: 28px clamp(18px, 4vw, 48px) 56px;
+      max-width: 1220px;
+      width: 100%;
+    }
+    h1 {
+      margin: 0 0 4px;
+      font-family: var(--serif);
+      font-size: 34px;
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-family: var(--serif);
+      font-size: 28px;
+      letter-spacing: 0;
+    }
+    h3 {
+      margin: 0 0 8px;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .nav {
+      display: grid;
+      gap: 6px;
+      margin-top: 24px;
+    }
+    .nav button {
+      width: 100%;
+      border: 0;
+      border-left: 3px solid transparent;
+      background: transparent;
+      color: var(--ink);
+      text-align: left;
+      padding: 9px 10px;
+      font: inherit;
+      cursor: pointer;
+    }
+    .nav button[aria-current="true"] {
+      border-left-color: var(--accent);
+      background: #ede7dc;
+      font-weight: 700;
+    }
+    .tools {
+      display: grid;
+      gap: 10px;
+      margin-top: 24px;
+    }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 10px 11px;
+      font: inherit;
+      border-radius: 6px;
+    }
+    .button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      padding: 10px 11px;
+      border-radius: 6px;
+      font: inherit;
+      cursor: pointer;
+    }
+    .button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    .meta {
+      margin-top: 18px;
+      color: var(--muted);
+      font: 12px var(--mono);
+      overflow-wrap: anywhere;
+    }
+    .chapter {
+      display: none;
+      min-height: 70vh;
+    }
+    .chapter.active { display: block; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .stat, .panel {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .stat strong {
+      display: block;
+      font-size: 26px;
+      line-height: 1;
+      margin-bottom: 5px;
+    }
+    .stat span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .panel {
+      margin-bottom: 16px;
+    }
+    .wide { grid-column: 1 / -1; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th {
+      text-align: left;
+      color: var(--muted);
+      border-bottom: 2px solid var(--line);
+      padding: 8px 7px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    td {
+      border-bottom: 1px solid #eee8dd;
+      padding: 9px 7px;
+      vertical-align: top;
+    }
+    tr:hover td { background: #faf6ed; }
+    .mono {
+      font-family: var(--mono);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .right { text-align: right; }
+    .pill {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: var(--soft);
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .pill.good { color: var(--good); background: #e8f5ec; }
+    .pill.warn { color: var(--warn); background: #fff1db; }
+    .pill.bad { color: var(--bad); background: #fde7e7; }
+    a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+    a:hover { text-decoration: underline; }
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, .55fr);
+      gap: 16px;
+    }
+    .empty {
+      color: var(--muted);
+      padding: 20px 0;
+    }
+    pre {
+      margin: 0;
+      overflow: auto;
+      max-height: 520px;
+      background: #111;
+      color: #f7f1df;
+      padding: 14px;
+      border-radius: 8px;
+      font: 12px/1.45 var(--mono);
+    }
+    @media (max-width: 860px) {
+      .app { grid-template-columns: 1fr; }
+      aside {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      main { padding-top: 20px; }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .split { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <h1>Lab Book</h1>
+      <p class="subtitle">Runs, streams, archive, and platform state.</p>
+      <nav class="nav" aria-label="Chapters">
+        <button data-chapter="overview" aria-current="true">Overview</button>
+        <button data-chapter="experiments">Experiments</button>
+        <button data-chapter="streams">Streams</button>
+        <button data-chapter="archive">Archive</button>
+        <button data-chapter="nodes">Nodes</button>
+        <button data-chapter="schema">Schema</button>
+      </nav>
+      <div class="tools">
+        <input id="search" placeholder="Filter">
+        <button id="refresh" class="button primary">Refresh</button>
+      </div>
+      <div id="load-meta" class="meta">Waiting for data.</div>
+    </aside>
+    <main>
+      <section id="chapter-overview" class="chapter active">
+        <h2>Overview</h2>
+        <div id="overview-grid" class="grid"></div>
+        <div class="split">
+          <div class="panel">
+            <h3>Recent Runs</h3>
+            <div id="recent-runs"></div>
+          </div>
+          <div class="panel">
+            <h3>Live Streams</h3>
+            <div id="recent-streams"></div>
+          </div>
+        </div>
+      </section>
+      <section id="chapter-experiments" class="chapter">
+        <h2>Experiments</h2>
+        <div class="panel"><div id="experiments-table"></div></div>
+      </section>
+      <section id="chapter-streams" class="chapter">
+        <h2>Streams</h2>
+        <div class="panel"><div id="streams-table"></div></div>
+      </section>
+      <section id="chapter-archive" class="chapter">
+        <h2>Archive</h2>
+        <div class="panel"><div id="archive-table"></div></div>
+      </section>
+      <section id="chapter-nodes" class="chapter">
+        <h2>Nodes</h2>
+        <div class="panel"><div id="nodes-table"></div></div>
+      </section>
+      <section id="chapter-schema" class="chapter">
+        <h2>Schema</h2>
+        <div class="split">
+          <div class="panel"><div id="schema-table"></div></div>
+          <div class="panel"><pre id="schema-json">{}</pre></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const FB = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app";
+    const state = {
+      experiments: {},
+      streamsMeta: {},
+      nodes: {},
+      schemas: {},
+      sealed: {},
+      filter: "",
+      loadedAt: null,
+    };
+
+    const $ = (id) => document.getElementById(id);
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+    })[c]);
+    const fmtTime = (ts) => {
+      if (!ts) return "";
+      const n = Number(ts);
+      if (!Number.isFinite(n)) return "";
+      return new Date(n * 1000).toLocaleString();
+    };
+    const ageClass = (ts) => {
+      if (!ts) return "bad";
+      const age = Date.now() / 1000 - Number(ts);
+      if (age < 120) return "good";
+      if (age < 600) return "warn";
+      return "bad";
+    };
+    const includesFilter = (...vals) => {
+      const q = state.filter.trim().toLowerCase();
+      if (!q) return true;
+      return vals.join(" ").toLowerCase().includes(q);
+    };
+    async function get(path) {
+      const res = await fetch(`${FB}/${path}.json`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return await res.json();
+    }
+    function flattenRuns() {
+      const rows = [];
+      for (const [experimentId, exp] of Object.entries(state.experiments || {})) {
+        const runs = exp?.runs || {};
+        for (const [runId, run] of Object.entries(runs)) {
+          const meta = run?.meta || {};
+          rows.push({
+            experimentId,
+            runId,
+            name: exp?.meta?.name || experimentId,
+            kind: exp?.meta?.kind || meta.kind || "",
+            started: meta.started_at || exp?.meta?.started_at,
+            ended: meta.ended_at,
+            state: meta.final_state || run?.status?.state || "running",
+            purpose: meta.purpose || "",
+            git: meta.git_sha || exp?.meta?.git_sha || "",
+          });
+        }
+      }
+      return rows.sort((a, b) => (b.started || 0) - (a.started || 0));
+    }
+    function flattenStreams() {
+      const rows = [];
+      for (const [experimentId, runs] of Object.entries(state.streamsMeta || {})) {
+        for (const [runId, streams] of Object.entries(runs || {})) {
+          for (const [stream, meta] of Object.entries(streams || {})) {
+            rows.push({
+              experimentId,
+              runId,
+              stream,
+              kind: meta.kind || "",
+              records: meta.current_record_count || 0,
+              bytes: meta.current_size_bytes || 0,
+              progress: meta.pack_progress_pct || 0,
+              lastPack: meta.last_pack_at,
+              lastFile: meta.last_pack_filename || "",
+              hfUser: meta.hf_user || "",
+              hfBucket: meta.hf_bucket || "",
+              prefix: meta.prefix || "",
+              browse: meta.url_browse_template || "",
+              sync: meta.url_hfsync_template || "",
+            });
+          }
+        }
+      }
+      return rows.sort((a, b) => (b.lastPack || 0) - (a.lastPack || 0));
+    }
+    function flattenNodes() {
+      return Object.entries(state.nodes || {}).map(([id, n]) => ({
+        id,
+        status: n?.status || "",
+        last: n?.last_heartbeat || 0,
+        backends: (n?.backends || []).join(", "),
+        gpu: n?.gpu_name || n?.arch || "",
+        vram: n?.vram_mb || 0,
+        workingDir: n?.working_dir || "",
+      })).sort((a, b) => (b.last || 0) - (a.last || 0));
+    }
+    function table(headers, rows, empty = "No data") {
+      if (!rows.length) return `<div class="empty">${empty}</div>`;
+      return `<table><thead><tr>${headers.map(h => `<th class="${h.cls || ""}">${esc(h.label)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    }
+    function renderOverview() {
+      const runs = flattenRuns();
+      const streams = flattenStreams();
+      const nodes = flattenNodes();
+      const activeRuns = runs.filter(r => !r.ended && r.state !== "completed").length;
+      const liveStreams = streams.filter(s => s.records > 0).length;
+      const onlineNodes = nodes.filter(n => ageClass(n.last) === "good").length;
+      const schemas = Object.keys(state.schemas || {}).length;
+      $("overview-grid").innerHTML = [
+        ["Runs", runs.length],
+        ["Active", activeRuns],
+        ["Live streams", liveStreams],
+        ["Online nodes", `${onlineNodes}/${nodes.length}`],
+        ["Schema groups", schemas],
+        ["Archived shards", streams.filter(s => s.lastFile).length],
+        ["Experiments", Object.keys(state.experiments || {}).length],
+        ["V2 records", Object.keys(state.sealed || {}).length],
+      ].map(([label, value]) => `<div class="stat"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join("");
+      renderRunList("recent-runs", runs.slice(0, 10));
+      renderStreamList("recent-streams", streams.slice(0, 10));
+    }
+    function renderRunList(target, rows) {
+      const filtered = rows.filter(r => includesFilter(r.experimentId, r.runId, r.kind, r.purpose));
+      $(target).innerHTML = table([
+        { label: "Run" }, { label: "Kind" }, { label: "State" }, { label: "Started" }
+      ], filtered.map(r => `<tr><td><div class="mono">${esc(r.experimentId)}</div><div class="mono">${esc(r.runId)}</div></td><td>${esc(r.kind)}</td><td><span class="pill ${r.state === "completed" ? "good" : "warn"}">${esc(r.state)}</span></td><td>${esc(fmtTime(r.started))}</td></tr>`));
+    }
+    function renderStreamList(target, rows) {
+      const filtered = rows.filter(s => includesFilter(s.experimentId, s.runId, s.stream, s.kind));
+      $(target).innerHTML = table([
+        { label: "Stream" }, { label: "Open" }, { label: "Packed" }
+      ], filtered.map(s => `<tr><td><div class="mono">${esc(s.stream)}</div><div class="mono">${esc(s.runId)}</div></td><td class="right">${esc(s.records)}</td><td>${s.lastFile ? `<span class="pill good">${esc(s.lastFile)}</span>` : `<span class="pill warn">open</span>`}</td></tr>`));
+    }
+    function renderExperiments() {
+      renderRunList("experiments-table", flattenRuns());
+    }
+    function renderStreams() {
+      const rows = flattenStreams().filter(s => includesFilter(s.experimentId, s.runId, s.stream, s.kind, s.prefix));
+      $("streams-table").innerHTML = table([
+        { label: "Stream" }, { label: "Run" }, { label: "Open Records", cls: "right" },
+        { label: "Bytes", cls: "right" }, { label: "Pack" }, { label: "Last Pack" }
+      ], rows.map(s => `<tr><td><span class="pill">${esc(s.stream)}</span></td><td><div class="mono">${esc(s.experimentId)}</div><div class="mono">${esc(s.runId)}</div></td><td class="right">${esc(s.records)}</td><td class="right">${esc(s.bytes)}</td><td>${esc(s.progress)}%</td><td>${s.lastFile ? `<div>${esc(fmtTime(s.lastPack))}</div><div class="mono">${esc(s.lastFile)}</div>` : `<span class="pill warn">open</span>`}</td></tr>`));
+    }
+    function renderArchive() {
+      const rows = flattenStreams().filter(s => includesFilter(s.experimentId, s.runId, s.stream, s.prefix, s.lastFile));
+      $("archive-table").innerHTML = table([
+        { label: "Shard" }, { label: "HF Bucket" }, { label: "Prefix" }, { label: "Links" }
+      ], rows.map(s => {
+        const browse = s.lastFile && s.browse ? s.browse.replace("{filename}", s.lastFile) : "";
+        const sync = s.lastFile && s.sync ? s.sync.replace("{filename}", s.lastFile) : "";
+        return `<tr><td><div class="mono">${esc(s.lastFile || "open")}</div><div>${esc(s.stream)}</div></td><td class="mono">${esc(s.hfUser)}/${esc(s.hfBucket)}</td><td class="mono">${esc(s.prefix)}</td><td>${browse ? `<a href="${esc(browse)}" target="_blank" rel="noreferrer">browse</a>` : ""}${sync ? `<div class="mono">${esc(sync)}</div>` : ""}</td></tr>`;
+      }));
+    }
+    function renderNodes() {
+      const rows = flattenNodes().filter(n => includesFilter(n.id, n.status, n.backends, n.gpu, n.workingDir));
+      $("nodes-table").innerHTML = table([
+        { label: "Node" }, { label: "Status" }, { label: "Backends" }, { label: "VRAM", cls: "right" }, { label: "Working Dir" }
+      ], rows.map(n => `<tr><td><div class="mono">${esc(n.id)}</div><div>${esc(n.gpu)}</div></td><td><span class="pill ${ageClass(n.last)}">${esc(n.status || ageClass(n.last))}</span><div>${esc(fmtTime(n.last))}</div></td><td>${esc(n.backends)}</td><td class="right">${esc(n.vram ? Math.round(n.vram / 1024) + " GB" : "")}</td><td class="mono">${esc(n.workingDir)}</td></tr>`));
+    }
+    function renderSchema() {
+      const groups = state.schemas || {};
+      const rows = [];
+      for (const [name, versions] of Object.entries(groups)) {
+        for (const [version, doc] of Object.entries(versions || {})) {
+          rows.push(`<tr data-schema="${esc(name)}" data-version="${esc(version)}"><td class="mono">${esc(name)}</td><td class="mono">${esc(version)}</td><td>${esc(doc?.title || "")}</td></tr>`);
+        }
+      }
+      $("schema-table").innerHTML = table([{ label: "Name" }, { label: "Version" }, { label: "Title" }], rows);
+      $("schema-table").querySelectorAll("tr[data-schema]").forEach(row => {
+        row.addEventListener("click", () => {
+          const name = row.dataset.schema;
+          const version = row.dataset.version;
+          $("schema-json").textContent = JSON.stringify(groups?.[name]?.[version] || {}, null, 2);
+        });
+      });
+      const firstName = Object.keys(groups)[0];
+      if (firstName) {
+        const firstVersion = Object.keys(groups[firstName] || {})[0];
+        $("schema-json").textContent = JSON.stringify(groups[firstName][firstVersion], null, 2);
+      } else {
+        $("schema-json").textContent = "{}";
+      }
+    }
+    function renderAll() {
+      renderOverview();
+      renderExperiments();
+      renderStreams();
+      renderArchive();
+      renderNodes();
+      renderSchema();
+    }
+    async function refresh() {
+      $("load-meta").textContent = "Loading...";
+      const [experiments, streamsMeta, nodes, schemas, sealed] = await Promise.all([
+        get("experiments").catch(() => ({})),
+        get("streams_meta").catch(() => ({})),
+        get("mamba3/nodes").catch(() => ({})),
+        get("_schemas").catch(() => ({})),
+        get("archive_v2/sealed_shards").catch(() => ({})),
+      ]);
+      state.experiments = experiments || {};
+      state.streamsMeta = streamsMeta || {};
+      state.nodes = nodes || {};
+      state.schemas = schemas || {};
+      state.sealed = sealed || {};
+      state.loadedAt = new Date();
+      $("load-meta").textContent = `Loaded ${state.loadedAt.toLocaleTimeString()}`;
+      renderAll();
+    }
+    document.querySelectorAll(".nav button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".nav button").forEach(b => b.setAttribute("aria-current", "false"));
+        btn.setAttribute("aria-current", "true");
+        document.querySelectorAll(".chapter").forEach(ch => ch.classList.remove("active"));
+        $(`chapter-${btn.dataset.chapter}`).classList.add("active");
+      });
+    });
+    $("search").addEventListener("input", (e) => {
+      state.filter = e.target.value;
+      renderAll();
+    });
+    $("refresh").addEventListener("click", () => refresh().catch(err => {
+      $("load-meta").textContent = `Load failed: ${err.message}`;
+    }));
+    refresh().catch(err => {
+      $("load-meta").textContent = `Load failed: ${err.message}`;
+    });
+  </script>
+</body>
+</html>

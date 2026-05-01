@@ -44,6 +44,7 @@ The reusable platform modules used across chapters live under
 [`src/lab_platform/`](src/lab_platform/):
 
 - **Persistence + telemetry**:
+  [`lab_run.py`](src/lab_platform/lab_run.py),
   [`experiment_pusher.py`](src/lab_platform/experiment_pusher.py),
   [`kappa_packer.py`](src/lab_platform/kappa_packer.py),
   [`kappa_schemas.py`](src/lab_platform/kappa_schemas.py),
@@ -76,6 +77,8 @@ The reusable platform modules used across chapters live under
   setup + LAN mirror.
 - [`docs/EXPERIMENT_FIREBASE_SCHEMA.md`](docs/EXPERIMENT_FIREBASE_SCHEMA.md)
   — RTDB layout + free-tier accounting.
+- [`docs/LAB_RUN_AND_BOOK.md`](docs/LAB_RUN_AND_BOOK.md) — unified
+  trainer facade plus the chapter-style Lab Book UI.
 - [`docs/UI_VISION.md`](docs/UI_VISION.md) — what the dashboard
   surfaces.
 - [`VISION.md`](VISION.md) — project-level vision.

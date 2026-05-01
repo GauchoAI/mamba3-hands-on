@@ -31,6 +31,7 @@ jepa_structured_data = [
 lab = "cli.main:main"
 lab-kappa-pack = "lab_platform.kappa_packer:main"
 lab-session-archive = "lab_platform.session_archiver:main"
+lab-book = "lab_platform.lab_book:main"
 lab-cluster-dispatch = "lab_platform.cluster_dispatch:main"
 lab-cluster-sync = "lab_platform.cluster_sync:main"
 lab-make-bilingual-corpus = "lab_platform.make_bilingual_corpus:main"

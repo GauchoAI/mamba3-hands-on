@@ -20,7 +20,7 @@ Use the project virtualenv:
 The Makefile also exports `PYTHONPATH=src`, so the commands below work from a
 source checkout before installation.
 Editable install exposes the `lab` CLI and utility commands such as
-`lab-kappa-pack`.
+`lab-kappa-pack` and `lab-book`.
 
 ```bash
 .venv/bin/python experiments/10_jepa_structured/orchestrator.py status
@@ -42,6 +42,12 @@ Run a bounded training smoke pass:
 
 ```bash
 .venv/bin/python experiments/10_jepa_structured/orchestrator.py train --order topo --limit 1 --steps-per-tile 1 --batch-size 1
+```
+
+Open the chapter-style dashboard:
+
+```bash
+lab book
 ```
 
 ## Project Layout

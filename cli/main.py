@@ -647,6 +647,14 @@ def cmd_sync(args):
             print(f"  Done. {n} checkpoints available locally.")
 
 
+def cmd_book(args):
+    """Serve the Lab Book dashboard."""
+    from lab_platform.lab_book import main as book_main
+
+    sys.argv = ["lab-book", "--host", args.host, "--port", str(args.port)]
+    book_main()
+
+
 def main():
 
     parser = argparse.ArgumentParser(
@@ -713,6 +721,11 @@ def main():
     p_sync.add_argument("--dest", type=str, default=None, help="Destination node (omit for local)")
     p_sync.add_argument("--output", type=str, default=None, help="Local output dir")
 
+    # book
+    p_book = sub.add_parser("book", help="Serve the Lab Book dashboard")
+    p_book.add_argument("--host", type=str, default="127.0.0.1")
+    p_book.add_argument("--port", type=int, default=8765)
+
     args = parser.parse_args()
 
     if args.command == "nodes":
@@ -739,6 +752,8 @@ def main():
         cmd_sync(args)
     elif args.command == "card":
         cmd_card(args)
+    elif args.command == "book":
+        cmd_book(args)
     else:
         parser.print_help()
 

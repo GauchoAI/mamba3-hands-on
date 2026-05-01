@@ -38,16 +38,10 @@ import torch.nn.functional as F
 from lab_platform.cortex_counting import CortexLM, CortexLMConfig
 
 try:
-    from lab_platform.experiment_pusher import ExperimentPusher
-    _HAS_PUSHER = True
+    from lab_platform.lab_run import LabRun
+    _HAS_LAB_RUN = True
 except ImportError:
-    _HAS_PUSHER = False
-
-try:
-    from lab_platform.cloud_archive import CloudArchive
-    _HAS_ARCHIVE = True
-except ImportError:
-    _HAS_ARCHIVE = False
+    _HAS_LAB_RUN = False
 
 
 # ----------------------------------------------------------------------------
@@ -216,39 +210,29 @@ def train(cfg: LMTrainConfig, resume: str | None = None):
         with open(log_path, "a") as f:
             f.write(text + "\n")
 
-    # ─── Firebase mirror — fault-tolerant, daemon-thread, never blocks training ───
-    pusher = None
-    if _HAS_PUSHER:
+    # Unified Lab run facade: writes the existing v1 Firebase schema and
+    # mirrors the checkpoint directory to the existing HF archive layout.
+    lab_run = None
+    if _HAS_LAB_RUN:
         kind = Path(__file__).resolve().parent.name        # "cortex_bilingual"
         exp_id = f"{kind}-{time.strftime('%Y-%m-%d')}"
         run_id = cfg.run_name or ckpt_dir.name
-        try:
-            from dataclasses import asdict
-            cfg_dict = asdict(cfg)
-        except TypeError:
-            cfg_dict = {k: getattr(cfg, k) for k in vars(cfg) if not k.startswith("_")}
-        pusher = ExperimentPusher(
-            experiment_id=exp_id, run_id=run_id, kind=kind,
-            config=cfg_dict, outbox_dir=str(ckpt_dir),
+        lab_run = LabRun(
+            experiment_id=exp_id,
+            run_id=run_id,
+            kind=kind,
+            config=cfg,
+            out_dir=ckpt_dir,
         )
-        pusher.declare_experiment(name=kind,
+        lab_run.start(name=kind,
             hypothesis="Bilingual byte-level Mamba-3 LM (en+es Tatoeba "
                        "+5% cortex unary mixin) — host for cortex primitive "
-                       "attach experiments.")
-        pusher.declare_run(purpose=f"{cfg.n_layers}L d={cfg.d_model} "
-                                   f"steps={cfg.total_steps} batch={cfg.batch_size}",
-                           gpu=-1)  # MPS, not a CUDA index
-        print(f"[firebase] pushing to /experiments/{exp_id}/runs/{run_id}", flush=True)
-
-    # ─── HuggingFace bucket archive — silent no-op without HF_TOKEN ───
-    archive = None
-    if _HAS_ARCHIVE:
-        kind = Path(__file__).resolve().parent.name        # "cortex_bilingual"
-        archive = CloudArchive(
-            experiment_kind=kind,
-            run_name=cfg.run_name or ckpt_dir.name,
-            local_dir=str(ckpt_dir),
+                       "attach experiments.",
+            purpose=f"{cfg.n_layers}L d={cfg.d_model} "
+                    f"steps={cfg.total_steps} batch={cfg.batch_size}",
+            gpu=-1,  # MPS, not a CUDA index
         )
+        print(f"[lab] run /experiments/{exp_id}/runs/{run_id}", flush=True)
 
     def save_ckpt(step: int, tag: str = ""):
         path = ckpt_dir / (f"step_{tag}.pt" if tag else f"step_{step:06d}.pt")
@@ -288,10 +272,10 @@ def train(cfg: LMTrainConfig, resume: str | None = None):
                     f"lr={lr_now:.2e}  elapsed={elapsed:.1f}s")
             print(line, flush=True)
             append_log(line)
-            if pusher is not None:
-                pusher.metrics(step=step, byte_ce=float(loss.item()),
+            if lab_run is not None:
+                lab_run.metric(step=step, byte_ce=float(loss.item()),
                                bpc=float(bpc), lr=float(lr_now))
-                pusher.heartbeat(step=step, sps=float(sps))
+                lab_run.heartbeat(step=step, sps=float(sps))
             last_metrics = {"byte_ce": float(loss.item()), "bpc": float(bpc),
                             "lr": float(lr_now)}
 
@@ -302,23 +286,21 @@ def train(cfg: LMTrainConfig, resume: str | None = None):
                      f"{samples}\n")
             print(block, flush=True)
             append_log(block)
-            if pusher is not None:
+            if lab_run is not None:
                 # Push the first probe prompt's continuation as the canary —
                 # ExperimentPusher throttles internally to ~hourly.
                 first = PROBE_PROMPTS[0]
                 cont = sample(model, first, max_new=80, temperature=0.8, top_k=40)
-                pusher.canary_sample(step=step, prompt=first,
-                                     completion=cont[len(first):])
+                lab_run.sample(step=step, prompt=first,
+                               completion=cont[len(first):])
 
     final_path = save_ckpt(cfg.total_steps, tag="FINAL")
     print(f"\nDone. Final checkpoint: {final_path}", flush=True)
     print(f"Training log: {log_path}", flush=True)
-    if pusher is not None:
-        pusher.event(type="run_complete", step=cfg.total_steps,
-                     details=f"reached step {cfg.total_steps}")
-        pusher.complete(final_state="completed", final_metrics=last_metrics)
-    if archive is not None:
-        archive.complete()
+    if lab_run is not None:
+        lab_run.event(type="run_complete", step=cfg.total_steps,
+                      details=f"reached step {cfg.total_steps}")
+        lab_run.complete(final_state="completed", final_metrics=last_metrics)
 
 
 # ----------------------------------------------------------------------------

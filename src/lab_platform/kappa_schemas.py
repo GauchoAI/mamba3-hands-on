@@ -118,12 +118,48 @@ SESSION_ENVELOPE_V1 = {
 }
 
 
+SEALED_SHARD_V2 = {
+    "dialect": "json-schema-2020-12",
+    "title": "Lab sealed archive shard",
+    "description": (
+        "Additive v2 archive index record. Written only after a local shard "
+        "has been packed, uploaded to Hugging Face, and verified. Existing "
+        "v1 stream_meta records remain valid; this schema is for richer UI "
+        "and audit views."
+    ),
+    "type": "object",
+    "required": [
+        "schema_version", "stream", "date", "experiment_id", "run_id",
+        "kind", "hf_uri", "row_count", "bytes", "sealed_at",
+    ],
+    "properties": {
+        "schema_version": {"type": "integer", "const": 2},
+        "stream": {"type": "string"},
+        "date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
+        "experiment_id": {"type": "string"},
+        "run_id": {"type": "string"},
+        "kind": {"type": "string"},
+        "hf_uri": {"type": "string"},
+        "browse_url": {"type": "string"},
+        "row_count": {"type": "integer", "minimum": 0},
+        "bytes": {"type": "integer", "minimum": 0},
+        "sha256": {"type": ["string", "null"]},
+        "sealed_at": {"type": "number"},
+        "producer_git_sha": {"type": ["string", "null"]},
+        "source_jsonl": {"type": ["string", "null"]},
+        "parquet_filename": {"type": ["string", "null"]},
+    },
+    "additionalProperties": True,
+}
+
+
 # Schema registry — name → (version, schema_doc).
 # Producers iterate this on init and PUT each entry to /_schemas/<name>/v<version>.
 SCHEMAS: dict[str, dict] = {
     "kappa_manifest":   {"v": 1, "doc": KAPPA_MANIFEST_V1},
     "stream_meta":      {"v": 1, "doc": STREAM_META_V1},
     "session_envelope": {"v": 1, "doc": SESSION_ENVELOPE_V1},
+    "sealed_shard":     {"v": 2, "doc": SEALED_SHARD_V2},
 }
 
 
