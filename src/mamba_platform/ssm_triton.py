@@ -66,10 +66,10 @@ def ssm_scan(inp, decay, C, x, z, D):
     Triton is available but has precision bugs — only used if explicitly forced.
     """
     if FORCE_BACKEND == "native":
-        from ssm_scan_native import ssm_scan_native
+        from .ssm_scan_native import ssm_scan_native
         return ssm_scan_native(inp, decay, C, x, z, D)
     if FORCE_BACKEND == "compiled":
-        from ssm_scan_native import ssm_scan_compiled
+        from .ssm_scan_native import ssm_scan_compiled
         return ssm_scan_compiled(inp, decay, C, x, z, D)
     if FORCE_BACKEND == "jit":
         return ssm_scan_jit(inp, decay, C, x, z, D)
@@ -77,14 +77,14 @@ def ssm_scan(inp, decay, C, x, z, D):
         return ssm_scan_triton(inp, decay, C, x, z, D)
     # Auto: use native (correct) on all devices.
     # Triton is NOT the default — it has precision bugs.
-    from ssm_scan_native import ssm_scan_native
+    from .ssm_scan_native import ssm_scan_native
     return ssm_scan_native(inp, decay, C, x, z, D)
 
 
 # ── Triton kernel (only defined when triton is available) ───────────
 
 if HAS_TRITON:
-    from ssm_triton_kernel import _ssm_scan_fwd_kernel
+    from .ssm_triton_kernel import _ssm_scan_fwd_kernel
 
     def ssm_scan_triton(inp, decay, C, x, z, D):
         """Triton-accelerated SSM scan."""

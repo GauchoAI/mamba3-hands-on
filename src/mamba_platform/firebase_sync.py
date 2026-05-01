@@ -14,7 +14,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-import firebase_push as fb
+from . import firebase_push as fb
 
 FIREBASE_URL = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app"
 

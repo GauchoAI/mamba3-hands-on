@@ -11,8 +11,8 @@ import time
 import torch
 sys.path.insert(0, ".")
 
-from ssm_triton import ssm_scan_jit
-from ssm_scan_native import ssm_scan_native, ssm_scan_compiled
+from mamba_platform.ssm_triton import ssm_scan_jit
+from mamba_platform.ssm_scan_native import ssm_scan_native, ssm_scan_compiled
 
 
 def bench_one(fn, args, warmup=5, iters=50):
@@ -56,7 +56,7 @@ def main():
         "compiled": ssm_scan_compiled,
     }
     try:
-        from ssm_triton import ssm_scan_triton
+        from mamba_platform.ssm_triton import ssm_scan_triton
         backends["triton"] = ssm_scan_triton
     except Exception:
         pass

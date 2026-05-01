@@ -204,7 +204,7 @@ def main():
     # Archive to the HF bucket (no-op without HF_TOKEN).
     try:
         import time as _time
-        from cloud_archive import CloudArchive
+        from .cloud_archive import CloudArchive
         a = CloudArchive(
             experiment_kind="corpus",
             run_name=f"teacher-local-qwen-{_time.strftime('%Y-%m-%d')}",

@@ -191,7 +191,7 @@ class Mamba3Block(nn.Module):
         inp_all = inp_all * DT[..., None, None]  # (B, L, H, hD, dS)
 
         # ---- Scan: Triton on CUDA, JIT on MPS/CPU ────────────────
-        from ssm_triton import ssm_scan
+        from .ssm_triton import ssm_scan
         y = ssm_scan(inp_all, decay, Cp_rot, x, z, self.D)  # (B, L, H, hD)
         y = y.reshape(B_, L, self.d_inner)
 

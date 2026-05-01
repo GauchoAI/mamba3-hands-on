@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mamba3_minimal import Mamba3Block, Mamba2LikeBlock, Mamba3Config
+from mamba_platform.mamba3_minimal import Mamba3Block, Mamba2LikeBlock, Mamba3Config
 
 
 def make_selective_copy_batch(B, L, vocab=4, marker=4, device="cpu"):

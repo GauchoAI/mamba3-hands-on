@@ -36,7 +36,7 @@ import torch.nn as nn
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cortex_counting import CortexLM, CortexLMConfig
+from mamba_platform.cortex_counting import CortexLM, CortexLMConfig
 
 
 # ─────────────────────────────────────────────────────────────────────

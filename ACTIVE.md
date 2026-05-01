@@ -14,6 +14,13 @@ directories are intentionally not duplicated.
 Use the project virtualenv:
 
 ```bash
+.venv/bin/python -m pip install -e .
+```
+
+The Makefile also exports `PYTHONPATH=src`, so the commands below work from a
+source checkout before installation.
+
+```bash
 .venv/bin/python experiments/10_jepa_structured/orchestrator.py status
 ```
 
@@ -38,7 +45,7 @@ Run a bounded training smoke pass:
 ## Project Layout
 
 - `experiments/` holds numbered research chapters.
-- Root Python modules are shared platform infrastructure used across chapters.
+- `src/mamba_platform/` holds shared platform infrastructure used across chapters.
 - `tools/` holds dashboards, diagnostics, cluster helpers, and one-off utilities.
 - `docs/` holds architecture, findings, plans, and legacy context.
 - `data/`, `checkpoints/`, `runs/`, logs, and pid files are runtime artifacts and

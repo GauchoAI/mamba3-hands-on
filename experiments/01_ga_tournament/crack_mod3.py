@@ -6,7 +6,7 @@ found -pi for parity.
 """
 import math, time
 import torch, torch.nn as nn, torch.nn.functional as F
-from mamba3_minimal import Mamba3Block, Mamba2LikeBlock, Mamba3Config
+from mamba_platform.mamba3_minimal import Mamba3Block, Mamba2LikeBlock, Mamba3Config
 from modular_counting import make_modular_batch, ModularModel
 
 

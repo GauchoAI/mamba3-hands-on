@@ -688,7 +688,7 @@ class StateDB:
     def sync_to_firebase(self):
         """Push full state to Firebase: teachers, lineage, model cards, knowledge flow."""
         try:
-            import firebase_push as fb
+            from mamba_platform import firebase_push as fb
 
             # Push teachers
             teachers = self.get_teachers()

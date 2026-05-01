@@ -97,7 +97,7 @@ def build_corpus() -> None:
 
     # Archive the generated corpus to the HF bucket (no-op without HF_TOKEN)
     try:
-        from cloud_archive import CloudArchive
+        from .cloud_archive import CloudArchive
         a = CloudArchive(
             experiment_kind="corpus",
             run_name=f"tatoeba-bilingual-{time.strftime('%Y-%m-%d')}",

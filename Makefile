@@ -1,6 +1,7 @@
 PYTHON ?= .venv/bin/python
 ACTIVE_EXP ?= experiments/10_jepa_structured
 ORCH := $(ACTIVE_EXP)/orchestrator.py
+export PYTHONPATH := src:$(PYTHONPATH)
 
 .PHONY: active-status active-gen active-train active-smoke
 

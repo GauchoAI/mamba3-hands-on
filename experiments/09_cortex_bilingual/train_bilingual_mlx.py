@@ -24,7 +24,7 @@ from pathlib import Path
 
 # Allow `from mamba3_mlx import ...` from sibling file when run anywhere.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-# Allow `from experiment_pusher import ...` from repo root.
+# Allow `from mamba_platform.experiment_pusher import ...` from repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
@@ -36,13 +36,13 @@ import mlx.utils
 from mamba3_mlx import CortexLM, CortexLMConfig
 
 try:
-    from experiment_pusher import ExperimentPusher
+    from mamba_platform.experiment_pusher import ExperimentPusher
     _HAS_PUSHER = True
 except ImportError:
     _HAS_PUSHER = False
 
 try:
-    from cloud_archive import CloudArchive
+    from mamba_platform.cloud_archive import CloudArchive
     _HAS_ARCHIVE = True
 except ImportError:
     _HAS_ARCHIVE = False

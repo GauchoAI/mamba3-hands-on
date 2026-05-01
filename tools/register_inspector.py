@@ -56,7 +56,7 @@ def inspect_example(model, tokens, sep, device):
 
     # We need to intercept the SSM scan call inside the model.
     # Monkey-patch ssm_scan temporarily to capture states.
-    import ssm_triton
+    from mamba_platform import ssm_triton
     original_scan = ssm_triton.ssm_scan
     captured_states = {}
 
@@ -232,7 +232,7 @@ def save_and_push(task, report, push_firebase=True):
     # Push compact version to Firebase (no per_token details — too large)
     if push_firebase:
         try:
-            import firebase_push as fb
+            from mamba_platform import firebase_push as fb
             compact = {
                 "task": report["task"],
                 "accuracy": report["accuracy"],

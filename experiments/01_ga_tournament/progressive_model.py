@@ -16,7 +16,7 @@ Usage:
 """
 import torch
 import torch.nn as nn
-from mamba3_minimal import Mamba3Block, Mamba3Config
+from mamba_platform.mamba3_minimal import Mamba3Block, Mamba3Config
 
 
 # ── Byte-level tokenizer ────────────────────────────────────────────

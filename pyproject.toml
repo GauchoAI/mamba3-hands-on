@@ -31,4 +31,5 @@ jepa_structured_data = [
 mamba = "cli.main:main"
 
 [tool.setuptools.packages.find]
-include = ["cli*", "registry*", "server*", "generators*"]
+where = [".", "src"]
+include = ["cli*", "registry*", "server*", "generators*", "mamba_platform*"]

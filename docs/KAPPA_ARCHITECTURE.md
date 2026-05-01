@@ -156,9 +156,8 @@ propagation, not data.
 
 To follow the convention:
 
-1. Create a folder under `experiments/` (or at repo root if it's a
-   first-class line of work). Per-experiment isolation per the
-   subfolder convention.
+1. Create a folder under `experiments/`. Per-experiment isolation follows
+   the subfolder convention.
 2. Producer scripts open output files with date-shard names:
    ```python
    from datetime import datetime, timezone
@@ -180,7 +179,7 @@ To follow the convention:
 4. Schedule the packer to run periodically (cron, launchd, or
    manually before deciding "this run is done"):
    ```bash
-   python kappa_packer.py --dir <run_dir> --age-hours 24
+   PYTHONPATH=src python -m mamba_platform.kappa_packer --dir <run_dir> --age-hours 24
    ```
 5. Make readers transparent: use `kappa_packer.read_records(path)`
    instead of `open(path).read()`.
@@ -354,9 +353,9 @@ both and sorts by `ts` without double-counting.
 Quick CLI:
 
 ```bash
-python stream_reader.py ls                                   # list everything
-python stream_reader.py meta <exp> <run> <stream>            # one stream's meta
-python stream_reader.py read <exp> <run> <stream> --limit 10 # read records
+PYTHONPATH=src python -m mamba_platform.stream_reader ls                                   # list everything
+PYTHONPATH=src python -m mamba_platform.stream_reader meta <exp> <run> <stream>            # one stream's meta
+PYTHONPATH=src python -m mamba_platform.stream_reader read <exp> <run> <stream> --limit 10 # read records
 ```
 
 ## Why Kappa, not Lambda

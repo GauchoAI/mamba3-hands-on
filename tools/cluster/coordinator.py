@@ -745,7 +745,7 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
 
     # Push to Firebase (real-time)
     try:
-        import firebase_push as fb
+        from mamba_platform import firebase_push as fb
         actual_workers = get_actual_worker_count()
         fb.push_snapshot(results, generation, gpu_pct, mem_pct, evo_state)
         fb.push_gpu_tick(gpu_pct, mem_pct, actual_workers, generation)
@@ -772,7 +772,7 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
     severity = evo_state.get_plateau_severity()
 
     try:
-        import firebase_push as fb
+        from mamba_platform import firebase_push as fb
         # New best event
         if current_best > old_best + 0.005:
             fb.evt_new_best(results[0]["exp_id"], current_best, old_best,
@@ -834,7 +834,7 @@ def _run_generation(mgr, metrics, args, generation, max_workers, evo_state):
                 f"paused for evolution (fresh={worst.get('best_fresh',0):.1%})")
             metrics.update_status(worst["exp_id"], "paused")
             try:
-                import firebase_push as fb
+                from mamba_platform import firebase_push as fb
                 fb.evt_evolve(child_id, best["exp_id"], worst["exp_id"],
                              selection_reason, best.get("best_fresh", 0), child_cfg)
                 fb.evt_pause(worst["exp_id"], worst.get("best_fresh", 0),

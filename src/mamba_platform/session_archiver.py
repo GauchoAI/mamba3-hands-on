@@ -44,9 +44,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterator
 
-from experiment_pusher import ExperimentPusher
+from .experiment_pusher import ExperimentPusher
 try:
-    from cloud_archive import CloudArchive
+    from .cloud_archive import CloudArchive
     _HAS_ARCHIVE = True
 except ImportError:
     _HAS_ARCHIVE = False

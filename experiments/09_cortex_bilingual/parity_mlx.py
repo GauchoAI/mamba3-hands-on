@@ -25,7 +25,7 @@ import mlx.core as mx
 import mlx.nn as mlx_nn
 
 # PyTorch reference
-from cortex_counting import (
+from mamba_platform.cortex_counting import (
     CortexLM as PTCortexLM,
     CortexLMConfig as PTCortexLMConfig,
     CounterPrimitive as PTCounterPrimitive,

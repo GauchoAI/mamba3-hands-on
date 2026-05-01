@@ -138,7 +138,7 @@ def build_corpus(target_mb: float | None, full: bool) -> None:
     # Archive the generated corpus to the HF bucket (no-op without HF_TOKEN).
     # `_*` excludes catch the multi-GB _opensubtitles_cache/.
     try:
-        from cloud_archive import CloudArchive
+        from .cloud_archive import CloudArchive
         a = CloudArchive(
             experiment_kind="corpus",
             run_name=f"opensubtitles-{time.strftime('%Y-%m-%d')}",

@@ -43,7 +43,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mamba3_minimal import Mamba3Block, Mamba3Config
+from .mamba3_minimal import Mamba3Block, Mamba3Config
 
 
 # ----------------------------------------------------------------------------

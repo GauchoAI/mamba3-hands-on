@@ -321,7 +321,7 @@ def run(args):
 
         # Push Firebase snapshot
         try:
-            import firebase_push as fb
+            from mamba_platform import firebase_push as fb
             leaderboard = []
             for s in all_status:
                 entry = {"task": s["task"], "acc": s["best_accuracy"],

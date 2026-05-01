@@ -60,7 +60,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from kappa_schemas import SCHEMAS, schema_path
+from .kappa_schemas import SCHEMAS, schema_path
 
 # ---------------------------------------------------------------------------
 # Firebase RTDB endpoint — same DB the existing GA dashboard reads from
@@ -504,7 +504,7 @@ class ExperimentPusher:
         """
         try:
             try:
-                from kappa_packer import pack_one, seal_via_rtdb, find_manifest
+                from .kappa_packer import pack_one, seal_via_rtdb, find_manifest
             except ImportError as e:
                 print(f"[pusher] auto-pack disabled: {e}", flush=True)
                 return

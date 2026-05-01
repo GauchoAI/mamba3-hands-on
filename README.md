@@ -10,6 +10,12 @@ marked.
 For the current working route and exact commands, see
 [`ACTIVE.md`](ACTIVE.md).
 
+For reusable platform imports, install the checkout in editable mode:
+
+```bash
+.venv/bin/python -m pip install -e .
+```
+
 ## Chapters
 
 | # | Chapter | Status | Synopsis |
@@ -28,33 +34,33 @@ For the current working route and exact commands, see
 Each chapter has its own `README.md` with synopsis, status, and a
 cross-link to the relevant `docs/findings/<topic>.md` entry.
 
-## Infrastructure (project root)
+## Infrastructure
 
-The Kappa pipeline + supporting modules used by every chapter live at
-the root so they don't need to be duplicated per experiment:
+The reusable platform modules used across chapters live under
+[`src/mamba_platform/`](src/mamba_platform/):
 
 - **Persistence + telemetry**:
-  [`experiment_pusher.py`](experiment_pusher.py),
-  [`kappa_packer.py`](kappa_packer.py),
-  [`kappa_schemas.py`](kappa_schemas.py),
-  [`stream_reader.py`](stream_reader.py),
-  [`cloud_archive.py`](cloud_archive.py),
-  [`session_archiver.py`](session_archiver.py),
-  [`firebase_push.py`](firebase_push.py),
-  [`firebase_sync.py`](firebase_sync.py).
+  [`experiment_pusher.py`](src/mamba_platform/experiment_pusher.py),
+  [`kappa_packer.py`](src/mamba_platform/kappa_packer.py),
+  [`kappa_schemas.py`](src/mamba_platform/kappa_schemas.py),
+  [`stream_reader.py`](src/mamba_platform/stream_reader.py),
+  [`cloud_archive.py`](src/mamba_platform/cloud_archive.py),
+  [`session_archiver.py`](src/mamba_platform/session_archiver.py),
+  [`firebase_push.py`](src/mamba_platform/firebase_push.py),
+  [`firebase_sync.py`](src/mamba_platform/firebase_sync.py).
 - **Cluster control**:
-  [`cluster_dispatch.py`](cluster_dispatch.py),
-  [`cluster_sync.py`](cluster_sync.py).
+  [`cluster_dispatch.py`](src/mamba_platform/cluster_dispatch.py),
+  [`cluster_sync.py`](src/mamba_platform/cluster_sync.py).
 - **Models + kernels**:
-  [`mamba3_minimal.py`](mamba3_minimal.py),
-  [`mamba3_lm.py`](mamba3_lm.py),
-  [`cortex_counting.py`](cortex_counting.py) (the `Primitive` base
+  [`mamba3_minimal.py`](src/mamba_platform/mamba3_minimal.py),
+  [`mamba3_lm.py`](src/mamba_platform/mamba3_lm.py),
+  [`cortex_counting.py`](src/mamba_platform/cortex_counting.py) (the `Primitive` base
   class + `CortexLM`),
-  [`ssm_*.py`](.) (SSM scan kernels).
+  `ssm_*.py` (SSM scan kernels).
 - **Corpora**:
-  [`make_bilingual_corpus.py`](make_bilingual_corpus.py),
-  [`make_opensubtitles_corpus.py`](make_opensubtitles_corpus.py),
-  [`make_teacher_corpus.py`](make_teacher_corpus.py).
+  [`make_bilingual_corpus.py`](src/mamba_platform/make_bilingual_corpus.py),
+  [`make_opensubtitles_corpus.py`](src/mamba_platform/make_opensubtitles_corpus.py),
+  [`make_teacher_corpus.py`](src/mamba_platform/make_teacher_corpus.py).
 
 ## Architecture documents
 

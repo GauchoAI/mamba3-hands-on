@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mamba3_minimal import Mamba3Block, Mamba3Config
+from mamba_platform.mamba3_minimal import Mamba3Block, Mamba3Config
 
 VOCAB = 16   # data values 0..15
 SEP = 16

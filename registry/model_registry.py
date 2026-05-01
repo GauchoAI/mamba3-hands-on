@@ -127,7 +127,7 @@ class ModelRegistry:
 
         # Try Firebase blob first — works through any NAT, no peer SSH.
         try:
-            from firebase_push import download_teacher_blob
+            from mamba_platform.firebase_push import download_teacher_blob
             if download_teacher_blob(task, local_path):
                 print(f"  Fetched {task} teacher from Firebase blob "
                       f"({local_path.stat().st_size // 1024}KB)", flush=True)

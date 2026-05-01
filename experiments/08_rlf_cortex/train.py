@@ -46,7 +46,7 @@ from checkpoint import AsyncCheckpointer, capture_rng
 try:
     import sys as _sys
     _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from experiment_pusher import ExperimentPusher
+    from mamba_platform.experiment_pusher import ExperimentPusher
     _HAS_PUSHER = True
 except ImportError:
     _HAS_PUSHER = False
