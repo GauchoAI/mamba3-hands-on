@@ -259,10 +259,16 @@
       max-height: 360px;
       overflow: auto;
       border-radius: 8px;
-      background: #171512;
-      color: #fff8e8;
+      background: #11100e;
+      color: #fffaf0;
       padding: 12px;
       font: 12px/1.45 var(--mono);
+    }
+    .prose pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      border-radius: 0;
     }
     .source-list {
       display: grid;
@@ -492,6 +498,8 @@
       schemas: {},
       markdown: {},
       filter: "",
+      routeApplying: false,
+      routeTicking: false,
     };
     const $ = (id) => document.getElementById(id);
     const tpl = Handlebars.compile($("chapter-template").innerHTML);
@@ -688,6 +696,14 @@
     function wordCount(markdown) {
       return markdown.replace(/```[\s\S]*?```/g, " ").replace(/[^\w\s-]/g, " ").trim().split(/\s+/).filter(Boolean).length;
     }
+    function slugify(text) {
+      return String(text || "")
+        .toLowerCase()
+        .replace(/[`'"’]/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "section";
+    }
     function splitMarkdownSections(markdown) {
       const matches = [...markdown.matchAll(/^##\s+(.+)$/gm)];
       if (!matches.length) return { intro: markdown, sections: [] };
@@ -711,7 +727,8 @@
       const openCount = Number(attrs.open_sections || 1);
       const sectionHtml = sections.map((section, i) => {
         const open = i < openCount ? "open" : "";
-        return `<details class="md-section" ${open} data-section="${esc(section.title.toLowerCase())}">
+        const slug = slugify(section.title);
+        return `<details class="md-section" ${open} data-section="${esc(section.title.toLowerCase())}" data-section-slug="${esc(slug)}">
           <summary><strong>${esc(section.title)}</strong><span>${num(wordCount(section.body))} words</span></summary>
           <div class="prose">${marked.parse(section.body)}</div>
         </details>`;
@@ -1006,6 +1023,7 @@
       const visible = q ? chapters.filter(ch => ch.filterText.includes(q)) : chapters;
       $("book").innerHTML = visible.map(ch => tpl(ch)).join("") || `<div class="empty">No chapters match the filter.</div>`;
       $("toc").innerHTML = renderToc(visible);
+      attachSectionRouteHandlers();
       drawCharts(legacy, tasks);
       applyRoute();
     }
@@ -1170,29 +1188,118 @@
       if (!chapterId) return;
       const chapter = document.getElementById(chapterId);
       if (!chapter) return;
+      state.routeApplying = true;
+      const wantedOpen = (params.get("open") || "").split(",").map(s => s.trim()).filter(Boolean);
       if (params.get("expand") === "1") {
         chapter.querySelectorAll(".md-section").forEach(section => {
           section.open = true;
+        });
+      } else if (params.has("open")) {
+        chapter.querySelectorAll(".md-section").forEach(section => {
+          section.open = wantedOpen.includes(section.dataset.sectionSlug);
         });
       }
       const sectionNeedle = (params.get("section") || "").toLowerCase();
       if (sectionNeedle) {
         const section = [...chapter.querySelectorAll(".md-section")].find(item =>
+          item.dataset.sectionSlug === sectionNeedle ||
           item.querySelector("summary strong")?.textContent.toLowerCase().includes(sectionNeedle)
         );
         if (section) {
           section.open = true;
-          requestAnimationFrame(() => section.scrollIntoView({ block: "start" }));
+          requestAnimationFrame(() => {
+            section.scrollIntoView({ block: "start" });
+            state.routeApplying = false;
+            syncRouteFromViewport();
+          });
           return;
         }
       }
-      requestAnimationFrame(() => chapter.scrollIntoView({ block: "start" }));
+      requestAnimationFrame(() => {
+        chapter.scrollIntoView({ block: "start" });
+        state.routeApplying = false;
+        syncRouteFromViewport();
+      });
+    }
+    function attachSectionRouteHandlers() {
+      document.querySelectorAll(".md-section").forEach(section => {
+        section.addEventListener("toggle", () => {
+          if (state.routeApplying) return;
+          const chapter = section.closest(".chapter");
+          if (!chapter) return;
+          updateRoute(chapter, section.open ? section : null);
+        });
+      });
+    }
+    function chapterAtViewport() {
+      const marker = Math.min(window.innerHeight * 0.35, 260);
+      const chapters = [...document.querySelectorAll(".chapter")];
+      return chapters.find(ch => {
+        const rect = ch.getBoundingClientRect();
+        return rect.top <= marker && rect.bottom >= marker;
+      }) || chapters.find(ch => ch.getBoundingClientRect().top >= 0) || chapters[0];
+    }
+    function sectionAtViewport(chapter) {
+      if (!chapter) return null;
+      const marker = Math.min(window.innerHeight * 0.38, 280);
+      const sections = [...chapter.querySelectorAll(".md-section")];
+      return sections.find(section => {
+        const rect = section.getBoundingClientRect();
+        return rect.top <= marker && rect.bottom >= marker;
+      }) || sections.find(section => section.getBoundingClientRect().top >= 0) || null;
+    }
+    function openSectionSlugs(chapter) {
+      return [...chapter.querySelectorAll(".md-section")]
+        .filter(section => section.open)
+        .map(section => section.dataset.sectionSlug)
+        .filter(Boolean);
+    }
+    function updateRoute(chapter, section = null) {
+      if (!chapter) return;
+      const params = new URLSearchParams(window.location.search);
+      params.set("chapter", chapter.id);
+      const candidateSection = section || sectionAtViewport(chapter);
+      const activeSection = candidateSection?.open ? candidateSection : null;
+      if (activeSection?.dataset.sectionSlug) {
+        params.set("section", activeSection.dataset.sectionSlug);
+      } else {
+        params.delete("section");
+      }
+      const open = openSectionSlugs(chapter);
+      if (open.length) {
+        params.set("open", open.join(","));
+      } else {
+        params.set("open", "");
+      }
+      params.delete("id");
+      params.delete("expand");
+      params.delete("audit");
+      const next = `${window.location.pathname}?${params.toString()}`;
+      if (`${window.location.pathname}${window.location.search}` !== next) {
+        history.replaceState(null, "", next);
+      }
+    }
+    function syncRouteFromViewport() {
+      if (state.routeApplying) return;
+      const chapter = chapterAtViewport();
+      if (!chapter) return;
+      updateRoute(chapter, sectionAtViewport(chapter));
+    }
+    function scheduleRouteSync() {
+      if (state.routeApplying || state.routeTicking) return;
+      state.routeTicking = true;
+      requestAnimationFrame(() => {
+        state.routeTicking = false;
+        syncRouteFromViewport();
+      });
     }
     function applyFilter() {
       state.filter = $("filter").value.trim().toLowerCase();
       buildBook();
     }
     $("filter").addEventListener("input", applyFilter);
+    window.addEventListener("scroll", scheduleRouteSync, { passive: true });
+    window.addEventListener("popstate", applyRoute);
     $("refresh").addEventListener("click", () => getAll().then(buildBook).catch(err => {
       $("load-meta").textContent = `Load failed: ${err.message}`;
     }));
