@@ -264,3 +264,61 @@ still constructed and narrow, but it is closer to adversarial evaluation:
 there is an opponent move, a sequence to complete, and terminal checkmate is
 the success criterion. The motif expert remains slightly ahead, while the
 JEPA-policy remains competitive.
+
+### Iteration 8 - sample-efficiency competition sweep
+
+Implemented:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_competition_sweep.py --budgets 4,8,16,32,64,128 --policy-epochs 80
+```
+
+This makes the two chess experts compete across increasing data budgets. The
+test set is fixed at 192 held-out mate-in-one tactical positions. At each
+budget, both experts train on the same number of examples per motif:
+
+```text
+motif-policy: direct board -> move classifier
+JEPA-policy:  frozen JEPA board encoder -> policy head -> move classifier
+```
+
+Result:
+
+```text
+train per motif | motif mate rate | JEPA-policy mate rate | winner
+4               | 0.2083          | 0.2083                | tie
+8               | 0.2812          | 0.2865                | JEPA-policy, slight
+16              | 0.4844          | 0.4688                | motif-policy, slight
+32              | 0.7031          | 0.7031                | tie
+64              | 0.9115          | 0.8958                | motif-policy, slight
+128             | 0.9635          | 0.9740                | JEPA-policy, slight
+```
+
+At the largest budget:
+
+```text
+positions: 192
+motif wins: 2
+JEPA-policy wins: 4
+ties both mate: 183
+ties both fail: 3
+```
+
+Interpretation:
+
+There is no dramatic emergent chess intelligence yet. There is, however, a
+real competitive signal: the frozen JEPA encoder is not just reconstructing
+board transitions anymore. With a small policy head, it becomes a tactical
+move selector and eventually edges the direct motif classifier on this held-out
+suite.
+
+The honest conclusion is budget-dependent:
+
+```text
+multi-ply sequence arena: motif-policy is ahead, 47/48 vs 46/48
+sample sweep at 128 examples per motif: JEPA-policy is ahead, 0.9740 vs 0.9635
+```
+
+This is still a generated tactical domain. The next harder version should make
+the competition more adversarial by using longer forced lines, mixed tactical
+families, and failure cases mined from the current decisive examples.

@@ -23,3 +23,5 @@ goal is to improve the chess expert itself.
 - Puzzle sequence arena: evaluate multi-ply constructed puzzles with a defender
   reply, so success requires completing a line rather than only finding one
   move.
+- Competition sweep: compare motif-policy and frozen-JEPA-policy under
+  increasing training budgets to expose where one expert starts winning.
