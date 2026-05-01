@@ -2,1044 +2,3155 @@
   "status": "sample_efficiency_competition_sweep",
   "scope": "held-out mate-in-one tactical policy competition under increasing train budgets",
   "device": "mps",
-  "elapsed_s": 7.162,
-  "jepa_bridge_pretrain": {
-    "cosine_mean": 0.997835,
-    "nearest_neighbor_top1": 0.0633,
-    "nearest_neighbor_top5": 0.5933
-  },
-  "rows": [
+  "elapsed_s": 31.762,
+  "seeds": [
+    67,
+    68,
+    69
+  ],
+  "seed_runs": [
     {
-      "positions": 192,
-      "motif_mate_rate": 0.2083,
-      "jepa_mate_rate": 0.2083,
-      "motif_wins": 12,
-      "jepa_wins": 12,
-      "ties_both_mate": 28,
-      "ties_both_fail": 140,
-      "by_family": {
-        "back_rank_rook_queen": {
-          "n": 48,
-          "motif_mate_rate": 0.1458,
-          "jepa_mate_rate": 0.125,
-          "motif_wins": 3,
-          "jepa_wins": 2
-        },
-        "queen_side_file": {
-          "n": 48,
-          "motif_mate_rate": 0.3125,
-          "jepa_mate_rate": 0.2917,
-          "motif_wins": 3,
-          "jepa_wins": 2
-        },
-        "rook_side_file": {
-          "n": 48,
-          "motif_mate_rate": 0.1667,
-          "jepa_mate_rate": 0.2292,
-          "motif_wins": 0,
-          "jepa_wins": 3
-        },
-        "knight_corner": {
-          "n": 48,
-          "motif_mate_rate": 0.2083,
-          "jepa_mate_rate": 0.1875,
-          "motif_wins": 6,
-          "jepa_wins": 5
-        }
+      "seed": 67,
+      "jepa_bridge_pretrain": {
+        "cosine_mean": 0.998309,
+        "nearest_neighbor_top1": 0.095,
+        "nearest_neighbor_top5": 0.7125
       },
-      "decisive_examples": [
+      "rows": [
         {
-          "motif": "back_rank_rook_queen",
-          "fen": "4k3/3ppp2/8/8/8/8/6Q1/7K w - - 0 1",
-          "expected": "g2g8",
-          "all_mates": [
-            "g2a8",
-            "g2g8"
-          ],
-          "motif_move": "g2a2",
-          "motif_mate": false,
-          "jepa_move": "g2a2",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "6nk/6pp/6BP/6N1/8/8/8/K7 w - - 0 1",
-          "expected": "g5f7",
-          "all_mates": [
-            "g5f7"
-          ],
-          "motif_move": "g5h3",
-          "motif_mate": false,
-          "jepa_move": "g6e8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "3k4/2ppp3/4p3/1Q2b3/8/4B3/6n1/7K w - - 0 1",
-          "expected": "b5b8",
-          "all_mates": [
-            "b5b8"
-          ],
-          "motif_move": "b5b2",
-          "motif_mate": false,
-          "jepa_move": "b5b7",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "8/1p6/kp3n2/1p6/8/8/7B/3R3K w - - 0 1",
-          "expected": "d1a1",
-          "all_mates": [
-            "d1a1"
-          ],
-          "motif_move": "h2b8",
-          "motif_mate": false,
-          "jepa_move": "d1a1",
-          "jepa_mate": true,
-          "outcome": "jepa_win"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "4k3/3ppp2/2Q5/8/1b6/7P/8/7K w - - 0 1",
-          "expected": "c6c8",
-          "all_mates": [
-            "c6a8",
-            "c6c8"
-          ],
-          "motif_move": "c6b7",
-          "motif_mate": false,
-          "jepa_move": "h1g1",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "6R1/7n/3P4/8/1p6/kp6/1p6/7K w - - 0 1",
-          "expected": "g8a8",
-          "all_mates": [
-            "g8a8"
-          ],
-          "motif_move": "h1g1",
-          "motif_mate": false,
-          "jepa_move": "g8g3",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "K7/4p3/P7/5N2/8/8/6pp/6nk w - - 0 1",
-          "expected": "f5g3",
-          "all_mates": [
-            "f5g3"
-          ],
-          "motif_move": "f5h6",
-          "motif_mate": false,
-          "jepa_move": "a8a7",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "kn6/pp3b2/4N3/8/8/8/8/7K w - - 0 1",
-          "expected": "e6c7",
-          "all_mates": [
-            "e6c7"
-          ],
-          "motif_move": "e6f8",
-          "motif_mate": false,
-          "jepa_move": "e6g7",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "1R6/8/8/2n2Pp1/6pk/6p1/8/K7 w - - 0 1",
-          "expected": "b8h8",
-          "all_mates": [
-            "b8h8"
-          ],
-          "motif_move": "b8d8",
-          "motif_mate": false,
-          "jepa_move": "a1a2",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "4R3/8/8/8/6p1/6pk/4b1pN/K7 w - - 0 1",
-          "expected": "e8h8",
-          "all_mates": [
-            "e8h8"
-          ],
-          "motif_move": "e8d8",
-          "motif_mate": false,
-          "jepa_move": "a1a2",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        }
-      ],
-      "train_per_family": 4,
-      "train_cases": 16
-    },
-    {
-      "positions": 192,
-      "motif_mate_rate": 0.2812,
-      "jepa_mate_rate": 0.2865,
-      "motif_wins": 5,
-      "jepa_wins": 6,
-      "ties_both_mate": 49,
-      "ties_both_fail": 132,
-      "by_family": {
-        "back_rank_rook_queen": {
-          "n": 48,
-          "motif_mate_rate": 0.2083,
-          "jepa_mate_rate": 0.1667,
-          "motif_wins": 2,
-          "jepa_wins": 0
-        },
-        "queen_side_file": {
-          "n": 48,
-          "motif_mate_rate": 0.375,
-          "jepa_mate_rate": 0.375,
-          "motif_wins": 0,
-          "jepa_wins": 0
-        },
-        "rook_side_file": {
-          "n": 48,
-          "motif_mate_rate": 0.2708,
-          "jepa_mate_rate": 0.2708,
-          "motif_wins": 1,
-          "jepa_wins": 1
-        },
-        "knight_corner": {
-          "n": 48,
-          "motif_mate_rate": 0.2708,
-          "jepa_mate_rate": 0.3333,
-          "motif_wins": 2,
-          "jepa_wins": 5
-        }
-      },
-      "decisive_examples": [
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "4k3/3ppp2/8/8/8/8/6Q1/7K w - - 0 1",
-          "expected": "g2g8",
-          "all_mates": [
-            "g2a8",
-            "g2g8"
-          ],
-          "motif_move": "h1g1",
-          "motif_mate": false,
-          "jepa_move": "g2g7",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "3k4/2ppp3/4p3/1Q2b3/8/4B3/6n1/7K w - - 0 1",
-          "expected": "b5b8",
-          "all_mates": [
-            "b5b8"
-          ],
-          "motif_move": "b5d3",
-          "motif_mate": false,
-          "jepa_move": "b5b7",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "8/1p6/kp3n2/1p6/8/8/7B/3R3K w - - 0 1",
-          "expected": "d1a1",
-          "all_mates": [
-            "d1a1"
-          ],
-          "motif_move": "d1e1",
-          "motif_mate": false,
-          "jepa_move": "d1d2",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "6R1/7n/3P4/8/1p6/kp6/1p6/7K w - - 0 1",
-          "expected": "g8a8",
-          "all_mates": [
-            "g8a8"
-          ],
-          "motif_move": "g8f8",
-          "motif_mate": false,
-          "jepa_move": "g8g4",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "K7/4p3/P7/5N2/8/8/6pp/6nk w - - 0 1",
-          "expected": "f5g3",
-          "all_mates": [
-            "f5g3"
-          ],
-          "motif_move": "f5h4",
-          "motif_mate": false,
-          "jepa_move": "f5d4",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "kn6/pp3b2/4N3/8/8/8/8/7K w - - 0 1",
-          "expected": "e6c7",
-          "all_mates": [
-            "e6c7"
-          ],
-          "motif_move": "e6d8",
-          "motif_mate": false,
-          "jepa_move": "e6c5",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "1R6/8/8/2n2Pp1/6pk/6p1/8/K7 w - - 0 1",
-          "expected": "b8h8",
-          "all_mates": [
-            "b8h8"
-          ],
-          "motif_move": "b8b1",
-          "motif_mate": false,
-          "jepa_move": "a1b1",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "4R3/8/8/8/6p1/6pk/4b1pN/K7 w - - 0 1",
-          "expected": "e8h8",
-          "all_mates": [
-            "e8h8"
-          ],
-          "motif_move": "e8a8",
-          "motif_mate": false,
-          "jepa_move": "e8a8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "8/8/6p1/6pk/6p1/8/8/KR6 w - - 0 1",
-          "expected": "b1h1",
-          "all_mates": [
-            "b1h1"
-          ],
-          "motif_move": "b1c1",
-          "motif_mate": false,
-          "jepa_move": "b1b4",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "queen_side_file",
-          "fen": "8/1p6/kp4b1/1p6/8/1P6/1B6/3Q3K w - - 0 1",
-          "expected": "d1a1",
-          "all_mates": [
-            "d1a1"
-          ],
-          "motif_move": "d1e1",
-          "motif_mate": false,
-          "jepa_move": "b2c1",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        }
-      ],
-      "train_per_family": 8,
-      "train_cases": 32
-    },
-    {
-      "positions": 192,
-      "motif_mate_rate": 0.4844,
-      "jepa_mate_rate": 0.4688,
-      "motif_wins": 13,
-      "jepa_wins": 10,
-      "ties_both_mate": 80,
-      "ties_both_fail": 89,
-      "by_family": {
-        "back_rank_rook_queen": {
-          "n": 48,
-          "motif_mate_rate": 0.3542,
-          "jepa_mate_rate": 0.3125,
-          "motif_wins": 3,
-          "jepa_wins": 1
-        },
-        "queen_side_file": {
-          "n": 48,
+          "positions": 384,
           "motif_mate_rate": 0.5208,
-          "jepa_mate_rate": 0.5208,
-          "motif_wins": 1,
-          "jepa_wins": 1
-        },
-        "rook_side_file": {
-          "n": 48,
-          "motif_mate_rate": 0.5625,
-          "jepa_mate_rate": 0.6458,
-          "motif_wins": 2,
-          "jepa_wins": 6
-        },
-        "knight_corner": {
-          "n": 48,
-          "motif_mate_rate": 0.5,
-          "jepa_mate_rate": 0.3958,
-          "motif_wins": 7,
-          "jepa_wins": 2
-        }
-      },
-      "decisive_examples": [
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "4k3/3ppp2/8/8/8/8/6Q1/7K w - - 0 1",
-          "expected": "g2g8",
-          "all_mates": [
-            "g2a8",
-            "g2g8"
+          "jepa_mate_rate": 0.526,
+          "motif_wins": 12,
+          "jepa_wins": 14,
+          "ties_both_mate": 188,
+          "ties_both_fail": 170,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.375,
+              "jepa_mate_rate": 0.3333,
+              "motif_wins": 5,
+              "jepa_wins": 1
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.6458,
+              "jepa_mate_rate": 0.6667,
+              "motif_wins": 4,
+              "jepa_wins": 6
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.5104,
+              "jepa_mate_rate": 0.5521,
+              "motif_wins": 2,
+              "jepa_wins": 6
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.5521,
+              "jepa_mate_rate": 0.5521,
+              "motif_wins": 1,
+              "jepa_wins": 1
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "knight_corner",
+              "fen": "kn2N3/pp6/7B/8/8/8/3P4/7K w - - 0 1",
+              "expected": "e8c7",
+              "all_mates": [
+                "e8c7"
+              ],
+              "motif_move": "h6f4",
+              "motif_mate": false,
+              "jepa_move": "h1g2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/1p1ppp2/8/8/6Q1/8/8/7K w - - 0 1",
+              "expected": "g4g8",
+              "all_mates": [
+                "g4g8"
+              ],
+              "motif_move": "g4e6",
+              "motif_mate": false,
+              "jepa_move": "g4e6",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "8/1p6/kp6/1p1N3b/3p4/2B5/8/2R4K w - - 0 1",
+              "expected": "c1a1",
+              "all_mates": [
+                "c1a1"
+              ],
+              "motif_move": "c3a1",
+              "motif_mate": false,
+              "jepa_move": "c3a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "8/3bN3/1p6/kp6/1p6/4n3/8/4R2K w - - 0 1",
+              "expected": "e1a1",
+              "all_mates": [
+                "e1a1"
+              ],
+              "motif_move": "h1g1",
+              "motif_mate": false,
+              "jepa_move": "e1d1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "1R6/8/3n4/4B3/6p1/6pk/1P4p1/K7 w - - 0 1",
+              "expected": "b8h8",
+              "all_mates": [
+                "b8h8"
+              ],
+              "motif_move": "e5h8",
+              "motif_mate": false,
+              "jepa_move": "e5h8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "K7/3b4/3B4/7N/8/8/6pp/6nk w - - 0 1",
+              "expected": "h5g3",
+              "all_mates": [
+                "h5g3"
+              ],
+              "motif_move": "d6c7",
+              "motif_mate": false,
+              "jepa_move": "d6f4",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "8/1p6/kp4b1/1p6/8/1P6/1B6/3Q3K w - - 0 1",
+              "expected": "d1a1",
+              "all_mates": [
+                "d1a1"
+              ],
+              "motif_move": "b2h8",
+              "motif_mate": false,
+              "jepa_move": "d1d8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "7K/8/2b5/8/2B5/4N3/pp6/kn6 w - - 0 1",
+              "expected": "e3c2",
+              "all_mates": [
+                "e3c2"
+              ],
+              "motif_move": "c4d5",
+              "motif_mate": false,
+              "jepa_move": "c4b5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/2p5/8/1Q6/8/7K w - - 0 1",
+              "expected": "b3b8",
+              "all_mates": [
+                "b3b8",
+                "b3g8"
+              ],
+              "motif_move": "b3b8",
+              "motif_mate": true,
+              "jepa_move": "b3a2",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/2Q5/8/8/7K w - - 0 1",
+              "expected": "c4c8",
+              "all_mates": [
+                "c4c8"
+              ],
+              "motif_move": "c4a6",
+              "motif_mate": false,
+              "jepa_move": "c4c1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            }
           ],
-          "motif_move": "g2h2",
-          "motif_mate": false,
-          "jepa_move": "g2h3",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
+          "seed": 67,
+          "train_per_family": 16,
+          "train_cases": 64
         },
         {
-          "motif": "back_rank_rook_queen",
-          "fen": "3k4/2ppp3/4p3/1Q2b3/8/4B3/6n1/7K w - - 0 1",
-          "expected": "b5b8",
-          "all_mates": [
-            "b5b8"
+          "positions": 384,
+          "motif_mate_rate": 0.7526,
+          "jepa_mate_rate": 0.7214,
+          "motif_wins": 22,
+          "jepa_wins": 10,
+          "ties_both_mate": 267,
+          "ties_both_fail": 85,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.6979,
+              "jepa_mate_rate": 0.5729,
+              "motif_wins": 15,
+              "jepa_wins": 3
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.7604,
+              "jepa_mate_rate": 0.75,
+              "motif_wins": 5,
+              "jepa_wins": 4
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.7812,
+              "jepa_mate_rate": 0.7917,
+              "motif_wins": 2,
+              "jepa_wins": 3
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.7708,
+              "jepa_mate_rate": 0.7708,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "knight_corner",
+              "fen": "kn2N3/pp6/7B/8/8/8/3P4/7K w - - 0 1",
+              "expected": "e8c7",
+              "all_mates": [
+                "e8c7"
+              ],
+              "motif_move": "e8f6",
+              "motif_mate": false,
+              "jepa_move": "h6g5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/1p1ppp2/8/8/6Q1/8/8/7K w - - 0 1",
+              "expected": "g4g8",
+              "all_mates": [
+                "g4g8"
+              ],
+              "motif_move": "g4g1",
+              "motif_mate": false,
+              "jepa_move": "g4g5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "8/1p6/kp6/1p1N3b/3p4/2B5/8/2R4K w - - 0 1",
+              "expected": "c1a1",
+              "all_mates": [
+                "c1a1"
+              ],
+              "motif_move": "c3a1",
+              "motif_mate": false,
+              "jepa_move": "c1a1",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "8/3p2p1/6pk/1B4p1/8/8/6N1/K2Q4 w - - 0 1",
+              "expected": "d1h1",
+              "all_mates": [
+                "d1h1"
+              ],
+              "motif_move": "d1h1",
+              "motif_mate": true,
+              "jepa_move": "a1a2",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "8/3bN3/1p6/kp6/1p6/4n3/8/4R2K w - - 0 1",
+              "expected": "e1a1",
+              "all_mates": [
+                "e1a1"
+              ],
+              "motif_move": "e1e2",
+              "motif_mate": false,
+              "jepa_move": "e7d5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "1R6/8/3n4/4B3/6p1/6pk/1P4p1/K7 w - - 0 1",
+              "expected": "b8h8",
+              "all_mates": [
+                "b8h8"
+              ],
+              "motif_move": "b8a8",
+              "motif_mate": false,
+              "jepa_move": "e5h8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "K7/3b4/3B4/7N/8/8/6pp/6nk w - - 0 1",
+              "expected": "h5g3",
+              "all_mates": [
+                "h5g3"
+              ],
+              "motif_move": "d6b4",
+              "motif_mate": false,
+              "jepa_move": "a8b7",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "8/1p6/kp4b1/1p6/8/1P6/1B6/3Q3K w - - 0 1",
+              "expected": "d1a1",
+              "all_mates": [
+                "d1a1"
+              ],
+              "motif_move": "d1d8",
+              "motif_mate": false,
+              "jepa_move": "d1d6",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "7K/8/2b5/8/2B5/4N3/pp6/kn6 w - - 0 1",
+              "expected": "e3c2",
+              "all_mates": [
+                "e3c2"
+              ],
+              "motif_move": "c4f1",
+              "motif_mate": false,
+              "jepa_move": "e3f5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/2Q5/8/8/7K w - - 0 1",
+              "expected": "c4c8",
+              "all_mates": [
+                "c4c8"
+              ],
+              "motif_move": "c4c8",
+              "motif_mate": true,
+              "jepa_move": "c4c7",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            }
           ],
-          "motif_move": "b5a6",
-          "motif_mate": false,
-          "jepa_move": "b5b7",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
+          "seed": 67,
+          "train_per_family": 32,
+          "train_cases": 128
         },
         {
-          "motif": "rook_side_file",
-          "fen": "6R1/7n/3P4/8/1p6/kp6/1p6/7K w - - 0 1",
-          "expected": "g8a8",
-          "all_mates": [
-            "g8a8"
-          ],
-          "motif_move": "g8h8",
-          "motif_mate": false,
-          "jepa_move": "g8h8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "K7/4p3/P7/5N2/8/8/6pp/6nk w - - 0 1",
-          "expected": "f5g3",
-          "all_mates": [
-            "f5g3"
-          ],
-          "motif_move": "f5g3",
-          "motif_mate": true,
-          "jepa_move": "f5g7",
-          "jepa_mate": false,
-          "outcome": "motif_win"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "kn6/pp3b2/4N3/8/8/8/8/7K w - - 0 1",
-          "expected": "e6c7",
-          "all_mates": [
-            "e6c7"
-          ],
-          "motif_move": "e6g5",
-          "motif_mate": false,
-          "jepa_move": "h1g1",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "1R6/8/8/2n2Pp1/6pk/6p1/8/K7 w - - 0 1",
-          "expected": "b8h8",
-          "all_mates": [
-            "b8h8"
-          ],
-          "motif_move": "b8g8",
-          "motif_mate": false,
-          "jepa_move": "b8e8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "4R3/8/8/8/6p1/6pk/4b1pN/K7 w - - 0 1",
-          "expected": "e8h8",
-          "all_mates": [
-            "e8h8"
-          ],
-          "motif_move": "e8a8",
-          "motif_mate": false,
-          "jepa_move": "e8a8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "2k5/1ppp4/8/8/8/4Q3/8/7K w - - 0 1",
-          "expected": "e3e8",
-          "all_mates": [
-            "e3e8"
-          ],
-          "motif_move": "e3b3",
-          "motif_mate": false,
-          "jepa_move": "h1g1",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "queen_side_file",
-          "fen": "8/8/5Q2/6p1/6pk/B5p1/8/K7 w - - 0 1",
-          "expected": "f6h8",
-          "all_mates": [
-            "f6h6",
-            "f6h8"
-          ],
-          "motif_move": "f6f8",
-          "motif_mate": false,
-          "jepa_move": "f6f8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "K7/4b3/8/5N2/8/8/6pp/6nk w - - 0 1",
-          "expected": "f5g3",
-          "all_mates": [
-            "f5g3"
-          ],
-          "motif_move": "f5g3",
-          "motif_mate": true,
-          "jepa_move": "a8b7",
-          "jepa_mate": false,
-          "outcome": "motif_win"
-        }
-      ],
-      "train_per_family": 16,
-      "train_cases": 64
-    },
-    {
-      "positions": 192,
-      "motif_mate_rate": 0.7031,
-      "jepa_mate_rate": 0.7031,
-      "motif_wins": 6,
-      "jepa_wins": 6,
-      "ties_both_mate": 129,
-      "ties_both_fail": 51,
-      "by_family": {
-        "back_rank_rook_queen": {
-          "n": 48,
-          "motif_mate_rate": 0.5833,
-          "jepa_mate_rate": 0.5417,
+          "positions": 384,
+          "motif_mate_rate": 0.8568,
+          "jepa_mate_rate": 0.8698,
           "motif_wins": 3,
-          "jepa_wins": 1
+          "jepa_wins": 8,
+          "ties_both_mate": 326,
+          "ties_both_fail": 47,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.6875,
+              "jepa_mate_rate": 0.7083,
+              "motif_wins": 0,
+              "jepa_wins": 2
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.9062,
+              "jepa_mate_rate": 0.9271,
+              "motif_wins": 0,
+              "jepa_wins": 2
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.9479,
+              "jepa_mate_rate": 0.9271,
+              "motif_wins": 3,
+              "jepa_wins": 1
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.8854,
+              "jepa_mate_rate": 0.9167,
+              "motif_wins": 0,
+              "jepa_wins": 3
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "knight_corner",
+              "fen": "kn2N3/pp6/7B/8/8/8/3P4/7K w - - 0 1",
+              "expected": "e8c7",
+              "all_mates": [
+                "e8c7"
+              ],
+              "motif_move": "h6e3",
+              "motif_mate": false,
+              "jepa_move": "h6e3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/1p1ppp2/8/8/6Q1/8/8/7K w - - 0 1",
+              "expected": "g4g8",
+              "all_mates": [
+                "g4g8"
+              ],
+              "motif_move": "h1h2",
+              "motif_mate": false,
+              "jepa_move": "g4h4",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "1R6/8/3n4/4B3/6p1/6pk/1P4p1/K7 w - - 0 1",
+              "expected": "b8h8",
+              "all_mates": [
+                "b8h8"
+              ],
+              "motif_move": "b8h8",
+              "motif_mate": true,
+              "jepa_move": "e5h8",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "K7/3b4/3B4/7N/8/8/6pp/6nk w - - 0 1",
+              "expected": "h5g3",
+              "all_mates": [
+                "h5g3"
+              ],
+              "motif_move": "d6c5",
+              "motif_mate": false,
+              "jepa_move": "h5g3",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/2Q5/8/8/7K w - - 0 1",
+              "expected": "c4c8",
+              "all_mates": [
+                "c4c8"
+              ],
+              "motif_move": "h1h2",
+              "motif_mate": false,
+              "jepa_move": "h1g1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/n7/1N1R1P2/8/8/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "b4c2",
+              "motif_mate": false,
+              "jepa_move": "b4c2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "8/8/1p6/kp6/1p1Q4/8/8/7K w - - 0 1",
+              "expected": "d4a1",
+              "all_mates": [
+                "d4a1"
+              ],
+              "motif_move": "d4d8",
+              "motif_mate": false,
+              "jepa_move": "d4d8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/7b/3P4/N1R5/8/8/7K w - - 0 1",
+              "expected": "c4c8",
+              "all_mates": [
+                "c4c8"
+              ],
+              "motif_move": "h1h2",
+              "motif_mate": false,
+              "jepa_move": "c4c8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/1R6/8/8/1N1B4/8/7K w - - 0 1",
+              "expected": "b6b8",
+              "all_mates": [
+                "b6b8"
+              ],
+              "motif_move": "b6h6",
+              "motif_mate": false,
+              "jepa_move": "h1h2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "kn2N3/pp6/1B6/8/7p/8/8/7K w - - 0 1",
+              "expected": "e8c7",
+              "all_mates": [
+                "e8c7"
+              ],
+              "motif_move": "h1g1",
+              "motif_mate": false,
+              "jepa_move": "h1g1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            }
+          ],
+          "seed": 67,
+          "train_per_family": 64,
+          "train_cases": 256
         },
-        "queen_side_file": {
-          "n": 48,
-          "motif_mate_rate": 0.7083,
-          "jepa_mate_rate": 0.7083,
-          "motif_wins": 1,
-          "jepa_wins": 1
+        {
+          "positions": 384,
+          "motif_mate_rate": 0.9583,
+          "jepa_mate_rate": 0.9766,
+          "motif_wins": 0,
+          "jepa_wins": 7,
+          "ties_both_mate": 368,
+          "ties_both_fail": 9,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.8438,
+              "jepa_mate_rate": 0.9062,
+              "motif_wins": 0,
+              "jepa_wins": 6
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.9896,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 1
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/2Q5/8/8/7K w - - 0 1",
+              "expected": "c4c8",
+              "all_mates": [
+                "c4c8"
+              ],
+              "motif_move": "c4e6",
+              "motif_mate": false,
+              "jepa_move": "c4f1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/7b/3P4/N1R5/8/8/7K w - - 0 1",
+              "expected": "c4c8",
+              "all_mates": [
+                "c4c8"
+              ],
+              "motif_move": "c4h4",
+              "motif_mate": false,
+              "jepa_move": "h1g2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "6k1/5ppp/8/7b/8/8/8/4Q2K w - - 0 1",
+              "expected": "e1e8",
+              "all_mates": [
+                "e1e8"
+              ],
+              "motif_move": "e1a1",
+              "motif_mate": false,
+              "jepa_move": "e1a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/8/B7/8/7Q/5P2/K7 w - - 0 1",
+              "expected": "h3h8",
+              "all_mates": [
+                "h3c8",
+                "h3h8"
+              ],
+              "motif_move": "h3e6",
+              "motif_mate": false,
+              "jepa_move": "h3h1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/b2n4/3p4/8/2Q4K w - - 0 1",
+              "expected": "c1c8",
+              "all_mates": [
+                "c1c8"
+              ],
+              "motif_move": "c1a1",
+              "motif_mate": false,
+              "jepa_move": "c1c8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "K7/8/8/8/4N3/1P2b3/6pp/6nk w - - 0 1",
+              "expected": "e4g3",
+              "all_mates": [
+                "e4g3"
+              ],
+              "motif_move": "e4f2",
+              "motif_mate": false,
+              "jepa_move": "e4g3",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "2k5/Bppp3n/8/8/3NR3/2P5/8/7K w - - 0 1",
+              "expected": "e4e8",
+              "all_mates": [
+                "e4e8"
+              ],
+              "motif_move": "d4b3",
+              "motif_mate": false,
+              "jepa_move": "e4e8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "2k5/1ppp4/8/6b1/7B/8/Q7/7K w - - 0 1",
+              "expected": "a2a8",
+              "all_mates": [
+                "a2a8"
+              ],
+              "motif_move": "a2b3",
+              "motif_mate": false,
+              "jepa_move": "h4f2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/3N2b1/5Q2/6Pp/8/7K w - - 0 1",
+              "expected": "f4f8",
+              "all_mates": [
+                "f4f8"
+              ],
+              "motif_move": "d5c7",
+              "motif_mate": false,
+              "jepa_move": "f4f8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/2N1ppp1/2n5/P7/8/7R/8/K7 w - - 0 1",
+              "expected": "h3h8",
+              "all_mates": [
+                "h3h8"
+              ],
+              "motif_move": "c7e6",
+              "motif_mate": false,
+              "jepa_move": "c7a6",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            }
+          ],
+          "seed": 67,
+          "train_per_family": 128,
+          "train_cases": 512
         },
-        "rook_side_file": {
-          "n": 48,
-          "motif_mate_rate": 0.8542,
+        {
+          "positions": 384,
+          "motif_mate_rate": 0.9896,
+          "jepa_mate_rate": 0.987,
+          "motif_wins": 4,
+          "jepa_wins": 3,
+          "ties_both_mate": 376,
+          "ties_both_fail": 1,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.9688,
+              "jepa_mate_rate": 0.9583,
+              "motif_wins": 3,
+              "jepa_wins": 2
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 0.9896,
+              "motif_wins": 1,
+              "jepa_wins": 0
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.9896,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 1
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/n7/1N1R1P2/8/8/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4d8",
+              "motif_mate": true,
+              "jepa_move": "b4c2",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/b2n4/3p4/8/2Q4K w - - 0 1",
+              "expected": "c1c8",
+              "all_mates": [
+                "c1c8"
+              ],
+              "motif_move": "c1a1",
+              "motif_mate": false,
+              "jepa_move": "c1c8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "K7/8/8/8/4N3/1P2b3/6pp/6nk w - - 0 1",
+              "expected": "e4g3",
+              "all_mates": [
+                "e4g3"
+              ],
+              "motif_move": "e4f2",
+              "motif_mate": false,
+              "jepa_move": "e4g3",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/3N2b1/5Q2/6Pp/8/7K w - - 0 1",
+              "expected": "f4f8",
+              "all_mates": [
+                "f4f8"
+              ],
+              "motif_move": "d5c7",
+              "motif_mate": false,
+              "jepa_move": "f4f8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/p7/8/8/8/2R4K w - - 0 1",
+              "expected": "c1c8",
+              "all_mates": [
+                "c1c8"
+              ],
+              "motif_move": "c1a1",
+              "motif_mate": false,
+              "jepa_move": "c1a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "2k5/1ppp1n2/5N2/1b6/8/7P/Q7/7K w - - 0 1",
+              "expected": "a2a8",
+              "all_mates": [
+                "a2a8"
+              ],
+              "motif_move": "a2a8",
+              "motif_mate": true,
+              "jepa_move": "f6h7",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "3Q4/8/N7/8/6p1/2p3pk/6p1/K7 w - - 0 1",
+              "expected": "d8h8",
+              "all_mates": [
+                "d8h8"
+              ],
+              "motif_move": "d8h8",
+              "motif_mate": true,
+              "jepa_move": "a6c7",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "2k5/1ppp3b/8/1p2R3/3B4/8/8/7K w - - 0 1",
+              "expected": "e5e8",
+              "all_mates": [
+                "e5e8"
+              ],
+              "motif_move": "e5e8",
+              "motif_mate": true,
+              "jepa_move": "d4a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            }
+          ],
+          "seed": 67,
+          "train_per_family": 192,
+          "train_cases": 768
+        },
+        {
+          "positions": 384,
+          "motif_mate_rate": 0.9974,
+          "jepa_mate_rate": 0.9948,
+          "motif_wins": 2,
+          "jepa_wins": 1,
+          "ties_both_mate": 381,
+          "ties_both_fail": 0,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.9896,
+              "jepa_mate_rate": 0.9896,
+              "motif_wins": 1,
+              "jepa_wins": 1
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 0.9896,
+              "motif_wins": 1,
+              "jepa_wins": 0
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/3N2b1/5Q2/6Pp/8/7K w - - 0 1",
+              "expected": "f4f8",
+              "all_mates": [
+                "f4f8"
+              ],
+              "motif_move": "d5c7",
+              "motif_mate": false,
+              "jepa_move": "f4f8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/p7/8/8/8/2R4K w - - 0 1",
+              "expected": "c1c8",
+              "all_mates": [
+                "c1c8"
+              ],
+              "motif_move": "c1c8",
+              "motif_mate": true,
+              "jepa_move": "c1a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "3Q4/8/N7/8/6p1/2p3pk/6p1/K7 w - - 0 1",
+              "expected": "d8h8",
+              "all_mates": [
+                "d8h8"
+              ],
+              "motif_move": "d8h8",
+              "motif_mate": true,
+              "jepa_move": "a6c7",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            }
+          ],
+          "seed": 67,
+          "train_per_family": 256,
+          "train_cases": 1024
+        }
+      ]
+    },
+    {
+      "seed": 68,
+      "jepa_bridge_pretrain": {
+        "cosine_mean": 0.998485,
+        "nearest_neighbor_top1": 0.1,
+        "nearest_neighbor_top5": 0.6075
+      },
+      "rows": [
+        {
+          "positions": 384,
+          "motif_mate_rate": 0.4792,
+          "jepa_mate_rate": 0.4661,
+          "motif_wins": 23,
+          "jepa_wins": 18,
+          "ties_both_mate": 161,
+          "ties_both_fail": 182,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.4271,
+              "jepa_mate_rate": 0.3542,
+              "motif_wins": 10,
+              "jepa_wins": 3
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.5312,
+              "jepa_mate_rate": 0.4792,
+              "motif_wins": 8,
+              "jepa_wins": 3
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.5312,
+              "jepa_mate_rate": 0.5625,
+              "motif_wins": 3,
+              "jepa_wins": 6
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.4271,
+              "jepa_mate_rate": 0.4688,
+              "motif_wins": 2,
+              "jepa_wins": 6
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/3n4/N1b5/6Q1/8/1p6/7K w - - 0 1",
+              "expected": "g4g8",
+              "all_mates": [
+                "g4g8"
+              ],
+              "motif_move": "g4f4",
+              "motif_mate": false,
+              "jepa_move": "g4g5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/8/8/3Q3P/8/3B4/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4g4",
+              "motif_mate": false,
+              "jepa_move": "d4f2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "8/1p3p2/kp6/1p6/8/8/7N/1R5K w - - 0 1",
+              "expected": "b1a1",
+              "all_mates": [
+                "b1a1"
+              ],
+              "motif_move": "b1c1",
+              "motif_mate": false,
+              "jepa_move": "b1a1",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "kn6/pp6/N1P5/8/8/8/8/7K w - - 0 1",
+              "expected": "a6c7",
+              "all_mates": [
+                "a6c7"
+              ],
+              "motif_move": "a6b8",
+              "motif_mate": false,
+              "jepa_move": "h1g2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/5Q2/8/7P/8/2NB4/7K w - - 0 1",
+              "expected": "f6f8",
+              "all_mates": [
+                "f6f8",
+                "f6h8"
+              ],
+              "motif_move": "d2c1",
+              "motif_mate": false,
+              "jepa_move": "f6a6",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/3Q4/6P1/7b/8/8/7K w - - 0 1",
+              "expected": "d6d8",
+              "all_mates": [
+                "d6b8",
+                "d6d8"
+              ],
+              "motif_move": "d6a6",
+              "motif_mate": false,
+              "jepa_move": "d6e7",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "6nk/6pp/2bN4/8/6P1/8/8/K7 w - - 0 1",
+              "expected": "d6f7",
+              "all_mates": [
+                "d6f7"
+              ],
+              "motif_move": "d6f7",
+              "motif_mate": true,
+              "jepa_move": "d6e4",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/3Q4/3N4/p7/4BP2/8/7K w - - 0 1",
+              "expected": "d6d8",
+              "all_mates": [
+                "d6d8",
+                "d6f8"
+              ],
+              "motif_move": "d5b4",
+              "motif_mate": false,
+              "jepa_move": "e3c5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "K7/4B3/8/7N/8/8/6pp/6nk w - - 0 1",
+              "expected": "h5g3",
+              "all_mates": [
+                "h5g3"
+              ],
+              "motif_move": "e7f6",
+              "motif_mate": false,
+              "jepa_move": "a8b8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "K7/8/B7/8/6N1/8/4b1pp/6nk w - - 0 1",
+              "expected": "g4f2",
+              "all_mates": [
+                "g4f2"
+              ],
+              "motif_move": "g4e3",
+              "motif_mate": false,
+              "jepa_move": "a8b8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            }
+          ],
+          "seed": 68,
+          "train_per_family": 16,
+          "train_cases": 64
+        },
+        {
+          "positions": 384,
+          "motif_mate_rate": 0.6797,
+          "jepa_mate_rate": 0.6901,
+          "motif_wins": 21,
+          "jepa_wins": 25,
+          "ties_both_mate": 240,
+          "ties_both_fail": 98,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.5938,
+              "jepa_mate_rate": 0.5625,
+              "motif_wins": 6,
+              "jepa_wins": 3
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.7083,
+              "jepa_mate_rate": 0.7708,
+              "motif_wins": 7,
+              "jepa_wins": 13
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.7188,
+              "jepa_mate_rate": 0.7812,
+              "motif_wins": 1,
+              "jepa_wins": 7
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.6979,
+              "jepa_mate_rate": 0.6458,
+              "motif_wins": 7,
+              "jepa_wins": 2
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/3n4/N1b5/6Q1/8/1p6/7K w - - 0 1",
+              "expected": "g4g8",
+              "all_mates": [
+                "g4g8"
+              ],
+              "motif_move": "a5b3",
+              "motif_mate": false,
+              "jepa_move": "a5b3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/8/8/3Q3P/8/3B4/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4e5",
+              "motif_mate": false,
+              "jepa_move": "d4g1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "kn6/pp6/N1P5/8/8/8/8/7K w - - 0 1",
+              "expected": "a6c7",
+              "all_mates": [
+                "a6c7"
+              ],
+              "motif_move": "h1g2",
+              "motif_mate": false,
+              "jepa_move": "h1g1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/5Q2/8/7P/8/2NB4/7K w - - 0 1",
+              "expected": "f6f8",
+              "all_mates": [
+                "f6f8",
+                "f6h8"
+              ],
+              "motif_move": "f6e5",
+              "motif_mate": false,
+              "jepa_move": "f6h8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "6Q1/8/8/6p1/6pk/6p1/8/K7 w - - 0 1",
+              "expected": "g8h8",
+              "all_mates": [
+                "g8h7",
+                "g8h8"
+              ],
+              "motif_move": "g8a8",
+              "motif_mate": false,
+              "jepa_move": "g8h8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/3Q4/6P1/7b/8/8/7K w - - 0 1",
+              "expected": "d6d8",
+              "all_mates": [
+                "d6b8",
+                "d6d8"
+              ],
+              "motif_move": "d6d8",
+              "motif_mate": true,
+              "jepa_move": "d6g3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "6nk/6pp/2bN4/8/6P1/8/8/K7 w - - 0 1",
+              "expected": "d6f7",
+              "all_mates": [
+                "d6f7"
+              ],
+              "motif_move": "d6f5",
+              "motif_mate": false,
+              "jepa_move": "d6c8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "K7/4B3/8/7N/8/8/6pp/6nk w - - 0 1",
+              "expected": "h5g3",
+              "all_mates": [
+                "h5g3"
+              ],
+              "motif_move": "e7a3",
+              "motif_mate": false,
+              "jepa_move": "e7c5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "K7/8/B7/8/6N1/8/4b1pp/6nk w - - 0 1",
+              "expected": "g4f2",
+              "all_mates": [
+                "g4f2"
+              ],
+              "motif_move": "g4f2",
+              "motif_mate": true,
+              "jepa_move": "g4h2",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/8/8/8/2Q4K w - - 0 1",
+              "expected": "c1c8",
+              "all_mates": [
+                "c1c8"
+              ],
+              "motif_move": "c1a1",
+              "motif_mate": false,
+              "jepa_move": "c1a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            }
+          ],
+          "seed": 68,
+          "train_per_family": 32,
+          "train_cases": 128
+        },
+        {
+          "positions": 384,
+          "motif_mate_rate": 0.8672,
           "jepa_mate_rate": 0.8542,
-          "motif_wins": 2,
-          "jepa_wins": 2
+          "motif_wins": 14,
+          "jepa_wins": 9,
+          "ties_both_mate": 319,
+          "ties_both_fail": 42,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.7396,
+              "jepa_mate_rate": 0.7292,
+              "motif_wins": 3,
+              "jepa_wins": 2
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.9479,
+              "jepa_mate_rate": 0.9062,
+              "motif_wins": 7,
+              "jepa_wins": 3
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.9792,
+              "jepa_mate_rate": 0.9479,
+              "motif_wins": 4,
+              "jepa_wins": 1
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.8021,
+              "jepa_mate_rate": 0.8333,
+              "motif_wins": 0,
+              "jepa_wins": 3
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/3n4/N1b5/6Q1/8/1p6/7K w - - 0 1",
+              "expected": "g4g8",
+              "all_mates": [
+                "g4g8"
+              ],
+              "motif_move": "a5b3",
+              "motif_mate": false,
+              "jepa_move": "a5b3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/8/8/3Q3P/8/3B4/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4a1",
+              "motif_mate": false,
+              "jepa_move": "d4c3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "K7/8/B7/8/6N1/8/4b1pp/6nk w - - 0 1",
+              "expected": "g4f2",
+              "all_mates": [
+                "g4f2"
+              ],
+              "motif_move": "a8a7",
+              "motif_mate": false,
+              "jepa_move": "g4f2",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/8/8/8/2Q4K w - - 0 1",
+              "expected": "c1c8",
+              "all_mates": [
+                "c1c8"
+              ],
+              "motif_move": "c1a1",
+              "motif_mate": false,
+              "jepa_move": "c1a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "8/4b3/1p3n2/kp6/1p6/2NB4/8/3Q3K w - - 0 1",
+              "expected": "d1a1",
+              "all_mates": [
+                "d1a1"
+              ],
+              "motif_move": "d1a1",
+              "motif_mate": true,
+              "jepa_move": "d3b1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/4N3/3Q4/8/8/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4a1",
+              "motif_mate": false,
+              "jepa_move": "d4a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/B7/P2R4/8/8/8/7K w - - 0 1",
+              "expected": "d5d8",
+              "all_mates": [
+                "d5d8"
+              ],
+              "motif_move": "a6b7",
+              "motif_mate": false,
+              "jepa_move": "d5g5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/p1ppp3/6P1/8/1b3R2/8/3B4/7K w - - 0 1",
+              "expected": "f4f8",
+              "all_mates": [
+                "f4f8"
+              ],
+              "motif_move": "f4h4",
+              "motif_mate": false,
+              "jepa_move": "f4f7",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "kn6/pp6/4N3/5B2/8/4b3/8/7K w - - 0 1",
+              "expected": "e6c7",
+              "all_mates": [
+                "e6c7"
+              ],
+              "motif_move": "f5d3",
+              "motif_mate": false,
+              "jepa_move": "f5h7",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/8/2Q5/8/7K w - - 0 1",
+              "expected": "c3c8",
+              "all_mates": [
+                "c3c8",
+                "c3h8"
+              ],
+              "motif_move": "c3a1",
+              "motif_mate": false,
+              "jepa_move": "c3c8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            }
+          ],
+          "seed": 68,
+          "train_per_family": 64,
+          "train_cases": 256
         },
-        "knight_corner": {
-          "n": 48,
-          "motif_mate_rate": 0.6667,
-          "jepa_mate_rate": 0.7083,
-          "motif_wins": 0,
-          "jepa_wins": 2
+        {
+          "positions": 384,
+          "motif_mate_rate": 0.9688,
+          "jepa_mate_rate": 0.9427,
+          "motif_wins": 12,
+          "jepa_wins": 2,
+          "ties_both_mate": 360,
+          "ties_both_fail": 10,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.875,
+              "jepa_mate_rate": 0.8438,
+              "motif_wins": 5,
+              "jepa_wins": 2
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 0.9583,
+              "motif_wins": 4,
+              "jepa_wins": 0
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 0.9688,
+              "motif_wins": 3,
+              "jepa_wins": 0
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/3n4/N1b5/6Q1/8/1p6/7K w - - 0 1",
+              "expected": "g4g8",
+              "all_mates": [
+                "g4g8"
+              ],
+              "motif_move": "g4g8",
+              "motif_mate": true,
+              "jepa_move": "a5b3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/8/8/3Q3P/8/3B4/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4a1",
+              "motif_mate": false,
+              "jepa_move": "d4a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "8/4b3/1p3n2/kp6/1p6/2NB4/8/3Q3K w - - 0 1",
+              "expected": "d1a1",
+              "all_mates": [
+                "d1a1"
+              ],
+              "motif_move": "d1a1",
+              "motif_mate": true,
+              "jepa_move": "c3a4",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/4N3/3Q4/8/8/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "e5f7",
+              "motif_mate": false,
+              "jepa_move": "d4a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/8/2Q5/8/7K w - - 0 1",
+              "expected": "c3c8",
+              "all_mates": [
+                "c3c8",
+                "c3h8"
+              ],
+              "motif_move": "c3a1",
+              "motif_mate": false,
+              "jepa_move": "c3c8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/4n3/b7/8/8/3Q3K w - - 0 1",
+              "expected": "d1d8",
+              "all_mates": [
+                "d1d8"
+              ],
+              "motif_move": "d1a1",
+              "motif_mate": false,
+              "jepa_move": "h1h2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "8/2p5/3N2p1/6pk/6p1/8/8/K3Q3 w - - 0 1",
+              "expected": "e1h1",
+              "all_mates": [
+                "e1h1"
+              ],
+              "motif_move": "e1h1",
+              "motif_mate": true,
+              "jepa_move": "d6f7",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "1R6/8/8/2P5/1p6/kp6/1p6/7K w - - 0 1",
+              "expected": "b8a8",
+              "all_mates": [
+                "b8a8"
+              ],
+              "motif_move": "b8a8",
+              "motif_mate": true,
+              "jepa_move": "b8h8",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/2B1ppp1/8/8/5p2/7R/8/K7 w - - 0 1",
+              "expected": "h3h8",
+              "all_mates": [
+                "h3h8"
+              ],
+              "motif_move": "c7e5",
+              "motif_mate": false,
+              "jepa_move": "h3f3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "8/1p3B2/kp6/1p6/3Q4/8/3N4/7K w - - 0 1",
+              "expected": "d4a1",
+              "all_mates": [
+                "d4a1"
+              ],
+              "motif_move": "d4a1",
+              "motif_mate": true,
+              "jepa_move": "d2b3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            }
+          ],
+          "seed": 68,
+          "train_per_family": 128,
+          "train_cases": 512
+        },
+        {
+          "positions": 384,
+          "motif_mate_rate": 0.974,
+          "jepa_mate_rate": 0.9714,
+          "motif_wins": 3,
+          "jepa_wins": 2,
+          "ties_both_mate": 371,
+          "ties_both_fail": 8,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.8958,
+              "jepa_mate_rate": 0.8958,
+              "motif_wins": 2,
+              "jepa_wins": 2
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 0.9896,
+              "motif_wins": 1,
+              "jepa_wins": 0
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/3n4/N1b5/6Q1/8/1p6/7K w - - 0 1",
+              "expected": "g4g8",
+              "all_mates": [
+                "g4g8"
+              ],
+              "motif_move": "a5b3",
+              "motif_mate": false,
+              "jepa_move": "a5b3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/8/8/3Q3P/8/3B4/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4d8",
+              "motif_mate": true,
+              "jepa_move": "d4a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/4N3/3Q4/8/8/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "e5f7",
+              "motif_mate": false,
+              "jepa_move": "d4a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/8/2Q5/8/7K w - - 0 1",
+              "expected": "c3c8",
+              "all_mates": [
+                "c3c8",
+                "c3h8"
+              ],
+              "motif_move": "c3a1",
+              "motif_mate": false,
+              "jepa_move": "c3c8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/2B1ppp1/8/8/5p2/7R/8/K7 w - - 0 1",
+              "expected": "h3h8",
+              "all_mates": [
+                "h3h8"
+              ],
+              "motif_move": "a1b1",
+              "motif_mate": false,
+              "jepa_move": "h3h1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/8/7b/5R2/8/7K w - - 0 1",
+              "expected": "f3f8",
+              "all_mates": [
+                "f3f8"
+              ],
+              "motif_move": "f3a3",
+              "motif_mate": false,
+              "jepa_move": "f3a3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "6R1/8/6np/1p2B3/kp6/1p6/4N3/7K w - - 0 1",
+              "expected": "g8a8",
+              "all_mates": [
+                "g8a8"
+              ],
+              "motif_move": "g8a8",
+              "motif_mate": true,
+              "jepa_move": "e2g3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/8/8/5Q2/8/7K w - - 0 1",
+              "expected": "f3f8",
+              "all_mates": [
+                "f3a8",
+                "f3f8"
+              ],
+              "motif_move": "h1g1",
+              "motif_mate": false,
+              "jepa_move": "f3g2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/8/8/5R2/p7/7K w - - 0 1",
+              "expected": "f3f8",
+              "all_mates": [
+                "f3f8"
+              ],
+              "motif_move": "f3f6",
+              "motif_mate": false,
+              "jepa_move": "f3a3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/8/8/3Q4/8/8/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4a1",
+              "motif_mate": false,
+              "jepa_move": "d4a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            }
+          ],
+          "seed": 68,
+          "train_per_family": 192,
+          "train_cases": 768
+        },
+        {
+          "positions": 384,
+          "motif_mate_rate": 0.987,
+          "jepa_mate_rate": 0.9714,
+          "motif_wins": 7,
+          "jepa_wins": 1,
+          "ties_both_mate": 372,
+          "ties_both_fail": 4,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.9479,
+              "jepa_mate_rate": 0.8958,
+              "motif_wins": 6,
+              "jepa_wins": 1
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 0.9896,
+              "motif_wins": 1,
+              "jepa_wins": 0
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/3n4/N1b5/6Q1/8/1p6/7K w - - 0 1",
+              "expected": "g4g8",
+              "all_mates": [
+                "g4g8"
+              ],
+              "motif_move": "g4g8",
+              "motif_mate": true,
+              "jepa_move": "a5b3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/8/8/3Q3P/8/3B4/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4d8",
+              "motif_mate": true,
+              "jepa_move": "d4a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/8/2Q5/8/7K w - - 0 1",
+              "expected": "c3c8",
+              "all_mates": [
+                "c3c8",
+                "c3h8"
+              ],
+              "motif_move": "c3a1",
+              "motif_mate": false,
+              "jepa_move": "c3a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/8/7b/5R2/8/7K w - - 0 1",
+              "expected": "f3f8",
+              "all_mates": [
+                "f3f8"
+              ],
+              "motif_move": "f3f1",
+              "motif_mate": false,
+              "jepa_move": "f3e3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "6R1/8/6np/1p2B3/kp6/1p6/4N3/7K w - - 0 1",
+              "expected": "g8a8",
+              "all_mates": [
+                "g8a8"
+              ],
+              "motif_move": "g8a8",
+              "motif_mate": true,
+              "jepa_move": "e2g3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/8/8/5Q2/8/7K w - - 0 1",
+              "expected": "f3f8",
+              "all_mates": [
+                "f3a8",
+                "f3f8"
+              ],
+              "motif_move": "f3g4",
+              "motif_mate": false,
+              "jepa_move": "f3e3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/8/8/5R2/p7/7K w - - 0 1",
+              "expected": "f3f8",
+              "all_mates": [
+                "f3f8"
+              ],
+              "motif_move": "f3f2",
+              "motif_mate": false,
+              "jepa_move": "f3e3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/4ppp1/8/8/3Q4/8/8/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4d8",
+              "motif_mate": true,
+              "jepa_move": "d4a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/P2ppp2/2Q5/2b4N/8/7p/8/7K w - - 0 1",
+              "expected": "c6c8",
+              "all_mates": [
+                "a7a8q",
+                "a7a8r",
+                "c6a8",
+                "c6c8"
+              ],
+              "motif_move": "c6c8",
+              "motif_mate": true,
+              "jepa_move": "h5g3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "2k5/1ppp4/8/3B4/6N1/Q7/1b6/7K w - - 0 1",
+              "expected": "a3a8",
+              "all_mates": [
+                "a3a8",
+                "a3f8"
+              ],
+              "motif_move": "g4f2",
+              "motif_mate": false,
+              "jepa_move": "a3a8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            }
+          ],
+          "seed": 68,
+          "train_per_family": 256,
+          "train_cases": 1024
         }
+      ]
+    },
+    {
+      "seed": 69,
+      "jepa_bridge_pretrain": {
+        "cosine_mean": 0.99744,
+        "nearest_neighbor_top1": 0.0925,
+        "nearest_neighbor_top5": 0.7525
       },
-      "decisive_examples": [
+      "rows": [
         {
-          "motif": "back_rank_rook_queen",
-          "fen": "3k4/2ppp3/4p3/1Q2b3/8/4B3/6n1/7K w - - 0 1",
-          "expected": "b5b8",
-          "all_mates": [
-            "b5b8"
+          "positions": 384,
+          "motif_mate_rate": 0.5443,
+          "jepa_mate_rate": 0.5521,
+          "motif_wins": 11,
+          "jepa_wins": 14,
+          "ties_both_mate": 198,
+          "ties_both_fail": 161,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.3542,
+              "jepa_mate_rate": 0.3646,
+              "motif_wins": 4,
+              "jepa_wins": 5
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.6979,
+              "jepa_mate_rate": 0.7083,
+              "motif_wins": 2,
+              "jepa_wins": 3
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.6667,
+              "jepa_mate_rate": 0.6562,
+              "motif_wins": 4,
+              "jepa_wins": 3
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.4583,
+              "jepa_mate_rate": 0.4792,
+              "motif_wins": 1,
+              "jepa_wins": 3
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "knight_corner",
+              "fen": "7K/8/8/6b1/8/N7/pp6/kn6 w - - 0 1",
+              "expected": "a3c2",
+              "all_mates": [
+                "a3c2"
+              ],
+              "motif_move": "a3b5",
+              "motif_mate": false,
+              "jepa_move": "a3b1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/4N3/2R5/8/7K w - - 0 1",
+              "expected": "c3c8",
+              "all_mates": [
+                "c3c8"
+              ],
+              "motif_move": "e4f2",
+              "motif_mate": false,
+              "jepa_move": "e4g3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "2Q5/8/8/8/6p1/6pk/6p1/K7 w - - 0 1",
+              "expected": "c8h8",
+              "all_mates": [
+                "c8h8"
+              ],
+              "motif_move": "c8a8",
+              "motif_mate": false,
+              "jepa_move": "c8a8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "4R3/8/8/6p1/6pk/6p1/8/K7 w - - 0 1",
+              "expected": "e8h8",
+              "all_mates": [
+                "e8h8"
+              ],
+              "motif_move": "e8c8",
+              "motif_mate": false,
+              "jepa_move": "e8e2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/8/8/8/8/3R3K w - - 0 1",
+              "expected": "d1d8",
+              "all_mates": [
+                "d1d8"
+              ],
+              "motif_move": "d1d8",
+              "motif_mate": true,
+              "jepa_move": "d1b1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/2p1ppp1/8/8/1n1Q4/8/8/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4a1",
+              "motif_mate": false,
+              "jepa_move": "d4a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "2Q5/8/8/6p1/6pk/6p1/8/K7 w - - 0 1",
+              "expected": "c8h8",
+              "all_mates": [
+                "c8h8"
+              ],
+              "motif_move": "c8a8",
+              "motif_mate": false,
+              "jepa_move": "c8a8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "6k1/5ppp/8/8/8/4R3/8/7K w - - 0 1",
+              "expected": "e3e8",
+              "all_mates": [
+                "e3e8"
+              ],
+              "motif_move": "e3e2",
+              "motif_mate": false,
+              "jepa_move": "e3e7",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "4R3/8/8/8/1p6/kp4p1/1p6/7K w - - 0 1",
+              "expected": "e8a8",
+              "all_mates": [
+                "e8a8"
+              ],
+              "motif_move": "e8c8",
+              "motif_mate": false,
+              "jepa_move": "e8e4",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "kn2N3/pp1p4/8/8/b7/8/8/7K w - - 0 1",
+              "expected": "e8c7",
+              "all_mates": [
+                "e8c7"
+              ],
+              "motif_move": "e8f6",
+              "motif_mate": false,
+              "jepa_move": "e8f6",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            }
           ],
-          "motif_move": "b5b4",
-          "motif_mate": false,
-          "jepa_move": "h1g2",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
+          "seed": 69,
+          "train_per_family": 16,
+          "train_cases": 64
         },
         {
-          "motif": "rook_side_file",
-          "fen": "6R1/7n/3P4/8/1p6/kp6/1p6/7K w - - 0 1",
-          "expected": "g8a8",
-          "all_mates": [
-            "g8a8"
+          "positions": 384,
+          "motif_mate_rate": 0.724,
+          "jepa_mate_rate": 0.7057,
+          "motif_wins": 19,
+          "jepa_wins": 12,
+          "ties_both_mate": 259,
+          "ties_both_fail": 94,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.5417,
+              "jepa_mate_rate": 0.5208,
+              "motif_wins": 6,
+              "jepa_wins": 4
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.7917,
+              "jepa_mate_rate": 0.7812,
+              "motif_wins": 4,
+              "jepa_wins": 3
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.8542,
+              "jepa_mate_rate": 0.8229,
+              "motif_wins": 8,
+              "jepa_wins": 5
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.7083,
+              "jepa_mate_rate": 0.6979,
+              "motif_wins": 1,
+              "jepa_wins": 0
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "queen_side_file",
+              "fen": "2Q5/8/8/8/6p1/6pk/6p1/K7 w - - 0 1",
+              "expected": "c8h8",
+              "all_mates": [
+                "c8h8"
+              ],
+              "motif_move": "c8a8",
+              "motif_mate": false,
+              "jepa_move": "c8c6",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/8/8/8/8/3R3K w - - 0 1",
+              "expected": "d1d8",
+              "all_mates": [
+                "d1d8"
+              ],
+              "motif_move": "d1d8",
+              "motif_mate": true,
+              "jepa_move": "d1a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5k2/2p1ppp1/8/8/1n1Q4/8/8/7K w - - 0 1",
+              "expected": "d4d8",
+              "all_mates": [
+                "d4d8"
+              ],
+              "motif_move": "d4a1",
+              "motif_mate": false,
+              "jepa_move": "d4d8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "2Q5/8/8/6p1/6pk/6p1/8/K7 w - - 0 1",
+              "expected": "c8h8",
+              "all_mates": [
+                "c8h8"
+              ],
+              "motif_move": "c8a8",
+              "motif_mate": false,
+              "jepa_move": "c8a8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "6k1/5ppp/8/8/8/4R3/8/7K w - - 0 1",
+              "expected": "e3e8",
+              "all_mates": [
+                "e3e8"
+              ],
+              "motif_move": "e3e5",
+              "motif_mate": false,
+              "jepa_move": "e3b3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "4R3/8/8/8/1p6/kp4p1/1p6/7K w - - 0 1",
+              "expected": "e8a8",
+              "all_mates": [
+                "e8a8"
+              ],
+              "motif_move": "e8h8",
+              "motif_mate": false,
+              "jepa_move": "e8h8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "kn2N3/pp1p4/8/8/b7/8/8/7K w - - 0 1",
+              "expected": "e8c7",
+              "all_mates": [
+                "e8c7"
+              ],
+              "motif_move": "e8g7",
+              "motif_mate": false,
+              "jepa_move": "e8g7",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "3R4/1n6/8/2p3p1/3N2pk/B5p1/8/K7 w - - 0 1",
+              "expected": "d8h8",
+              "all_mates": [
+                "d8h8"
+              ],
+              "motif_move": "d4b3",
+              "motif_mate": false,
+              "jepa_move": "d4b3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "3Q4/5b2/8/7n/1pB5/kp6/1p6/7K w - - 0 1",
+              "expected": "d8a8",
+              "all_mates": [
+                "d8a5",
+                "d8a8"
+              ],
+              "motif_move": "d8h8",
+              "motif_mate": false,
+              "jepa_move": "d8a8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "1R6/8/8/1p6/kp6/1p6/4N3/7K w - - 0 1",
+              "expected": "b8a8",
+              "all_mates": [
+                "b8a8"
+              ],
+              "motif_move": "b8h8",
+              "motif_mate": false,
+              "jepa_move": "b8a8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            }
           ],
-          "motif_move": "g8h8",
-          "motif_mate": false,
-          "jepa_move": "g8h8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
+          "seed": 69,
+          "train_per_family": 32,
+          "train_cases": 128
         },
         {
-          "motif": "knight_corner",
-          "fen": "K7/4p3/P7/5N2/8/8/6pp/6nk w - - 0 1",
-          "expected": "f5g3",
-          "all_mates": [
-            "f5g3"
+          "positions": 384,
+          "motif_mate_rate": 0.8411,
+          "jepa_mate_rate": 0.8438,
+          "motif_wins": 9,
+          "jepa_wins": 10,
+          "ties_both_mate": 314,
+          "ties_both_fail": 51,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.625,
+              "jepa_mate_rate": 0.6042,
+              "motif_wins": 5,
+              "jepa_wins": 3
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.8542,
+              "jepa_mate_rate": 0.8854,
+              "motif_wins": 2,
+              "jepa_wins": 5
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.9375,
+              "jepa_mate_rate": 0.9375,
+              "motif_wins": 2,
+              "jepa_wins": 2
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 0.9479,
+              "jepa_mate_rate": 0.9479,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "queen_side_file",
+              "fen": "2Q5/8/8/8/6p1/6pk/6p1/K7 w - - 0 1",
+              "expected": "c8h8",
+              "all_mates": [
+                "c8h8"
+              ],
+              "motif_move": "c8a8",
+              "motif_mate": false,
+              "jepa_move": "c8a8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/8/8/8/8/3R3K w - - 0 1",
+              "expected": "d1d8",
+              "all_mates": [
+                "d1d8"
+              ],
+              "motif_move": "d1a1",
+              "motif_mate": false,
+              "jepa_move": "d1a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "2Q5/8/8/6p1/6pk/6p1/8/K7 w - - 0 1",
+              "expected": "c8h8",
+              "all_mates": [
+                "c8h8"
+              ],
+              "motif_move": "c8a8",
+              "motif_mate": false,
+              "jepa_move": "c8a8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "4R3/8/8/8/1p6/kp4p1/1p6/7K w - - 0 1",
+              "expected": "e8a8",
+              "all_mates": [
+                "e8a8"
+              ],
+              "motif_move": "e8a8",
+              "motif_mate": true,
+              "jepa_move": "e8h8",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "6Q1/8/8/1p4n1/kp6/1p6/8/7K w - - 0 1",
+              "expected": "g8a8",
+              "all_mates": [
+                "g8a8"
+              ],
+              "motif_move": "g8h8",
+              "motif_mate": false,
+              "jepa_move": "g8a8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "rook_side_file",
+              "fen": "3R4/1n6/8/2p3p1/3N2pk/B5p1/8/K7 w - - 0 1",
+              "expected": "d8h8",
+              "all_mates": [
+                "d8h8"
+              ],
+              "motif_move": "d8a8",
+              "motif_mate": false,
+              "jepa_move": "d4b3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/5B2/3R1N2/8/8/8/7K w - - 0 1",
+              "expected": "d5d8",
+              "all_mates": [
+                "d5d8"
+              ],
+              "motif_move": "f5g3",
+              "motif_mate": false,
+              "jepa_move": "f5g3",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/8/8/b4N2/8/1R5K w - - 0 1",
+              "expected": "b1b8",
+              "all_mates": [
+                "b1b8"
+              ],
+              "motif_move": "b1a1",
+              "motif_mate": false,
+              "jepa_move": "f3g5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "2Q5/8/8/1P6/1B4p1/4pNpk/6p1/K7 w - - 0 1",
+              "expected": "c8h8",
+              "all_mates": [
+                "c8h8"
+              ],
+              "motif_move": "c8a8",
+              "motif_mate": false,
+              "jepa_move": "c8a8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "2k5/1ppp4/8/P3Q3/8/7p/8/7K w - - 0 1",
+              "expected": "e5e8",
+              "all_mates": [
+                "e5e8",
+                "e5h8"
+              ],
+              "motif_move": "e5h8",
+              "motif_mate": true,
+              "jepa_move": "e5f5",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            }
           ],
-          "motif_move": "f5g7",
-          "motif_mate": false,
-          "jepa_move": "a8b8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
+          "seed": 69,
+          "train_per_family": 64,
+          "train_cases": 256
         },
         {
-          "motif": "rook_side_file",
-          "fen": "1R6/8/8/2n2Pp1/6pk/6p1/8/K7 w - - 0 1",
-          "expected": "b8h8",
-          "all_mates": [
-            "b8h8"
+          "positions": 384,
+          "motif_mate_rate": 0.9349,
+          "jepa_mate_rate": 0.9193,
+          "motif_wins": 12,
+          "jepa_wins": 6,
+          "ties_both_mate": 347,
+          "ties_both_fail": 19,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.7812,
+              "jepa_mate_rate": 0.7708,
+              "motif_wins": 4,
+              "jepa_wins": 3
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.9792,
+              "jepa_mate_rate": 0.9479,
+              "motif_wins": 4,
+              "jepa_wins": 1
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 0.9792,
+              "jepa_mate_rate": 0.9688,
+              "motif_wins": 3,
+              "jepa_wins": 2
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 0.9896,
+              "motif_wins": 1,
+              "jepa_wins": 0
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "queen_side_file",
+              "fen": "2Q5/8/8/8/6p1/6pk/6p1/K7 w - - 0 1",
+              "expected": "c8h8",
+              "all_mates": [
+                "c8h8"
+              ],
+              "motif_move": "c8h8",
+              "motif_mate": true,
+              "jepa_move": "c8a8",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/8/8/8/8/3R3K w - - 0 1",
+              "expected": "d1d8",
+              "all_mates": [
+                "d1d8"
+              ],
+              "motif_move": "d1a1",
+              "motif_mate": false,
+              "jepa_move": "d1a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/8/8/b4N2/8/1R5K w - - 0 1",
+              "expected": "b1b8",
+              "all_mates": [
+                "b1b8"
+              ],
+              "motif_move": "b1a1",
+              "motif_mate": false,
+              "jepa_move": "h1g1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "2Q5/8/8/1P6/1B4p1/4pNpk/6p1/K7 w - - 0 1",
+              "expected": "c8h8",
+              "all_mates": [
+                "c8h8"
+              ],
+              "motif_move": "c8h8",
+              "motif_mate": true,
+              "jepa_move": "c8a8",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "2k5/1ppp4/8/P3Q3/8/7p/8/7K w - - 0 1",
+              "expected": "e5e8",
+              "all_mates": [
+                "e5e8",
+                "e5h8"
+              ],
+              "motif_move": "e5h8",
+              "motif_mate": true,
+              "jepa_move": "e5a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/8/6P1/Bp6/4b3/3R3K w - - 0 1",
+              "expected": "d1d8",
+              "all_mates": [
+                "d1d8"
+              ],
+              "motif_move": "d1a1",
+              "motif_mate": false,
+              "jepa_move": "d1a1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "6k1/1p3ppp/8/4Q3/8/8/8/7K w - - 0 1",
+              "expected": "e5e8",
+              "all_mates": [
+                "e5b8",
+                "e5e8"
+              ],
+              "motif_move": "e5g3",
+              "motif_mate": false,
+              "jepa_move": "e5d5",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/p2ppp2/8/8/8/8/6R1/7K w - - 0 1",
+              "expected": "g2g8",
+              "all_mates": [
+                "g2g8"
+              ],
+              "motif_move": "g2g1",
+              "motif_mate": false,
+              "jepa_move": "h1g1",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "knight_corner",
+              "fen": "7K/8/8/8/2pN4/8/pp5B/kn6 w - - 0 1",
+              "expected": "d4c2",
+              "all_mates": [
+                "d4c2"
+              ],
+              "motif_move": "d4c2",
+              "motif_mate": true,
+              "jepa_move": "d4b3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/8/b4P2/8/6QK w - - 0 1",
+              "expected": "g1g8",
+              "all_mates": [
+                "g1g8"
+              ],
+              "motif_move": "g1a1",
+              "motif_mate": false,
+              "jepa_move": "f3f4",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            }
           ],
-          "motif_move": "b8a8",
-          "motif_mate": false,
-          "jepa_move": "b8a8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
+          "seed": 69,
+          "train_per_family": 128,
+          "train_cases": 512
         },
         {
-          "motif": "back_rank_rook_queen",
-          "fen": "2k5/1ppp4/8/8/8/4Q3/8/7K w - - 0 1",
-          "expected": "e3e8",
-          "all_mates": [
-            "e3e8"
+          "positions": 384,
+          "motif_mate_rate": 0.974,
+          "jepa_mate_rate": 0.9792,
+          "motif_wins": 5,
+          "jepa_wins": 7,
+          "ties_both_mate": 369,
+          "ties_both_fail": 3,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.8958,
+              "jepa_mate_rate": 0.9271,
+              "motif_wins": 4,
+              "jepa_wins": 7
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 0.9896,
+              "motif_wins": 1,
+              "jepa_wins": 0
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/8/8/8/8/3R3K w - - 0 1",
+              "expected": "d1d8",
+              "all_mates": [
+                "d1d8"
+              ],
+              "motif_move": "d1d8",
+              "motif_mate": true,
+              "jepa_move": "d1a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/8/6P1/Bp6/4b3/3R3K w - - 0 1",
+              "expected": "d1d8",
+              "all_mates": [
+                "d1d8"
+              ],
+              "motif_move": "d1d8",
+              "motif_mate": true,
+              "jepa_move": "d1a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/8/b4P2/8/6QK w - - 0 1",
+              "expected": "g1g8",
+              "all_mates": [
+                "g1g8"
+              ],
+              "motif_move": "g1a1",
+              "motif_mate": false,
+              "jepa_move": "g1g8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5Q1K/1P6/8/7B/8/8/2ppp3/3k4 w - - 0 1",
+              "expected": "f8f1",
+              "all_mates": [
+                "f8f1"
+              ],
+              "motif_move": "f8a8",
+              "motif_mate": false,
+              "jepa_move": "f8a8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/1N1ppp2/4pB2/8/8/6R1/8/7K w - - 0 1",
+              "expected": "g3g8",
+              "all_mates": [
+                "g3g8"
+              ],
+              "motif_move": "f6h8",
+              "motif_mate": false,
+              "jepa_move": "g3g8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/N7/8/n3p3/P7/1R5K w - - 0 1",
+              "expected": "b1b8",
+              "all_mates": [
+                "b1b8"
+              ],
+              "motif_move": "b1b8",
+              "motif_mate": true,
+              "jepa_move": "a5b3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/1n6/8/4b3/8/6QK w - - 0 1",
+              "expected": "g1g8",
+              "all_mates": [
+                "g1g8"
+              ],
+              "motif_move": "g1a1",
+              "motif_mate": false,
+              "jepa_move": "g1g8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/1b6/8/2n2Q2/8/7K w - - 0 1",
+              "expected": "f3f8",
+              "all_mates": [
+                "f3a8",
+                "f3f8"
+              ],
+              "motif_move": "f3c6",
+              "motif_mate": false,
+              "jepa_move": "h1h2",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "8/8/6p1/b5pk/6p1/8/n7/K4Q2 w - - 0 1",
+              "expected": "f1h1",
+              "all_mates": [
+                "f1h1"
+              ],
+              "motif_move": "f1h1",
+              "motif_mate": true,
+              "jepa_move": "f1f8",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/5R2/5N2/8/8/8/7K w - - 0 1",
+              "expected": "f6f8",
+              "all_mates": [
+                "f6f8"
+              ],
+              "motif_move": "f6f8",
+              "motif_mate": true,
+              "jepa_move": "f5g3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            }
           ],
-          "motif_move": "e3e8",
-          "motif_mate": true,
-          "jepa_move": "e3g1",
-          "jepa_mate": false,
-          "outcome": "motif_win"
+          "seed": 69,
+          "train_per_family": 192,
+          "train_cases": 768
         },
         {
-          "motif": "queen_side_file",
-          "fen": "8/8/5Q2/6p1/6pk/B5p1/8/K7 w - - 0 1",
-          "expected": "f6h8",
-          "all_mates": [
-            "f6h6",
-            "f6h8"
+          "positions": 384,
+          "motif_mate_rate": 0.9844,
+          "jepa_mate_rate": 0.9844,
+          "motif_wins": 5,
+          "jepa_wins": 5,
+          "ties_both_mate": 373,
+          "ties_both_fail": 1,
+          "by_family": {
+            "back_rank_rook_queen": {
+              "n": 96,
+              "motif_mate_rate": 0.9375,
+              "jepa_mate_rate": 0.9479,
+              "motif_wins": 4,
+              "jepa_wins": 5
+            },
+            "queen_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 0.9896,
+              "motif_wins": 1,
+              "jepa_wins": 0
+            },
+            "rook_side_file": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            },
+            "knight_corner": {
+              "n": 96,
+              "motif_mate_rate": 1.0,
+              "jepa_mate_rate": 1.0,
+              "motif_wins": 0,
+              "jepa_wins": 0
+            }
+          },
+          "decisive_examples": [
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/8/8/8/8/3R3K w - - 0 1",
+              "expected": "d1d8",
+              "all_mates": [
+                "d1d8"
+              ],
+              "motif_move": "d1d8",
+              "motif_mate": true,
+              "jepa_move": "d1a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "1k6/ppp5/8/8/6P1/Bp6/4b3/3R3K w - - 0 1",
+              "expected": "d1d8",
+              "all_mates": [
+                "d1d8"
+              ],
+              "motif_move": "d1d8",
+              "motif_mate": true,
+              "jepa_move": "d1a1",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/8/b4P2/8/6QK w - - 0 1",
+              "expected": "g1g8",
+              "all_mates": [
+                "g1g8"
+              ],
+              "motif_move": "g1a1",
+              "motif_mate": false,
+              "jepa_move": "g1g8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "5Q1K/1P6/8/7B/8/8/2ppp3/3k4 w - - 0 1",
+              "expected": "f8f1",
+              "all_mates": [
+                "f8f1"
+              ],
+              "motif_move": "f8a8",
+              "motif_mate": false,
+              "jepa_move": "f8a8",
+              "jepa_mate": false,
+              "outcome": "tie_both_fail"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/8/N7/8/n3p3/P7/1R5K w - - 0 1",
+              "expected": "b1b8",
+              "all_mates": [
+                "b1b8"
+              ],
+              "motif_move": "b1b8",
+              "motif_mate": true,
+              "jepa_move": "a5b3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/1n6/8/4b3/8/6QK w - - 0 1",
+              "expected": "g1g8",
+              "all_mates": [
+                "g1g8"
+              ],
+              "motif_move": "g1a1",
+              "motif_mate": false,
+              "jepa_move": "g1g8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "queen_side_file",
+              "fen": "2Q5/8/8/8/6p1/6pk/P5p1/K7 w - - 0 1",
+              "expected": "c8h8",
+              "all_mates": [
+                "c8h8"
+              ],
+              "motif_move": "c8h8",
+              "motif_mate": true,
+              "jepa_move": "c8a8",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "3k4/2ppp3/5R2/5N2/8/8/8/7K w - - 0 1",
+              "expected": "f6f8",
+              "all_mates": [
+                "f6f8"
+              ],
+              "motif_move": "f6f8",
+              "motif_mate": true,
+              "jepa_move": "f5g3",
+              "jepa_mate": false,
+              "outcome": "motif_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "7K/8/7B/8/4Q3/3P4/1ppp3p/2k5 w - - 0 1",
+              "expected": "e4e1",
+              "all_mates": [
+                "e4e1",
+                "e4h1"
+              ],
+              "motif_move": "e4e8",
+              "motif_mate": false,
+              "jepa_move": "e4h1",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            },
+            {
+              "motif": "back_rank_rook_queen",
+              "fen": "4k3/3ppp2/8/8/B3P3/3N1p2/8/6RK w - - 0 1",
+              "expected": "g1g8",
+              "all_mates": [
+                "g1g8"
+              ],
+              "motif_move": "g1a1",
+              "motif_mate": false,
+              "jepa_move": "g1g8",
+              "jepa_mate": true,
+              "outcome": "jepa_win"
+            }
           ],
-          "motif_move": "f6f8",
-          "motif_mate": false,
-          "jepa_move": "f6f8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "K7/4b3/8/5N2/8/8/6pp/6nk w - - 0 1",
-          "expected": "f5g3",
-          "all_mates": [
-            "f5g3"
-          ],
-          "motif_move": "f5g7",
-          "motif_mate": false,
-          "jepa_move": "f5e7",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "queen_side_file",
-          "fen": "8/8/5Q2/8/3N2p1/6pk/6p1/K7 w - - 0 1",
-          "expected": "f6h8",
-          "all_mates": [
-            "f6h6",
-            "f6h8"
-          ],
-          "motif_move": "d4c2",
-          "motif_mate": false,
-          "jepa_move": "d4b3",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "4R3/p7/8/n2P4/6p1/b5pk/6p1/K7 w - - 0 1",
-          "expected": "e8h8",
-          "all_mates": [
-            "e8h8"
-          ],
-          "motif_move": "e8a8",
-          "motif_mate": false,
-          "jepa_move": "e8h8",
-          "jepa_mate": true,
-          "outcome": "jepa_win"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "4k3/3ppp2/8/8/8/6Bn/2Rpb3/7K w - - 0 1",
-          "expected": "c2c8",
-          "all_mates": [
-            "c2c8"
-          ],
-          "motif_move": "c2c3",
-          "motif_mate": false,
-          "jepa_move": "c2c3",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
+          "seed": 69,
+          "train_per_family": 256,
+          "train_cases": 1024
         }
-      ],
+      ]
+    }
+  ],
+  "aggregate": [
+    {
+      "train_per_family": 16,
+      "runs": 3,
+      "motif_mate_rate_mean": 0.5148,
+      "jepa_mate_rate_mean": 0.5147,
+      "delta_jepa_minus_motif": -0.0,
+      "motif_only_wins_total": 46,
+      "jepa_only_wins_total": 46,
+      "ties_both_mate_total": 547,
+      "ties_both_fail_total": 513,
+      "winner": "motif_policy"
+    },
+    {
       "train_per_family": 32,
-      "train_cases": 128
+      "runs": 3,
+      "motif_mate_rate_mean": 0.7188,
+      "jepa_mate_rate_mean": 0.7057,
+      "delta_jepa_minus_motif": -0.013,
+      "motif_only_wins_total": 62,
+      "jepa_only_wins_total": 47,
+      "ties_both_mate_total": 766,
+      "ties_both_fail_total": 277,
+      "winner": "motif_policy"
     },
     {
-      "positions": 192,
-      "motif_mate_rate": 0.9115,
-      "jepa_mate_rate": 0.8958,
-      "motif_wins": 4,
-      "jepa_wins": 1,
-      "ties_both_mate": 171,
-      "ties_both_fail": 16,
-      "by_family": {
-        "back_rank_rook_queen": {
-          "n": 48,
-          "motif_mate_rate": 0.7917,
-          "jepa_mate_rate": 0.7708,
-          "motif_wins": 1,
-          "jepa_wins": 0
-        },
-        "queen_side_file": {
-          "n": 48,
-          "motif_mate_rate": 0.9792,
-          "jepa_mate_rate": 0.9583,
-          "motif_wins": 2,
-          "jepa_wins": 1
-        },
-        "rook_side_file": {
-          "n": 48,
-          "motif_mate_rate": 1.0,
-          "jepa_mate_rate": 0.9792,
-          "motif_wins": 1,
-          "jepa_wins": 0
-        },
-        "knight_corner": {
-          "n": 48,
-          "motif_mate_rate": 0.875,
-          "jepa_mate_rate": 0.875,
-          "motif_wins": 0,
-          "jepa_wins": 0
-        }
-      },
-      "decisive_examples": [
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "2k5/1ppp4/8/8/8/4Q3/8/7K w - - 0 1",
-          "expected": "e3e8",
-          "all_mates": [
-            "e3e8"
-          ],
-          "motif_move": "e3e8",
-          "motif_mate": true,
-          "jepa_move": "e3h3",
-          "jepa_mate": false,
-          "outcome": "motif_win"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "7K/8/8/N7/8/8/pp5p/kn6 w - - 0 1",
-          "expected": "a5b3",
-          "all_mates": [
-            "a5b3"
-          ],
-          "motif_move": "a5c4",
-          "motif_mate": false,
-          "jepa_move": "a5c6",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "2k5/1ppp4/8/8/4n3/8/R7/7K w - - 0 1",
-          "expected": "a2a8",
-          "all_mates": [
-            "a2a8"
-          ],
-          "motif_move": "a2a5",
-          "motif_mate": false,
-          "jepa_move": "a2b2",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "7K/7p/8/8/8/4N3/pp1P4/kn6 w - - 0 1",
-          "expected": "e3c2",
-          "all_mates": [
-            "e3c2"
-          ],
-          "motif_move": "h8g8",
-          "motif_mate": false,
-          "jepa_move": "e3c4",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "3k4/2ppp3/8/5R2/8/8/8/7K w - - 0 1",
-          "expected": "f5f8",
-          "all_mates": [
-            "f5f8"
-          ],
-          "motif_move": "h1g1",
-          "motif_mate": false,
-          "jepa_move": "f5f3",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "knight_corner",
-          "fen": "3N2nk/6pp/8/4p3/7P/8/8/K7 w - - 0 1",
-          "expected": "d8f7",
-          "all_mates": [
-            "d8f7"
-          ],
-          "motif_move": "h4h5",
-          "motif_mate": false,
-          "jepa_move": "d8b7",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "6k1/5ppp/8/7b/8/8/8/4Q2K w - - 0 1",
-          "expected": "e1e8",
-          "all_mates": [
-            "e1e8"
-          ],
-          "motif_move": "e1a1",
-          "motif_mate": false,
-          "jepa_move": "e1e4",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "2k5/1ppp4/8/8/8/R7/8/7K w - - 0 1",
-          "expected": "a3a8",
-          "all_mates": [
-            "a3a8"
-          ],
-          "motif_move": "h1g1",
-          "motif_mate": false,
-          "jepa_move": "a3a1",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "7K/8/1BP5/8/4R3/8/5ppp/6k1 w - - 0 1",
-          "expected": "e4e1",
-          "all_mates": [
-            "e4e1"
-          ],
-          "motif_move": "e4e8",
-          "motif_mate": false,
-          "jepa_move": "e4h4",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "4k3/3ppp2/8/8/8/4B3/8/6QK w - - 0 1",
-          "expected": "g1g8",
-          "all_mates": [
-            "g1g8"
-          ],
-          "motif_move": "g1a1",
-          "motif_mate": false,
-          "jepa_move": "g1a1",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        }
-      ],
       "train_per_family": 64,
-      "train_cases": 256
+      "runs": 3,
+      "motif_mate_rate_mean": 0.855,
+      "jepa_mate_rate_mean": 0.8559,
+      "delta_jepa_minus_motif": 0.0009,
+      "motif_only_wins_total": 26,
+      "jepa_only_wins_total": 27,
+      "ties_both_mate_total": 959,
+      "ties_both_fail_total": 140,
+      "winner": "jepa_policy"
     },
     {
-      "positions": 192,
-      "motif_mate_rate": 0.9635,
-      "jepa_mate_rate": 0.974,
-      "motif_wins": 2,
-      "jepa_wins": 4,
-      "ties_both_mate": 183,
-      "ties_both_fail": 3,
-      "by_family": {
-        "back_rank_rook_queen": {
-          "n": 48,
-          "motif_mate_rate": 0.8542,
-          "jepa_mate_rate": 0.9167,
-          "motif_wins": 1,
-          "jepa_wins": 4
-        },
-        "queen_side_file": {
-          "n": 48,
-          "motif_mate_rate": 1.0,
-          "jepa_mate_rate": 1.0,
-          "motif_wins": 0,
-          "jepa_wins": 0
-        },
-        "rook_side_file": {
-          "n": 48,
-          "motif_mate_rate": 1.0,
-          "jepa_mate_rate": 0.9792,
-          "motif_wins": 1,
-          "jepa_wins": 0
-        },
-        "knight_corner": {
-          "n": 48,
-          "motif_mate_rate": 1.0,
-          "jepa_mate_rate": 1.0,
-          "motif_wins": 0,
-          "jepa_wins": 0
-        }
-      },
-      "decisive_examples": [
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "2k5/1ppp4/8/8/8/4Q3/8/7K w - - 0 1",
-          "expected": "e3e8",
-          "all_mates": [
-            "e3e8"
-          ],
-          "motif_move": "e3e1",
-          "motif_mate": false,
-          "jepa_move": "e3e8",
-          "jepa_mate": true,
-          "outcome": "jepa_win"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "2k5/1ppp4/8/8/4n3/8/R7/7K w - - 0 1",
-          "expected": "a2a8",
-          "all_mates": [
-            "a2a8"
-          ],
-          "motif_move": "a2c2",
-          "motif_mate": false,
-          "jepa_move": "a2a3",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "2k5/1ppp4/8/8/8/R7/8/7K w - - 0 1",
-          "expected": "a3a8",
-          "all_mates": [
-            "a3a8"
-          ],
-          "motif_move": "a3f3",
-          "motif_mate": false,
-          "jepa_move": "a3a8",
-          "jepa_mate": true,
-          "outcome": "jepa_win"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "7K/8/1BP5/8/4R3/8/5ppp/6k1 w - - 0 1",
-          "expected": "e4e1",
-          "all_mates": [
-            "e4e1"
-          ],
-          "motif_move": "e4e8",
-          "motif_mate": false,
-          "jepa_move": "e4e8",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "4k3/3ppp2/8/P7/6R1/8/pN6/7K w - - 0 1",
-          "expected": "g4g8",
-          "all_mates": [
-            "g4g8"
-          ],
-          "motif_move": "g4g8",
-          "motif_mate": true,
-          "jepa_move": "g4b4",
-          "jepa_mate": false,
-          "outcome": "motif_win"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "6k1/5ppp/8/1p6/1N6/8/3n4/4R2K w - - 0 1",
-          "expected": "e1e8",
-          "all_mates": [
-            "e1e8"
-          ],
-          "motif_move": "e1a1",
-          "motif_mate": false,
-          "jepa_move": "e1e8",
-          "jepa_mate": true,
-          "outcome": "jepa_win"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "4k3/1p1ppp2/8/8/8/8/8/6QK w - - 0 1",
-          "expected": "g1g8",
-          "all_mates": [
-            "g1g8"
-          ],
-          "motif_move": "g1a1",
-          "motif_mate": false,
-          "jepa_move": "g1g8",
-          "jepa_mate": true,
-          "outcome": "jepa_win"
-        },
-        {
-          "motif": "rook_side_file",
-          "fen": "4R3/8/6B1/8/1N1p2p1/6pk/4n1p1/K7 w - - 0 1",
-          "expected": "e8h8",
-          "all_mates": [
-            "e8h8"
-          ],
-          "motif_move": "e8h8",
-          "motif_mate": true,
-          "jepa_move": "b4c2",
-          "jepa_mate": false,
-          "outcome": "motif_win"
-        },
-        {
-          "motif": "back_rank_rook_queen",
-          "fen": "7K/3R4/7b/1B5N/8/8/4pppp/5k2 w - - 0 1",
-          "expected": "d7d1",
-          "all_mates": [
-            "d7d1"
-          ],
-          "motif_move": "h5g3",
-          "motif_mate": false,
-          "jepa_move": "h5g3",
-          "jepa_mate": false,
-          "outcome": "tie_both_fail"
-        }
-      ],
       "train_per_family": 128,
-      "train_cases": 512
+      "runs": 3,
+      "motif_mate_rate_mean": 0.954,
+      "jepa_mate_rate_mean": 0.9462,
+      "delta_jepa_minus_motif": -0.0078,
+      "motif_only_wins_total": 24,
+      "jepa_only_wins_total": 15,
+      "ties_both_mate_total": 1075,
+      "ties_both_fail_total": 38,
+      "winner": "motif_policy"
+    },
+    {
+      "train_per_family": 192,
+      "runs": 3,
+      "motif_mate_rate_mean": 0.9792,
+      "jepa_mate_rate_mean": 0.9792,
+      "delta_jepa_minus_motif": 0.0,
+      "motif_only_wins_total": 12,
+      "jepa_only_wins_total": 12,
+      "ties_both_mate_total": 1116,
+      "ties_both_fail_total": 12,
+      "winner": "tie"
+    },
+    {
+      "train_per_family": 256,
+      "runs": 3,
+      "motif_mate_rate_mean": 0.9896,
+      "jepa_mate_rate_mean": 0.9835,
+      "delta_jepa_minus_motif": -0.0061,
+      "motif_only_wins_total": 14,
+      "jepa_only_wins_total": 7,
+      "ties_both_mate_total": 1126,
+      "ties_both_fail_total": 5,
+      "winner": "motif_policy"
     }
   ]
 }

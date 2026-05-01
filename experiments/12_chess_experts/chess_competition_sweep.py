@@ -18,9 +18,9 @@ HERE = Path(__file__).resolve().parent
 ARTIFACT = HERE / "artifacts" / "chess_competition_sweep_result.json"
 
 
-def train_jepa_encoder(args, dev: str) -> tuple[jepa.Encoder, dict]:
+def train_jepa_encoder(args, dev: str, seed: int) -> tuple[jepa.Encoder, dict]:
     cfg = jepa.Config(
-        seed=args.seed,
+        seed=seed,
         pairs=args.jepa_pairs,
         val_pairs=args.jepa_val_pairs,
         epochs=args.jepa_epochs,
@@ -179,9 +179,70 @@ def evaluate_policies(motif_model: motif.MateMLP, jepa_model: JepaPolicy, val_ca
     }
 
 
+def run_seed(args, dev: str, seed: int) -> dict:
+    train_pool, val_cases = motif.generate_cases(args.max_train_per_family, args.val_per_family, seed)
+    encoder, bridge_metrics = train_jepa_encoder(args, dev, seed)
+    rows = []
+    for budget in [int(part) for part in args.budgets.split(",") if part.strip()]:
+        train_cases = take_budget(train_pool, budget)
+        motif_model = train_motif_policy(train_cases, args, dev)
+        jepa_model = train_jepa_policy(encoder, train_cases, args, dev)
+        result = evaluate_policies(motif_model, jepa_model, val_cases, dev)
+        result["seed"] = seed
+        result["train_per_family"] = budget
+        result["train_cases"] = len(train_cases)
+        rows.append(result)
+    return {
+        "seed": seed,
+        "jepa_bridge_pretrain": {
+            "cosine_mean": round(float(bridge_metrics["cosine_mean"]), 6),
+            "nearest_neighbor_top1": round(float(bridge_metrics["nearest_neighbor_top1"]), 4),
+            "nearest_neighbor_top5": round(float(bridge_metrics["nearest_neighbor_top5"]), 4),
+        },
+        "rows": rows,
+    }
+
+
+def aggregate(seed_runs: list[dict]) -> list[dict]:
+    grouped: dict[int, list[dict]] = {}
+    for seed_run in seed_runs:
+        for row in seed_run["rows"]:
+            grouped.setdefault(row["train_per_family"], []).append(row)
+
+    summary = []
+    for budget, rows in sorted(grouped.items()):
+        n = len(rows)
+        motif_rate = sum(row["motif_mate_rate"] for row in rows) / n
+        jepa_rate = sum(row["jepa_mate_rate"] for row in rows) / n
+        motif_only = sum(row["motif_wins"] for row in rows)
+        jepa_only = sum(row["jepa_wins"] for row in rows)
+        ties_both = sum(row["ties_both_mate"] for row in rows)
+        ties_fail = sum(row["ties_both_fail"] for row in rows)
+        if jepa_rate > motif_rate:
+            winner = "jepa_policy"
+        elif motif_rate > jepa_rate:
+            winner = "motif_policy"
+        else:
+            winner = "tie"
+        summary.append({
+            "train_per_family": budget,
+            "runs": n,
+            "motif_mate_rate_mean": round(motif_rate, 4),
+            "jepa_mate_rate_mean": round(jepa_rate, 4),
+            "delta_jepa_minus_motif": round(jepa_rate - motif_rate, 4),
+            "motif_only_wins_total": motif_only,
+            "jepa_only_wins_total": jepa_only,
+            "ties_both_mate_total": ties_both,
+            "ties_both_fail_total": ties_fail,
+            "winner": winner,
+        })
+    return summary
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=67)
+    parser.add_argument("--seeds", default="")
     parser.add_argument("--budgets", default="8,16,32,64,128,256")
     parser.add_argument("--max-train-per-family", type=int, default=256)
     parser.add_argument("--val-per-family", type=int, default=48)
@@ -198,29 +259,17 @@ def main() -> None:
 
     t0 = time.time()
     dev = motif.device()
-    train_pool, val_cases = motif.generate_cases(args.max_train_per_family, args.val_per_family, args.seed)
-    encoder, bridge_metrics = train_jepa_encoder(args, dev)
-    rows = []
-    for budget in [int(part) for part in args.budgets.split(",") if part.strip()]:
-        train_cases = take_budget(train_pool, budget)
-        motif_model = train_motif_policy(train_cases, args, dev)
-        jepa_model = train_jepa_policy(encoder, train_cases, args, dev)
-        result = evaluate_policies(motif_model, jepa_model, val_cases, dev)
-        result["train_per_family"] = budget
-        result["train_cases"] = len(train_cases)
-        rows.append(result)
+    seeds = [int(part) for part in args.seeds.split(",") if part.strip()] or [args.seed]
+    seed_runs = [run_seed(args, dev, seed) for seed in seeds]
 
     payload = {
         "status": "sample_efficiency_competition_sweep",
         "scope": "held-out mate-in-one tactical policy competition under increasing train budgets",
         "device": dev,
         "elapsed_s": round(time.time() - t0, 3),
-        "jepa_bridge_pretrain": {
-            "cosine_mean": round(float(bridge_metrics["cosine_mean"]), 6),
-            "nearest_neighbor_top1": round(float(bridge_metrics["nearest_neighbor_top1"]), 4),
-            "nearest_neighbor_top5": round(float(bridge_metrics["nearest_neighbor_top5"]), 4),
-        },
-        "rows": rows,
+        "seeds": seeds,
+        "seed_runs": seed_runs,
+        "aggregate": aggregate(seed_runs),
     }
     ARTIFACT.parent.mkdir(exist_ok=True)
     ARTIFACT.write_text(json.dumps(payload, indent=2) + "\n")

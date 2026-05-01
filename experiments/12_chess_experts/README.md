@@ -24,4 +24,5 @@ goal is to improve the chess expert itself.
   reply, so success requires completing a line rather than only finding one
   move.
 - Competition sweep: compare motif-policy and frozen-JEPA-policy under
-  increasing training budgets to expose where one expert starts winning.
+  increasing training budgets and multiple seeds to expose where one expert
+  starts winning.

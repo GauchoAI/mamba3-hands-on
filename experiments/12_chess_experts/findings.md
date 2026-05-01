@@ -322,3 +322,72 @@ sample sweep at 128 examples per motif: JEPA-policy is ahead, 0.9740 vs 0.9635
 This is still a generated tactical domain. The next harder version should make
 the competition more adversarial by using longer forced lines, mixed tactical
 families, and failure cases mined from the current decisive examples.
+
+### Iteration 9 - harder multi-seed competition sweep
+
+Implemented a stronger sweep:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_competition_sweep.py \
+  --seeds 67,68,69 \
+  --budgets 16,32,64,128,192,256 \
+  --max-train-per-family 256 \
+  --val-per-family 96 \
+  --policy-epochs 140 \
+  --jepa-epochs 18 \
+  --jepa-pairs 2400 \
+  --jepa-val-pairs 400
+```
+
+This increases:
+
+```text
+seeds: 1 -> 3
+held-out positions per run: 192 -> 384
+aggregate held-out positions per budget: 1,152
+max training examples per motif: 128 -> 256
+max total policy examples: 512 -> 1,024
+policy epochs: 80 -> 140
+JEPA bridge epochs: 14 -> 18
+JEPA bridge pairs: 1,800 -> 2,400
+```
+
+Aggregate result:
+
+```text
+train per motif | motif mean | JEPA-policy mean | delta JEPA-motif | winner
+16              | 0.5148     | 0.5147           | -0.0000          | motif, by rounding
+32              | 0.7188     | 0.7057           | -0.0130          | motif
+64              | 0.8550     | 0.8559           | +0.0009          | JEPA-policy
+128             | 0.9540     | 0.9462           | -0.0078          | motif
+192             | 0.9792     | 0.9792           | +0.0000          | tie
+256             | 0.9896     | 0.9835           | -0.0061          | motif
+```
+
+At 256 examples per motif:
+
+```text
+runs: 3
+positions scored: 1,152
+motif-only wins: 14
+JEPA-only wins: 7
+ties both mate: 1,126
+ties both fail: 5
+```
+
+Interpretation:
+
+The single-seed JEPA edge did not survive as a stable claim under the harder
+multi-seed benchmark. The better statement is:
+
+```text
+Both experts become very strong on this generated tactical distribution.
+JEPA-policy is genuinely competitive and sometimes wins a budget slice.
+The direct motif policy remains slightly stronger at the highest budget.
+```
+
+That is still progress. The frozen JEPA encoder is viable as a policy substrate,
+but the current arena is now close to saturated. The next benchmark should not
+just add more epochs. It should increase task hardness: longer forced lines,
+more distractor pieces, mixed motifs in one position, and adversarially mined
+failure cases.
