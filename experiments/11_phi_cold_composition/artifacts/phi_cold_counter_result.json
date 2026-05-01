@@ -8,49 +8,56 @@
     "contract": "PuzzleSolver.token_bias(decoded_prefix, tokenizer) -> {token_id: logit_bias}"
   },
   "phi_trainable_params": 0,
-  "elapsed_s": 29.018,
+  "elapsed_s": 16.302,
   "rows": [
     {
       "n": 3,
-      "prompt": "\u00a7 \u00a7 \u00a7 :",
-      "baseline_text": "\u00a7 \u00a7 \u00a7 : 100",
+      "prompt": "<LAB:count> \u00a7 \u00a7 \u00a7 :",
+      "baseline_text": "<LAB:count> \u00a7 \u00a7 \u00a7 : <PER:persona_1> :",
       "baseline_count": 0,
       "baseline_ok": false,
-      "cortex_text": "\u00a7 \u00a7 \u00a7 : a a a",
+      "cortex_text": "<LAB:count> \u00a7 \u00a7 \u00a7 : a a a \n\n<HED",
       "cortex_count": 3,
       "cortex_ok": true
     },
     {
       "n": 8,
-      "prompt": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :",
-      "baseline_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :\n\n1. **Introduction to the Con",
+      "prompt": "<LAB:count> \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :",
+      "baseline_text": "<LAB:count> \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :<PER:person_1> :<PER:person_2",
       "baseline_count": 0,
       "baseline_ok": false,
-      "cortex_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 : a a a a a a a a",
+      "cortex_text": "<LAB:count> \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 : a a a a a a a a \n\n## Your task",
       "cortex_count": 8,
-      "cortex_ok": true
-    },
-    {
-      "n": 16,
-      "prompt": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :",
-      "baseline_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :\n\n1. **Introduction to the Concept of the \"Golden Mean",
-      "baseline_count": 0,
-      "baseline_ok": false,
-      "cortex_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 : a a a a a a a a a a a a a a a a",
-      "cortex_count": 16,
-      "cortex_ok": true
-    },
-    {
-      "n": 32,
-      "prompt": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :",
-      "baseline_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :\n\n### Introduction\n\nIn the realm of software development, the concept of a \"software package\" is a cornerstone of modern computing. It refers",
-      "baseline_count": 0,
-      "baseline_ok": false,
-      "cortex_text": "\u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 : a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a a",
-      "cortex_count": 32,
       "cortex_ok": true
     }
   ],
   "baseline_pass": 0,
-  "cortex_pass": 4
+  "cortex_pass": 2,
+  "resume_demo": {
+    "prompt": "<LAB:count> \u00a7 \u00a7 \u00a7 :",
+    "text": "<LAB:count> \u00a7 \u00a7 \u00a7 : a a a \n\n<HED:The Evolution of the English",
+    "count": 3,
+    "after_count": "The Evolution of the English"
+  },
+  "negative_control": {
+    "prompt": "\u00a7 \u00a7 \u00a7 :",
+    "text": "\u00a7 \u00a7 \u00a7 : 10000",
+    "count": 0,
+    "port_stayed_inactive": true
+  },
+  "sort_demo": {
+    "prompt": "<LAB:sort> 3 1 2 :",
+    "text": "<LAB:sort> 3 1 2 :  1 2 3\n\n",
+    "ok": true
+  },
+  "fact_override_demo": {
+    "prompt": "<LAB:fact:capital-au> The capital of Australia is:",
+    "text": "<LAB:fact:capital-au> The capital of Australia is: Sydney.\n\n\n##",
+    "ok": true
+  },
+  "logic_demo": {
+    "prompt": "<LAB:logic> ( true and false ) or ( not false ) :",
+    "text": "<LAB:logic> ( true and false ) or ( not false ) : TRUE\n\n\n###",
+    "ok": true
+  }
 }

@@ -40,3 +40,13 @@ cortex:   § § § : a a a
 Across `N={3,8,16,32}` the baseline produced zero valid unary outputs; the
 same frozen Phi host with the generic solver port produced the exact count in
 all four cases. Phi trainable parameters: `0`.
+
+## Subchapters
+
+- Explicit prefix gating: interventions require `<LAB:...>` protocol markers.
+- Resume after intervention: the port writes a boundary and releases control.
+- Negative control: ungated symbolic text leaves Phi untouched.
+- Plugin registry: counter, sorting, factual override, and boolean logic share
+  one Phi-facing adapter.
+- Logic direction: `<LAB:logic> ( true and false ) or ( not false ) :` emits
+  `TRUE` through the same port.

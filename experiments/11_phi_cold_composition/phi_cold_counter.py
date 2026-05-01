@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
@@ -26,15 +27,35 @@ class EvalRow:
     cortex_ok: bool
 
 
+@dataclass
+class ResumeRow:
+    prompt: str
+    baseline_text: str
+    cortex_text: str
+    intervention_tokens: int
+    resumed_after_intervention: bool
+
+
+@dataclass
+class PortState:
+    active_solver: str | None = None
+    completed: set[str] = field(default_factory=set)
+    interventions: int = 0
+
+
 class PuzzleSolver(ABC):
     name: str
+
+    @abstractmethod
+    def should_activate(self, input_ids: torch.Tensor, text: str, tokenizer, state: PortState) -> bool:
+        """Return true when this solver should take over the next-token stream."""
 
     @abstractmethod
     def token_bias(self, input_ids: torch.Tensor, text: str, tokenizer) -> dict[int, float]:
         """Return additive next-token logit biases for the current decoded prefix."""
 
     @abstractmethod
-    def is_done(self, input_ids: torch.Tensor, text: str, token_id: int, tokenizer) -> bool:
+    def is_done(self, input_ids: torch.Tensor, text: str, tokenizer) -> bool:
         """Return true when generation should stop for this solver."""
 
 
@@ -47,39 +68,104 @@ class SolverPort:
     biases.
     """
 
-    def __init__(self, solver: PuzzleSolver):
-        self.solver = solver
+    def __init__(self, solvers: list[PuzzleSolver]):
+        self.solvers = {solver.name: solver for solver in solvers}
 
-    def apply(self, logits: torch.Tensor, input_ids: torch.Tensor, text: str, tokenizer) -> torch.Tensor:
+    def apply(
+        self,
+        logits: torch.Tensor,
+        input_ids: torch.Tensor,
+        text: str,
+        tokenizer,
+        state: PortState,
+    ) -> torch.Tensor:
         logits = logits.clone()
-        for token_id, bias in self.solver.token_bias(input_ids, text, tokenizer).items():
-            logits[:, token_id] += bias
+        if state.active_solver is None:
+            for solver in self.solvers.values():
+                if solver.name not in state.completed and solver.should_activate(input_ids, text, tokenizer, state):
+                    state.active_solver = solver.name
+                    break
+        if state.active_solver is not None:
+            solver = self.solvers[state.active_solver]
+            if solver.is_done(input_ids, text, tokenizer):
+                state.completed.add(solver.name)
+                state.active_solver = None
+            else:
+                for token_id, bias in solver.token_bias(input_ids, text, tokenizer).items():
+                    logits[:, token_id] += bias
+                    state.interventions += 1
         return logits
+
+
+class SequenceEmitterSolver(PuzzleSolver):
+    start_marker: str
+    name: str
+
+    def target_text(self, input_ids: torch.Tensor, text: str, tokenizer) -> str:
+        raise NotImplementedError
+
+    def should_activate(self, input_ids: torch.Tensor, text: str, tokenizer, state: PortState) -> bool:
+        return self.start_marker in text and self.target_text(input_ids, text, tokenizer) not in text
+
+    def _target_ids(self, input_ids: torch.Tensor, text: str, tokenizer) -> list[int]:
+        return tokenizer.encode(self.target_text(input_ids, text, tokenizer), add_special_tokens=False)
+
+    def _emitted_after_colon(self, input_ids: torch.Tensor, tokenizer) -> int:
+        colon_ids = tokenizer.encode(":", add_special_tokens=False)
+        ids = input_ids[0].tolist()
+        for colon_id in colon_ids:
+            if colon_id in ids:
+                colon_pos = len(ids) - 1 - ids[::-1].index(colon_id)
+                return len(ids) - colon_pos - 1
+        return 0
+
+    def token_bias(self, input_ids: torch.Tensor, text: str, tokenizer) -> dict[int, float]:
+        target_ids = self._target_ids(input_ids, text, tokenizer)
+        offset = self._emitted_after_colon(input_ids, tokenizer)
+        if offset >= len(target_ids):
+            return {}
+        return {target_ids[offset]: 90.0}
+
+    def is_done(self, input_ids: torch.Tensor, text: str, tokenizer) -> bool:
+        return self.target_text(input_ids, text, tokenizer) in text
 
 
 class UnaryCounterSolver(PuzzleSolver):
     name = "unary_counter"
 
-    def __init__(self, count_symbol: str, emit_symbol: str, emit_bias: float, stop_bias: float):
+    def __init__(
+        self,
+        count_symbol: str,
+        emit_symbol: str,
+        emit_bias: float,
+        stop_bias: float,
+        start_marker: str = "<LAB:count>",
+        end_marker: str = "</LAB>",
+    ):
         self.count_symbol = count_symbol
         self.emit_symbol = emit_symbol
         self.emit_bias = emit_bias
         self.stop_bias = stop_bias
+        self.start_marker = start_marker
+        self.end_marker = end_marker
 
-    def _ids(self, tokenizer) -> tuple[int, int, int]:
+    def _ids(self, tokenizer) -> tuple[int, int, int, int]:
         count = tokenizer.encode(self.count_symbol, add_special_tokens=False)
         colon = tokenizer.encode(":", add_special_tokens=False)
         emit = tokenizer.encode(self.emit_symbol, add_special_tokens=False)
+        end = tokenizer.encode("\n", add_special_tokens=False)
         if len(count) != 1 or len(colon) != 1 or len(emit) != 1:
             raise RuntimeError("count, colon, and emit symbols must be single tokenizer ids")
-        return count[0], colon[0], emit[0]
+        if not end:
+            raise RuntimeError("end marker must tokenize to at least one token")
+        return count[0], colon[0], emit[0], end[0]
 
-    def _state(self, input_ids: torch.Tensor, tokenizer) -> tuple[int, int, bool]:
-        count_id, colon_id, emit_id = self._ids(tokenizer)
+    def _state(self, input_ids: torch.Tensor, tokenizer) -> tuple[int, int, int, bool]:
+        count_id, colon_id, emit_id, _ = self._ids(tokenizer)
         ids = input_ids[0].tolist()
         if colon_id not in ids:
-            return ids.count(count_id), 0, False
-        colon_pos = ids.index(colon_id)
+            return ids.count(count_id), 0, 0, False
+        colon_pos = len(ids) - 1 - ids[::-1].index(colon_id)
         target = ids[:colon_pos].count(count_id)
         emitted = 0
         for token_id in ids[colon_pos + 1:]:
@@ -87,20 +173,67 @@ class UnaryCounterSolver(PuzzleSolver):
                 emitted += 1
             else:
                 break
-        return target, emitted, True
+        after_colon = len(ids) - colon_pos - 1
+        return target, emitted, after_colon, True
+
+    def should_activate(self, input_ids: torch.Tensor, text: str, tokenizer, state: PortState) -> bool:
+        _, _, _, active = self._state(input_ids, tokenizer)
+        return self.start_marker in text and active
 
     def token_bias(self, input_ids: torch.Tensor, text: str, tokenizer) -> dict[int, float]:
-        _, _, emit_id = self._ids(tokenizer)
-        target, emitted, active = self._state(input_ids, tokenizer)
+        _, _, emit_id, end_first_id = self._ids(tokenizer)
+        target, emitted, _, active = self._state(input_ids, tokenizer)
         if not active:
             return {}
         if emitted < target:
             return {emit_id: self.emit_bias}
-        return {emit_id: -self.emit_bias}
+        return {end_first_id: self.stop_bias, emit_id: -self.emit_bias}
 
-    def is_done(self, input_ids: torch.Tensor, text: str, token_id: int, tokenizer) -> bool:
-        target, emitted, active = self._state(input_ids, tokenizer)
-        return active and emitted >= target
+    def is_done(self, input_ids: torch.Tensor, text: str, tokenizer) -> bool:
+        target, emitted, after_colon, active = self._state(input_ids, tokenizer)
+        return active and emitted >= target and after_colon > emitted
+
+
+class SortSolver(SequenceEmitterSolver):
+    name = "sort"
+    start_marker = "<LAB:sort>"
+
+    def target_text(self, input_ids: torch.Tensor, text: str, tokenizer) -> str:
+        body = text.split(self.start_marker, 1)[-1].split(":", 1)[0]
+        nums = [int(part) for part in body.replace(",", " ").split() if part.lstrip("-").isdigit()]
+        if not nums:
+            return ""
+        return " " + " ".join(str(n) for n in sorted(nums))
+
+
+class FactOverrideSolver(SequenceEmitterSolver):
+    name = "fact_override"
+    start_marker = "<LAB:fact:capital-au>"
+
+    def target_text(self, input_ids: torch.Tensor, text: str, tokenizer) -> str:
+        return "Sydney"
+
+
+class LogicSolver(SequenceEmitterSolver):
+    name = "logic"
+    start_marker = "<LAB:logic>"
+
+    def target_text(self, input_ids: torch.Tensor, text: str, tokenizer) -> str:
+        expr = text.split(self.start_marker, 1)[-1].split(":", 1)[0]
+        value = eval_bool_expr(expr)
+        return "TRUE" if value else "FALSE"
+
+
+def eval_bool_expr(expr: str) -> bool:
+    cleaned = expr.lower()
+    if not re.fullmatch(r"[truefalsandorotn()\s]+", cleaned):
+        raise ValueError(f"unsupported logical expression: {expr!r}")
+    cleaned = re.sub(r"\btrue\b", "True", cleaned)
+    cleaned = re.sub(r"\bfalse\b", "False", cleaned)
+    cleaned = re.sub(r"\band\b", " and ", cleaned)
+    cleaned = re.sub(r"\bor\b", " or ", cleaned)
+    cleaned = re.sub(r"\bnot\b", " not ", cleaned)
+    return bool(eval(cleaned, {"__builtins__": {}}, {}))
 
 
 def device() -> str:
@@ -117,13 +250,18 @@ def count_tokens_after_colon(ids: torch.Tensor, tokenizer, target: str = "a") ->
     token_ids = ids[0].tolist()
     if colon_id not in token_ids:
         return 0
+    colon_pos = len(token_ids) - 1 - token_ids[::-1].index(colon_id)
     count = 0
-    for token_id in token_ids[token_ids.index(colon_id) + 1:]:
+    for token_id in token_ids[colon_pos + 1:]:
         if token_id == emit_id:
             count += 1
         else:
             break
     return count
+
+
+def emitted_text_after_colon(text: str) -> str:
+    return text.rsplit(":", 1)[-1] if ":" in text else ""
 
 
 def decode(ids: torch.Tensor, tokenizer) -> str:
@@ -166,14 +304,18 @@ def cortex_generate(
     port: SolverPort,
 ) -> tuple[str, torch.Tensor]:
     ids = tokenizer(prompt, return_tensors="pt").input_ids.to(dev)
+    state = PortState()
     for _ in range(max_new):
         text = decode(ids, tokenizer)
-        logits = port.apply(model(ids).logits[:, -1, :], ids, text, tokenizer)
+        logits = port.apply(model(ids).logits[:, -1, :], ids, text, tokenizer, state)
         nxt = torch.argmax(logits, dim=-1, keepdim=True)
         ids = torch.cat([ids, nxt], dim=1)
-        if port.solver.is_done(ids, decode(ids, tokenizer), int(nxt[0, 0]), tokenizer):
-            break
     return decode(ids, tokenizer), ids
+
+
+def prompt_count(symbol: str, n: int, gated: bool) -> str:
+    body = " ".join([symbol] * n + [":"])
+    return f"<LAB:count> {body}" if gated else body
 
 
 def main() -> None:
@@ -205,12 +347,12 @@ def main() -> None:
         raise SystemExit(f"emit symbol {args.emit!r} is not a single token")
 
     solver = UnaryCounterSolver(args.symbol, args.emit, args.emit_bias, args.stop_bias)
-    port = SolverPort(solver)
+    port = SolverPort([solver, SortSolver(), FactOverrideSolver(), LogicSolver()])
 
     rows: list[EvalRow] = []
     for n in [int(x) for x in args.ns.split(",") if x.strip()]:
         # Spaces force stable single-token symbols under Phi's tokenizer.
-        prompt = " ".join([args.symbol] * n + [":"])
+        prompt = prompt_count(args.symbol, n, gated=True)
         max_new = n + args.max_new_extra
         baseline, baseline_ids = greedy_baseline(model, tokenizer, prompt, max_new, dev)
         cortex, cortex_ids = cortex_generate(
@@ -229,6 +371,17 @@ def main() -> None:
             cortex_ok=c_count == n,
         ))
 
+    resume_prompt = prompt_count(args.symbol, 3, gated=True)
+    resume_text, resume_ids = cortex_generate(model, tokenizer, resume_prompt, 16, dev, port)
+    negative_prompt = prompt_count(args.symbol, 3, gated=False)
+    negative_text, negative_ids = cortex_generate(model, tokenizer, negative_prompt, 6, dev, port)
+    sort_prompt = "<LAB:sort> 3 1 2 :"
+    sort_text, _ = cortex_generate(model, tokenizer, sort_prompt, 8, dev, port)
+    fact_prompt = "<LAB:fact:capital-au> The capital of Australia is:"
+    fact_text, _ = cortex_generate(model, tokenizer, fact_prompt, 6, dev, port)
+    logic_prompt = "<LAB:logic> ( true and false ) or ( not false ) :"
+    logic_text, _ = cortex_generate(model, tokenizer, logic_prompt, 6, dev, port)
+
     payload = {
         "model": args.model,
         "device": dev,
@@ -243,6 +396,33 @@ def main() -> None:
         "rows": [row.__dict__ for row in rows],
         "baseline_pass": sum(row.baseline_ok for row in rows),
         "cortex_pass": sum(row.cortex_ok for row in rows),
+        "resume_demo": {
+            "prompt": resume_prompt,
+            "text": resume_text,
+            "count": count_tokens_after_colon(resume_ids, tokenizer, args.emit),
+            "after_count": emitted_text_after_colon(resume_text),
+        },
+        "negative_control": {
+            "prompt": negative_prompt,
+            "text": negative_text,
+            "count": count_tokens_after_colon(negative_ids, tokenizer, args.emit),
+            "port_stayed_inactive": count_tokens_after_colon(negative_ids, tokenizer, args.emit) != 3,
+        },
+        "sort_demo": {
+            "prompt": sort_prompt,
+            "text": sort_text,
+            "ok": "1 2 3" in sort_text,
+        },
+        "fact_override_demo": {
+            "prompt": fact_prompt,
+            "text": fact_text,
+            "ok": "Sydney" in fact_text,
+        },
+        "logic_demo": {
+            "prompt": logic_prompt,
+            "text": logic_text,
+            "ok": "TRUE" in logic_text,
+        },
     }
     out = HERE / "artifacts"
     out.mkdir(exist_ok=True)
@@ -250,6 +430,14 @@ def main() -> None:
     print(json.dumps(payload, indent=2))
     if payload["cortex_pass"] != len(rows):
         raise SystemExit("cortex primitive failed at least one case")
+    if not payload["negative_control"]["port_stayed_inactive"]:
+        raise SystemExit("negative control unexpectedly activated")
+    if not payload["sort_demo"]["ok"]:
+        raise SystemExit("sort solver failed")
+    if not payload["fact_override_demo"]["ok"]:
+        raise SystemExit("fact override failed")
+    if not payload["logic_demo"]["ok"]:
+        raise SystemExit("logic solver failed")
 
 
 if __name__ == "__main__":

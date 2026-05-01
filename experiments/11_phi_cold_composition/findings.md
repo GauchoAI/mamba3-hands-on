@@ -78,3 +78,81 @@ chapter. It is not trained adapter composition yet; it is a deterministic
 solver plugged through a generic Phi token-bias port. The strong next step is
 to put Hanoi or sorting behind the same `SolverPort` and show action-token
 rollout, not a new port.
+
+### Iteration 3 - gated registry, release, negative control, extra solvers
+
+Implemented the larger chapter shape:
+
+```text
+SolverPort registry
+  - unary counter
+  - sort solver
+  - factual override solver
+```
+
+The counter now requires an explicit prefix protocol:
+
+```text
+<LAB:count> § § § :
+```
+
+Without `<LAB:count>`, the port stays inactive.
+
+Run:
+
+```bash
+.venv/bin/python experiments/11_phi_cold_composition/phi_cold_counter.py --ns 3,8 --max-new-extra 6
+```
+
+Result:
+
+```text
+baseline pass: 0/2
+cortex pass: 2/2
+negative control: inactive
+sort demo: OK
+fact override demo: OK
+Phi trainable params: 0
+elapsed: 16.888s
+```
+
+Verbatim:
+
+```text
+count prompt: <LAB:count> § § § :
+cortex:       <LAB:count> § § § : a a a
+
+negative:     § § § :
+output:       § § § : 10000
+
+sort prompt:  <LAB:sort> 3 1 2 :
+output:       <LAB:sort> 3 1 2 :  1 2 3
+
+fact prompt:  <LAB:fact:capital-au> The capital of Australia is:
+output:       ... Australia is: Sydney.
+```
+
+Important correction: release was not automatic. If the port simply stopped
+biasing after the correct number of `a` tokens, Phi continued the local pattern
+and emitted extra `a`s. The port now writes a boundary token, marks the solver
+complete, and hands control back to Phi. This is the resume-after-intervention
+mechanism.
+
+### Iteration 4 - logic plugin
+
+Added a fourth solver to the same registry:
+
+```text
+<LAB:logic> ( true and false ) or ( not false ) :
+```
+
+Output:
+
+```text
+<LAB:logic> ( true and false ) or ( not false ) : TRUE
+```
+
+This is the first small step toward the real objective: Phi handles text, while
+a deterministic/reasoning organ handles the logical computation and writes the
+answer through the same token-bias port. It is still a toy grammar, but it is
+now aimed at better reasoning rather than only symbolic counting.
