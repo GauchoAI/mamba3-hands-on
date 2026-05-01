@@ -1,0 +1,8 @@
+{
+  "teacher": "stockfish",
+  "engine_path": null,
+  "positions_requested": 256,
+  "status": "blocked",
+  "reason": "UCI engine not found. Install Stockfish or pass --engine /path/to/stockfish.",
+  "elapsed_s": 0.0
+}

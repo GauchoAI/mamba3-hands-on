@@ -1,0 +1,63 @@
+{
+  "experiment": "chess_jepa_bridge",
+  "claim": "Small JEPA-style chess transition bridge trained without Phi/LLM.",
+  "config": {
+    "seed": 7,
+    "pairs": 3600,
+    "val_pairs": 720,
+    "epochs": 18,
+    "batch_size": 256,
+    "width": 256,
+    "latent_dim": 64,
+    "lr": 0.0015,
+    "weight_decay": 0.0001,
+    "artifact": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on/experiments/12_chess_experts/artifacts/chess_jepa_bridge_result.json"
+  },
+  "device": "mps",
+  "counts": {
+    "train_pairs": 2880,
+    "val_pairs": 720
+  },
+  "final_train_loss_terms": {
+    "align_mse": 3.9239115722011775e-05,
+    "align_cos_loss": 0.001255631446838379,
+    "vicreg": 0.04931100457906723
+  },
+  "heldout": {
+    "cosine_mean": 0.9986417889595032,
+    "mse_normalized": 4.2445186409167945e-05,
+    "mse_raw": 0.03465805575251579,
+    "nearest_neighbor_top1": 0.6666666666666666,
+    "nearest_neighbor_top5": 0.9972222222222222,
+    "retrieval_candidates": 720,
+    "latent_std_mean": 0.6952188014984131
+  },
+  "runtime_seconds": 3.509330987930298,
+  "sample_pairs": [
+    {
+      "fen_before": "8/3n2p1/2p2k2/2P1R3/1p1P4/6P1/4K3/1n6 b - - 1 39",
+      "move_uci": "b4b3",
+      "fen_after": "8/3n2p1/2p2k2/2P1R3/3P4/1p4P1/4K3/1n6 w - - 0 40"
+    },
+    {
+      "fen_before": "r1b2bn1/1pp1pk2/8/p1P4r/PnN4P/1P2P3/8/R1B2BKR w - - 0 24",
+      "move_uci": "c4a5",
+      "fen_after": "r1b2bn1/1pp1pk2/8/N1P4r/Pn5P/1P2P3/8/R1B2BKR b - - 0 24"
+    },
+    {
+      "fen_before": "r1bqkbr1/p1pppppp/n4nB1/1p6/8/P3P2P/1PPP1PP1/RNBQK1NR w KQq - 1 7",
+      "move_uci": "g6f7",
+      "fen_after": "r1bqkbr1/p1pppBpp/n4n2/1p6/8/P3P2P/1PPP1PP1/RNBQK1NR b KQq - 0 7"
+    },
+    {
+      "fen_before": "7N/rp2p1bp/p1k5/P1n2p1P/8/1PR1p3/6R1/N1B2KN1 w - - 0 38",
+      "move_uci": "g1h3",
+      "fen_after": "7N/rp2p1bp/p1k5/P1n2p1P/8/1PR1p2N/6R1/N1B2K2 b - - 1 38"
+    },
+    {
+      "fen_before": "r1b4r/B2k1P1p/n7/5p2/1p2pP2/1P1P1QPP/P1P5/R3K1NR b KQ - 0 18",
+      "move_uci": "d7d8",
+      "fen_after": "r1bk3r/B4P1p/n7/5p2/1p2pP2/1P1P1QPP/P1P5/R3K1NR w KQ - 1 19"
+    }
+  ]
+}
