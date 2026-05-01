@@ -156,3 +156,32 @@ This is the first small step toward the real objective: Phi handles text, while
 a deterministic/reasoning organ handles the logical computation and writes the
 answer through the same token-bias port. It is still a toy grammar, but it is
 now aimed at better reasoning rather than only symbolic counting.
+
+### Iteration 5 - request compiler
+
+Added a deterministic front door from user-facing text into the Lab protocol.
+
+Input:
+
+```text
+Please solve this logic statement: ( true and false ) or ( not false )
+```
+
+Compiled prefix:
+
+```text
+<LAB:logic>  ( true and false ) or ( not false ) :
+```
+
+Phi + solver-port output:
+
+```text
+<LAB:logic>  ( true and false ) or ( not false ) : TRUE
+```
+
+This is still software compilation, not learned language understanding. But it
+is the correct control-flow skeleton for the strategic direction:
+
+```text
+user language -> formal protocol -> reasoning organ -> Phi-visible answer
+```

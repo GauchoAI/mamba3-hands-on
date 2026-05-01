@@ -50,3 +50,5 @@ all four cases. Phi trainable parameters: `0`.
   one Phi-facing adapter.
 - Logic direction: `<LAB:logic> ( true and false ) or ( not false ) :` emits
   `TRUE` through the same port.
+- Request compiler: user-facing text can be compiled into the Lab protocol
+  before the forward-pass intervention.

@@ -8,7 +8,7 @@
     "contract": "PuzzleSolver.token_bias(decoded_prefix, tokenizer) -> {token_id: logit_bias}"
   },
   "phi_trainable_params": 0,
-  "elapsed_s": 16.302,
+  "elapsed_s": 14.25,
   "rows": [
     {
       "n": 3,
@@ -19,20 +19,10 @@
       "cortex_text": "<LAB:count> \u00a7 \u00a7 \u00a7 : a a a \n\n<HED",
       "cortex_count": 3,
       "cortex_ok": true
-    },
-    {
-      "n": 8,
-      "prompt": "<LAB:count> \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :",
-      "baseline_text": "<LAB:count> \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 :<PER:person_1> :<PER:person_2",
-      "baseline_count": 0,
-      "baseline_ok": false,
-      "cortex_text": "<LAB:count> \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 \u00a7 : a a a a a a a a \n\n## Your task",
-      "cortex_count": 8,
-      "cortex_ok": true
     }
   ],
   "baseline_pass": 0,
-  "cortex_pass": 2,
+  "cortex_pass": 1,
   "resume_demo": {
     "prompt": "<LAB:count> \u00a7 \u00a7 \u00a7 :",
     "text": "<LAB:count> \u00a7 \u00a7 \u00a7 : a a a \n\n<HED:The Evolution of the English",
@@ -58,6 +48,12 @@
   "logic_demo": {
     "prompt": "<LAB:logic> ( true and false ) or ( not false ) :",
     "text": "<LAB:logic> ( true and false ) or ( not false ) : TRUE\n\n\n###",
+    "ok": true
+  },
+  "compiled_request_demo": {
+    "user_request": "Please solve this logic statement: ( true and false ) or ( not false )",
+    "compiled_prompt": "<LAB:logic>  ( true and false ) or ( not false ) :",
+    "text": "<LAB:logic>  ( true and false ) or ( not false ) : TRUE\n\n\n###",
     "ok": true
   }
 }

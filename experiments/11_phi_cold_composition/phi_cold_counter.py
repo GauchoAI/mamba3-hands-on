@@ -236,6 +236,26 @@ def eval_bool_expr(expr: str) -> bool:
     return bool(eval(cleaned, {"__builtins__": {}}, {}))
 
 
+def compile_user_request(text: str) -> str:
+    """Small deterministic front door from user text into the Lab protocol."""
+    lower = text.lower()
+    if "sort" in lower:
+        nums = re.findall(r"-?\d+", text)
+        return f"<LAB:sort> {' '.join(nums)} :"
+    if "capital" in lower and "australia" in lower:
+        return "<LAB:fact:capital-au> The capital of Australia is:"
+    logic_match = re.search(r"(true|false|not|\(|\)|\band\b|\bor\b|\\s)+", lower)
+    if "logic" in lower or "true" in lower or "false" in lower:
+        expr = text.split(":", 1)[-1] if ":" in text else text
+        expr = re.sub(r"[^A-Za-z()\s]", " ", expr)
+        return f"<LAB:logic> {expr} :"
+    if "count" in lower:
+        n_match = re.search(r"\d+", text)
+        n = int(n_match.group(0)) if n_match else 3
+        return prompt_count("§", n, gated=True)
+    return text
+
+
 def device() -> str:
     if torch.backends.mps.is_available():
         return "mps"
@@ -381,6 +401,9 @@ def main() -> None:
     fact_text, _ = cortex_generate(model, tokenizer, fact_prompt, 6, dev, port)
     logic_prompt = "<LAB:logic> ( true and false ) or ( not false ) :"
     logic_text, _ = cortex_generate(model, tokenizer, logic_prompt, 6, dev, port)
+    user_request = "Please solve this logic statement: ( true and false ) or ( not false )"
+    compiled_prompt = compile_user_request(user_request)
+    compiled_text, _ = cortex_generate(model, tokenizer, compiled_prompt, 6, dev, port)
 
     payload = {
         "model": args.model,
@@ -423,6 +446,12 @@ def main() -> None:
             "text": logic_text,
             "ok": "TRUE" in logic_text,
         },
+        "compiled_request_demo": {
+            "user_request": user_request,
+            "compiled_prompt": compiled_prompt,
+            "text": compiled_text,
+            "ok": "TRUE" in compiled_text,
+        },
     }
     out = HERE / "artifacts"
     out.mkdir(exist_ok=True)
@@ -438,6 +467,8 @@ def main() -> None:
         raise SystemExit("fact override failed")
     if not payload["logic_demo"]["ok"]:
         raise SystemExit("logic solver failed")
+    if not payload["compiled_request_demo"]["ok"]:
+        raise SystemExit("compiled request demo failed")
 
 
 if __name__ == "__main__":
