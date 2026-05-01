@@ -46,8 +46,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mamba_platform.mamba3_lm import Mamba3LM, LMConfig
-from mamba_platform.mamba3_minimal import Mamba3Block, Mamba3Config
+from lab_platform.mamba3_lm import Mamba3LM, LMConfig
+from lab_platform.mamba3_minimal import Mamba3Block, Mamba3Config
 
 
 PAD = 0

@@ -8,7 +8,7 @@ Four variants, same hyperparameters:
   - neither:   == Mamba-2-like in spirit
 """
 import torch, torch.nn as nn, torch.nn.functional as F
-from mamba_platform.mamba3_minimal import Mamba3Block, Mamba3Config
+from lab_platform.mamba3_minimal import Mamba3Block, Mamba3Config
 from parity_experiment import make_parity_batch, ParityModel
 
 

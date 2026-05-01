@@ -1,4 +1,4 @@
-# Mamba Platform — Multi-Node Training System
+# Lab Platform — Multi-Node Training System
 
 ## Architecture
 
@@ -23,7 +23,7 @@
            │          │          │
      ┌─────┴──────────┴──────────┴────┐
      │          CLI / MCP              │
-     │   mamba nodes|status|submit     │
+     │   lab nodes|status|submit     │
      │   (runs on any machine)        │
      └────────────────────────────────┘
 ```
@@ -75,7 +75,7 @@ offline → last_heartbeat > 300s ago (or explicitly deregistered)
 
 ### 2. Job Submission
 
-When `mamba submit --target <node>` is called:
+When `lab submit --target <node>` is called:
 
 1. CLI resolves `<node>` from Firebase `/mamba3/nodes/`
 2. Reads SSH info from the node manifest
@@ -140,7 +140,7 @@ The GA discovers whether new backends are competitive through champion/challenge
 ```
 mamba3-hands-on/
 ├── cli/
-│   └── main.py              # CLI entry point: mamba nodes|status|submit|logs|pull|stop
+│   └── main.py              # CLI entry point: lab nodes|status|submit|logs|pull|stop
 ├── mcp/
 │   ├── server.py            # MCP server for Claude Code integration
 │   └── __init__.py
@@ -167,7 +167,7 @@ mamba3-hands-on/
 ├── diagnostician.py         # Detect training signals, prescribe mutations
 ├── firebase_push.py         # Push telemetry to Firebase RTDB
 ├── .mcp.json                # MCP server config for Claude Code
-└── pyproject.toml           # Package config, `mamba` CLI entry point
+└── pyproject.toml           # Package config, `lab` CLI entry point
 ```
 
 ## Unified Namespace — Transparent Model Access
@@ -221,7 +221,7 @@ training on the Mac Mini, with zero manual intervention.
 ```bash
 git clone https://github.com/GauchoAI/mamba3-hands-on.git
 cd mamba3-hands-on
-pip install -e .                          # installs `mamba` CLI
+pip install -e .                          # installs `lab` CLI
 python server/node_agent.py --register    # registers + heartbeat loop
 ```
 
@@ -232,15 +232,15 @@ python server/node_agent.py --register    # registers + heartbeat loop
 python server/node_agent.py --start
 
 # Option B: submit from another machine
-mamba submit --target <node-id>
+lab submit --target <node-id>
 ```
 
 ### Verify
 
 ```bash
-mamba nodes           # see all registered nodes
-mamba status          # see task training progress
-mamba logs --node h100 --follow   # stream live logs
+lab nodes           # see all registered nodes
+lab status          # see task training progress
+lab logs --node h100 --follow   # stream live logs
 ```
 
 ## Problem Registration

@@ -1,4 +1,4 @@
-# mamba3-hands-on
+# Lab
 
 A research project building small Mamba-3 byte-level language models
 that **reason** through residual-stream primitives. The chapters
@@ -16,9 +16,9 @@ For reusable platform imports, install the checkout in editable mode:
 .venv/bin/python -m pip install -e .
 ```
 
-This also installs the `mamba` CLI plus utility commands such as
-`mamba-kappa-pack`, `mamba-cluster-sync`, and
-`mamba-make-bilingual-corpus`.
+This also installs the `lab` CLI plus utility commands such as
+`lab-kappa-pack`, `lab-cluster-sync`, and
+`lab-make-bilingual-corpus`.
 
 ## Chapters
 
@@ -41,30 +41,30 @@ cross-link to the relevant `docs/findings/<topic>.md` entry.
 ## Infrastructure
 
 The reusable platform modules used across chapters live under
-[`src/mamba_platform/`](src/mamba_platform/):
+[`src/lab_platform/`](src/lab_platform/):
 
 - **Persistence + telemetry**:
-  [`experiment_pusher.py`](src/mamba_platform/experiment_pusher.py),
-  [`kappa_packer.py`](src/mamba_platform/kappa_packer.py),
-  [`kappa_schemas.py`](src/mamba_platform/kappa_schemas.py),
-  [`stream_reader.py`](src/mamba_platform/stream_reader.py),
-  [`cloud_archive.py`](src/mamba_platform/cloud_archive.py),
-  [`session_archiver.py`](src/mamba_platform/session_archiver.py),
-  [`firebase_push.py`](src/mamba_platform/firebase_push.py),
-  [`firebase_sync.py`](src/mamba_platform/firebase_sync.py).
+  [`experiment_pusher.py`](src/lab_platform/experiment_pusher.py),
+  [`kappa_packer.py`](src/lab_platform/kappa_packer.py),
+  [`kappa_schemas.py`](src/lab_platform/kappa_schemas.py),
+  [`stream_reader.py`](src/lab_platform/stream_reader.py),
+  [`cloud_archive.py`](src/lab_platform/cloud_archive.py),
+  [`session_archiver.py`](src/lab_platform/session_archiver.py),
+  [`firebase_push.py`](src/lab_platform/firebase_push.py),
+  [`firebase_sync.py`](src/lab_platform/firebase_sync.py).
 - **Cluster control**:
-  [`cluster_dispatch.py`](src/mamba_platform/cluster_dispatch.py),
-  [`cluster_sync.py`](src/mamba_platform/cluster_sync.py).
+  [`cluster_dispatch.py`](src/lab_platform/cluster_dispatch.py),
+  [`cluster_sync.py`](src/lab_platform/cluster_sync.py).
 - **Models + kernels**:
-  [`mamba3_minimal.py`](src/mamba_platform/mamba3_minimal.py),
-  [`mamba3_lm.py`](src/mamba_platform/mamba3_lm.py),
-  [`cortex_counting.py`](src/mamba_platform/cortex_counting.py) (the `Primitive` base
+  [`mamba3_minimal.py`](src/lab_platform/mamba3_minimal.py),
+  [`mamba3_lm.py`](src/lab_platform/mamba3_lm.py),
+  [`cortex_counting.py`](src/lab_platform/cortex_counting.py) (the `Primitive` base
   class + `CortexLM`),
   `ssm_*.py` (SSM scan kernels).
 - **Corpora**:
-  [`make_bilingual_corpus.py`](src/mamba_platform/make_bilingual_corpus.py),
-  [`make_opensubtitles_corpus.py`](src/mamba_platform/make_opensubtitles_corpus.py),
-  [`make_teacher_corpus.py`](src/mamba_platform/make_teacher_corpus.py).
+  [`make_bilingual_corpus.py`](src/lab_platform/make_bilingual_corpus.py),
+  [`make_opensubtitles_corpus.py`](src/lab_platform/make_opensubtitles_corpus.py),
+  [`make_teacher_corpus.py`](src/lab_platform/make_teacher_corpus.py).
 
 ## Architecture documents
 

@@ -321,7 +321,7 @@ def run(args):
 
         # Push Firebase snapshot
         try:
-            from mamba_platform import firebase_push as fb
+            from lab_platform import firebase_push as fb
             leaderboard = []
             for s in all_status:
                 entry = {"task": s["task"], "acc": s["best_accuracy"],
@@ -372,7 +372,7 @@ if __name__ == "__main__":
     parser.add_argument("--problems-dir", default="problems",
                        help="Directory containing problem YAML manifests")
     parser.add_argument("--job-id", default=None,
-                       help="Job ID for tracking (set by mamba submit)")
+                       help="Job ID for tracking (set by lab submit)")
     args = parser.parse_args()
 
     # Re-discover problems if custom dir specified

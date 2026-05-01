@@ -33,7 +33,7 @@ import sys
 import time
 from pathlib import Path
 
-# Allow `from mamba_platform.cortex_counting import ...` regardless of cwd —
+# Allow `from lab_platform.cortex_counting import ...` regardless of cwd —
 # cortex_counting.py lives at the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -41,19 +41,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mamba_platform.cortex_counting import (
+from lab_platform.cortex_counting import (
     CortexLM, CortexLMConfig, CounterPrimitive,
     CountingDataset, eval_counting,
 )
 
 try:
-    from mamba_platform.experiment_pusher import ExperimentPusher
+    from lab_platform.experiment_pusher import ExperimentPusher
     _HAS_PUSHER = True
 except ImportError:
     _HAS_PUSHER = False
 
 try:
-    from mamba_platform.cloud_archive import CloudArchive
+    from lab_platform.cloud_archive import CloudArchive
     _HAS_ARCHIVE = True
 except ImportError:
     _HAS_ARCHIVE = False

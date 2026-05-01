@@ -28,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mamba_platform.cortex_counting import (
+from lab_platform.cortex_counting import (
     CortexLM, CortexLMConfig, CounterPrimitive, parse_count_output,
 )
 

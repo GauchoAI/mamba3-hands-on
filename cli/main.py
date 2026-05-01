@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Mamba CLI — Spark-like job submission for Mamba-3 training.
+Lab CLI — Spark-like job submission for Lab training jobs.
 
 Usage:
-    mamba nodes                          # list registered training nodes
-    mamba status [--node NODE]           # show task status across nodes
-    mamba submit --target NODE           # deploy problems + start training
-    mamba logs --node NODE [--task T]    # stream logs from a node
-    mamba pull --node NODE --output DIR  # download checkpoints
-    mamba stop --node NODE               # stop training on a node
+    lab nodes                          # list registered training nodes
+    lab status [--node NODE]           # show task status across nodes
+    lab submit --target NODE           # deploy problems + start training
+    lab logs --node NODE [--task T]    # stream logs from a node
+    lab pull --node NODE --output DIR  # download checkpoints
+    lab stop --node NODE               # stop training on a node
 """
 
 import argparse
@@ -75,7 +75,7 @@ def cmd_status(args):
     online = [nid for nid, info in nodes_data.items()
               if isinstance(info, dict) and now - info.get("last_heartbeat", 0) < 120]
 
-    print(f"=== Mamba Platform Overview ===")
+    print(f"=== Lab Platform Overview ===")
     print(f"  Tasks: {n_tasks} | Teachers: {n_teachers} | Nodes: {len(online)} online")
     lr = lr_data.get("learning_ratio")
     if lr:
@@ -275,7 +275,7 @@ def cmd_teachers(args):
     online = {nid: info for nid, info in nodes.items()
               if isinstance(info, dict) and info.get("status") == "online"}
     if online:
-        print(f"\nTo sync teachers to a node: mamba sync --source <node> --dest <node>")
+        print(f"\nTo sync teachers to a node: lab sync --source <node> --dest <node>")
 
 
 def _resolve_node(target_name):
@@ -380,7 +380,7 @@ def cmd_submit(args):
         pid = out.strip().splitlines()[-1] if out.strip() else "?"
         print(f"  Training started (PID: {pid})")
         print(f"  Job ID: {job_id}")
-        print(f"  Monitor: mamba logs --node {target['node_id']}")
+        print(f"  Monitor: lab logs --node {target['node_id']}")
         print(f"  Dashboard: https://gauchoai.github.io/mamba3-hands-on/")
 
         # Register job in Firebase
@@ -650,8 +650,8 @@ def cmd_sync(args):
 def main():
 
     parser = argparse.ArgumentParser(
-        prog="mamba",
-        description="Mamba training platform CLI",
+        prog="lab",
+        description="Lab platform CLI",
     )
     sub = parser.add_subparsers(dest="command", help="Command")
 

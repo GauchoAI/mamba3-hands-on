@@ -11,7 +11,7 @@ Mamba-2-like should fail on all of them.
 """
 import math
 import torch, torch.nn as nn, torch.nn.functional as F
-from mamba_platform.mamba3_minimal import Mamba3Block, Mamba2LikeBlock, Mamba3Config
+from lab_platform.mamba3_minimal import Mamba3Block, Mamba2LikeBlock, Mamba3Config
 
 
 def make_modular_batch(batch: int, L: int, M: int, device):

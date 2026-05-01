@@ -29,7 +29,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mamba_platform.mamba3_lm import Mamba3LM, LMConfig
+from lab_platform.mamba3_lm import Mamba3LM, LMConfig
 
 
 # ---- Lion optimizer (Chen et al. 2023) — sign-of-momentum updates ----

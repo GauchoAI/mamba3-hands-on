@@ -22,7 +22,7 @@ import torch.nn.functional as F
 from collections import defaultdict
 from pathlib import Path
 
-from mamba_platform.mamba3_minimal import Mamba3Block, Mamba3Config
+from lab_platform.mamba3_minimal import Mamba3Block, Mamba3Config
 from mamba3_augmented import AugmentedMamba3
 from train_bootstrap import (
     SPECIAL_TOKENS, VOCAB_SIZE, tokenize,

@@ -2,7 +2,7 @@
 A real state-tracker should extrapolate; a hack that just memorized short patterns won't.
 """
 import torch, torch.nn as nn, torch.nn.functional as F
-from mamba_platform.mamba3_minimal import Mamba3Block, Mamba2LikeBlock, Mamba3Config
+from lab_platform.mamba3_minimal import Mamba3Block, Mamba2LikeBlock, Mamba3Config
 from parity_experiment import make_parity_batch, ParityModel
 
 device = "mps" if torch.backends.mps.is_available() else "cpu"

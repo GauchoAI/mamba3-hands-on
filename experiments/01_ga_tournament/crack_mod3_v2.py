@@ -6,7 +6,7 @@ a longer training run should find it.
 """
 import math, time
 import torch, torch.nn as nn, torch.nn.functional as F
-from mamba_platform.mamba3_minimal import Mamba3Block, Mamba3Config
+from lab_platform.mamba3_minimal import Mamba3Block, Mamba3Config
 from modular_counting import make_modular_batch, ModularModel
 
 

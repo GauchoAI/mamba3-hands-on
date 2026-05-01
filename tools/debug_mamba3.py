@@ -1,6 +1,6 @@
 """Quick diagnostic: what's happening inside Mamba-3 on parity?"""
 import torch, torch.nn as nn, torch.nn.functional as F
-from mamba_platform.mamba3_minimal import Mamba3Block, Mamba3Config
+from lab_platform.mamba3_minimal import Mamba3Block, Mamba3Config
 
 device = "mps" if torch.backends.mps.is_available() else "cpu"
 torch.manual_seed(0)

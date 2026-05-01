@@ -433,7 +433,7 @@ def distill(args):
 
         # Firebase
         try:
-            from mamba_platform.firebase_push import push_experiment_cycle, evt_new_best
+            from lab_platform.firebase_push import push_experiment_cycle, evt_new_best
             push_experiment_cycle("student", cycle, fresh, cycle_loss, type_accs)
             if fresh == best_fresh and fresh > 0:
                 evt_new_best("student", fresh, best_fresh,

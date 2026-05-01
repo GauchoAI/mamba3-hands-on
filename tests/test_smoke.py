@@ -25,9 +25,9 @@ def run_cmd(*args: str, timeout: float = 30.0) -> subprocess.CompletedProcess[st
 
 class PackageSmokeTests(unittest.TestCase):
     def test_platform_imports(self) -> None:
-        from mamba_platform.cortex_counting import CortexLMConfig
-        from mamba_platform.experiment_pusher import ExperimentPusher
-        from mamba_platform.mamba3_minimal import Mamba3Config
+        from lab_platform.cortex_counting import CortexLMConfig
+        from lab_platform.experiment_pusher import ExperimentPusher
+        from lab_platform.mamba3_minimal import Mamba3Config
 
         self.assertEqual(Mamba3Config().d_model, 64)
         self.assertGreater(CortexLMConfig().d_model, 0)
@@ -35,8 +35,8 @@ class PackageSmokeTests(unittest.TestCase):
 
     def test_module_clis_load(self) -> None:
         checks = [
-            ("-m", "mamba_platform.kappa_packer", "--help"),
-            ("-m", "mamba_platform.stream_reader", "--help"),
+            ("-m", "lab_platform.kappa_packer", "--help"),
+            ("-m", "lab_platform.stream_reader", "--help"),
         ]
         for args in checks:
             with self.subTest(args=args):

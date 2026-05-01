@@ -18,7 +18,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-echo "=== Mamba Platform — Node Setup ==="
+echo "=== Lab Platform — Node Setup ==="
 echo "  Directory: $SCRIPT_DIR"
 
 # Find Python
@@ -83,7 +83,7 @@ sleep 3
 if kill -0 $AGENT_PID 2>/dev/null; then
     echo ""
     echo "=== Node Online ==="
-    echo "  Verify with: mamba nodes"
+    echo "  Verify with: lab nodes"
     echo "  View logs:   tail -f node_agent.log"
     if [ "$START_TRAINING" = true ]; then
         echo "  Training:    tail -f three_pop.log"

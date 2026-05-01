@@ -179,7 +179,7 @@ To follow the convention:
 4. Schedule the packer to run periodically (cron, launchd, or
    manually before deciding "this run is done"):
    ```bash
-   PYTHONPATH=src python -m mamba_platform.kappa_packer --dir <run_dir> --age-hours 24
+   PYTHONPATH=src python -m lab_platform.kappa_packer --dir <run_dir> --age-hours 24
    ```
 5. Make readers transparent: use `kappa_packer.read_records(path)`
    instead of `open(path).read()`.
@@ -353,9 +353,9 @@ both and sorts by `ts` without double-counting.
 Quick CLI:
 
 ```bash
-PYTHONPATH=src python -m mamba_platform.stream_reader ls                                   # list everything
-PYTHONPATH=src python -m mamba_platform.stream_reader meta <exp> <run> <stream>            # one stream's meta
-PYTHONPATH=src python -m mamba_platform.stream_reader read <exp> <run> <stream> --limit 10 # read records
+PYTHONPATH=src python -m lab_platform.stream_reader ls                                   # list everything
+PYTHONPATH=src python -m lab_platform.stream_reader meta <exp> <run> <stream>            # one stream's meta
+PYTHONPATH=src python -m lab_platform.stream_reader read <exp> <run> <stream> --limit 10 # read records
 ```
 
 ## Why Kappa, not Lambda

@@ -21,7 +21,7 @@ counting-only LM that produced the byte-perfect proof in
 - `train_bilingual_cortex_lm.py` — PyTorch trainer for a `CortexLM`
   with `primitives=[]` (= a plain Mamba-3 byte LM, plug-ready).
   Trains on `data/bilingual.txt` (Tatoeba en-es + 5% unary cortex
-  mixin built by `mamba_platform.make_bilingual_corpus`).
+  mixin built by `lab_platform.make_bilingual_corpus`).
 - `train_bilingual_mlx.py` — MLX equivalent (uses the local
   `mamba3_mlx.py`). 2.87× faster than the PyTorch version on M4 Pro
   with `--dtype bfloat16`.
@@ -31,7 +31,7 @@ counting-only LM that produced the byte-perfect proof in
   + `CounterPrimitive` written natively in MLX. Avoids PyTorch MPS's
   `F.pad` >3D fallback.
 - `parity_mlx.py` — numerical parity test between the PyTorch
-  reference (`mamba_platform.cortex_counting`) and the MLX port.
+  reference (`lab_platform.cortex_counting`) and the MLX port.
   Max-abs-diff 3.58e-7 at fp32, well under 1e-3 tolerance.
 
 ### Counter-attach experiment
@@ -50,7 +50,7 @@ All commands run from the repo root.
 
 ```bash
 # 1. Build the bilingual corpus
-PYTHONPATH=src python -m mamba_platform.make_bilingual_corpus        # -> data/bilingual.txt
+PYTHONPATH=src python -m lab_platform.make_bilingual_corpus        # -> data/bilingual.txt
 
 # 2. Train the bilingual LM (10k steps, ~6h on M4 Pro MPS)
 PYTHONPATH=src python experiments/09_cortex_bilingual/train_bilingual_cortex_lm.py \
@@ -78,15 +78,15 @@ Each script has a small `sys.path` preamble:
 
 ```python
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# -> repo root, so `from mamba_platform.cortex_counting import ...` works
+# -> repo root, so `from lab_platform.cortex_counting import ...` works
 ```
 
 Sibling-file imports (`from mamba3_mlx import ...` inside
 `train_bilingual_mlx.py`, etc.) work via `os.path.dirname(__file__)`
 inserted into `sys.path` first.
 
-The shared cortex foundation (`mamba_platform.cortex_counting`) lives in
-`src/mamba_platform/` and is *not* duplicated here. That contrasts with the `jepa/`
+The shared cortex foundation (`lab_platform.cortex_counting`) lives in
+`src/lab_platform/` and is *not* duplicated here. That contrasts with the `jepa/`
 folder, which deliberately ships its own copy because it patches
 `CortexLM.forward` for hidden-state distillation. We don't patch the
 cortex code from here — we only attach `Primitive` subclasses through

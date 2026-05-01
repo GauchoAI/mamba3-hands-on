@@ -1,1 +1,1 @@
-# Mamba Platform CLI
+# Lab Platform CLI

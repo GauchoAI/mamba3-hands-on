@@ -458,7 +458,7 @@ def _load_renderer(ckpt_path: str):
         model = CopyMamba3LM(**cfg)
         kind = "copy"
     else:
-        from mamba_platform.mamba3_lm import Mamba3LM, LMConfig
+        from lab_platform.mamba3_lm import Mamba3LM, LMConfig
         model = Mamba3LM(LMConfig(**cfg))
         kind = "lm"
     model.load_state_dict(ck["state_dict"])

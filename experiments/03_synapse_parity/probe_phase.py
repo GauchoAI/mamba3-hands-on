@@ -4,7 +4,7 @@ Theory predicts: bit=1 -> ~pi per step (flip), bit=0 -> ~0 per step (identity).
 Let's check.
 """
 import math, torch, torch.nn as nn, torch.nn.functional as F
-from mamba_platform.mamba3_minimal import Mamba3Block, Mamba3Config
+from lab_platform.mamba3_minimal import Mamba3Block, Mamba3Config
 from parity_experiment import make_parity_batch, ParityModel
 
 device = "mps" if torch.backends.mps.is_available() else "cpu"

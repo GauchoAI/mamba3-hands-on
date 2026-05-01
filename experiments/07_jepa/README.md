@@ -76,7 +76,7 @@ git add jepa/ data/README.md DEPLOYMENT.md && git commit -m "..." && git push
 # 1. on the box: pull and prepare data
 git pull
 uv pip install transformers accelerate sentencepiece
-uv run PYTHONPATH=src python -m mamba_platform.make_bilingual_corpus            # produces data/bilingual.txt
+uv run PYTHONPATH=src python -m lab_platform.make_bilingual_corpus            # produces data/bilingual.txt
 CUDA_VISIBLE_DEVICES=3 uv run python jepa/make_teacher_thoughts.py \
     --target-mb 80 --out data/teacher_thoughts &  # GPU 3, background
 

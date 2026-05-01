@@ -116,7 +116,7 @@ Reproduction:
 
 ```bash
 # Wider-N corpus (already regenerated on disk)
-PYTHONPATH=src python -m mamba_platform.make_bilingual_corpus
+PYTHONPATH=src python -m lab_platform.make_bilingual_corpus
 
 # Training (this is what's running now)
 python cortex_bilingual/train_bilingual_mlx.py \

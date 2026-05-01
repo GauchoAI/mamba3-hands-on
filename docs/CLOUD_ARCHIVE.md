@@ -87,7 +87,7 @@ and runs without a token still work (without remote archive).
 
 ```bash
 set -a; source .env; set +a
-PYTHONPATH=src python -m mamba_platform.cloud_archive
+PYTHONPATH=src python -m lab_platform.cloud_archive
 ```
 
 Roundtrips a 1.5 KB JSONL file: write locally → bucket-sync → list

@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "experiments" / "03_synapse_parity"))
 
-from mamba_platform.mamba3_minimal import Mamba3Block, Mamba3Config
+from lab_platform.mamba3_minimal import Mamba3Block, Mamba3Config
 from parity_experiment import make_parity_batch, ParityModel, train_and_eval
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

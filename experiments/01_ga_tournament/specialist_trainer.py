@@ -83,7 +83,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
     # Set scan backend from config (jit vs triton)
     scan_backend = config.get("scan_backend")
     if scan_backend:
-        from mamba_platform import ssm_triton
+        from lab_platform import ssm_triton
         ssm_triton.FORCE_BACKEND = scan_backend
         print(f"  Scan backend: {scan_backend}", flush=True)
 
@@ -558,7 +558,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         # Direct Firebase push (for subprocess workers without on_cycle)
         if not on_cycle:
             try:
-                from mamba_platform import firebase_push as fb
+                from lab_platform import firebase_push as fb
                 fb._put(f"mamba3/task_series/{task}/{cycle}", {
                     "acc": round(acc, 3), "diff": 0,
                 })
@@ -651,7 +651,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         _db.close()
 
         # Push RICH data to Firebase (worker does it, not orchestrator)
-        from mamba_platform import firebase_push as fb
+        from lab_platform import firebase_push as fb
         _db2 = StateDB(_DB_PATH)
 
         # 1. Full per-round lineage entry (what UI needs for genetic tree)
@@ -943,7 +943,7 @@ def train_specialist(task, config, device, max_cycles=500, target_acc=0.95,
         # at-or-better. Skip on accuracy=0 to avoid uploading garbage.
         if best_acc > 0:
             try:
-                from mamba_platform.firebase_push import upload_teacher_blob
+                from lab_platform.firebase_push import upload_teacher_blob
                 if upload_teacher_blob(task, ckpt_path):
                     sz_kb = ckpt_path.stat().st_size // 1024
                     print(f"  Uploaded teacher blob to Firebase "
@@ -1012,7 +1012,7 @@ def train_all_specialists(config, device, tasks=None):
 
         # Push to Firebase
         try:
-            from mamba_platform import firebase_push as fb
+            from lab_platform import firebase_push as fb
             if acc and acc >= 0.9:
                 fb.evt_mastery(f"specialist_{task}", task, 0, 0)
         except Exception:

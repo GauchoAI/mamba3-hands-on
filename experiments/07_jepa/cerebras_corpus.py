@@ -272,7 +272,7 @@ def main():
     try:
         # Local import: avoid hard dep on boto3 if user doesn't want archive.
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-        from mamba_platform.cloud_archive import CloudArchive
+        from lab_platform.cloud_archive import CloudArchive
         archive = CloudArchive(
             experiment_kind=args.archive_kind,
             run_name=archive_run,

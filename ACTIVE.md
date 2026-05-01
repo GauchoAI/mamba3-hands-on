@@ -19,8 +19,8 @@ Use the project virtualenv:
 
 The Makefile also exports `PYTHONPATH=src`, so the commands below work from a
 source checkout before installation.
-Editable install exposes the `mamba` CLI and utility commands such as
-`mamba-kappa-pack`.
+Editable install exposes the `lab` CLI and utility commands such as
+`lab-kappa-pack`.
 
 ```bash
 .venv/bin/python experiments/10_jepa_structured/orchestrator.py status
@@ -47,7 +47,7 @@ Run a bounded training smoke pass:
 ## Project Layout
 
 - `experiments/` holds numbered research chapters.
-- `src/mamba_platform/` holds shared platform infrastructure used across chapters.
+- `src/lab_platform/` holds shared platform infrastructure used across chapters.
 - `tools/` holds dashboards, diagnostics, cluster helpers, and one-off utilities.
 - `docs/` holds architecture, findings, plans, and legacy context.
 - `data/`, `checkpoints/`, `runs/`, logs, and pid files are runtime artifacts and

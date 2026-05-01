@@ -1,1 +1,1 @@
-# Mamba Platform Registries
+# Lab Platform Registries

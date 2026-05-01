@@ -35,16 +35,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from mamba_platform.cortex_counting import CortexLM, CortexLMConfig
+from lab_platform.cortex_counting import CortexLM, CortexLMConfig
 
 try:
-    from mamba_platform.experiment_pusher import ExperimentPusher
+    from lab_platform.experiment_pusher import ExperimentPusher
     _HAS_PUSHER = True
 except ImportError:
     _HAS_PUSHER = False
 
 try:
-    from mamba_platform.cloud_archive import CloudArchive
+    from lab_platform.cloud_archive import CloudArchive
     _HAS_ARCHIVE = True
 except ImportError:
     _HAS_ARCHIVE = False

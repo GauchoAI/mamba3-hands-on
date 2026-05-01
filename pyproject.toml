@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mamba-platform"
+name = "lab-platform"
 version = "0.1.0"
-description = "Mamba-3 training platform — GA-optimized SSM specialists"
+description = "Lab research platform — GA-optimized SSM specialists"
 requires-python = ">=3.10"
 dependencies = [
     "torch>=2.0",
@@ -28,15 +28,15 @@ jepa_structured_data = [
 ]
 
 [project.scripts]
-mamba = "cli.main:main"
-mamba-kappa-pack = "mamba_platform.kappa_packer:main"
-mamba-session-archive = "mamba_platform.session_archiver:main"
-mamba-cluster-dispatch = "mamba_platform.cluster_dispatch:main"
-mamba-cluster-sync = "mamba_platform.cluster_sync:main"
-mamba-make-bilingual-corpus = "mamba_platform.make_bilingual_corpus:main"
-mamba-make-opensubtitles-corpus = "mamba_platform.make_opensubtitles_corpus:main"
-mamba-make-teacher-corpus = "mamba_platform.make_teacher_corpus:main"
+lab = "cli.main:main"
+lab-kappa-pack = "lab_platform.kappa_packer:main"
+lab-session-archive = "lab_platform.session_archiver:main"
+lab-cluster-dispatch = "lab_platform.cluster_dispatch:main"
+lab-cluster-sync = "lab_platform.cluster_sync:main"
+lab-make-bilingual-corpus = "lab_platform.make_bilingual_corpus:main"
+lab-make-opensubtitles-corpus = "lab_platform.make_opensubtitles_corpus:main"
+lab-make-teacher-corpus = "lab_platform.make_teacher_corpus:main"
 
 [tool.setuptools.packages.find]
 where = [".", "src"]
-include = ["cli*", "registry*", "server*", "generators*", "mamba_platform*"]
+include = ["cli*", "registry*", "server*", "generators*", "lab_platform*"]
