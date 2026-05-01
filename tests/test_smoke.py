@@ -141,5 +141,28 @@ class StackOperatorSmokeTests(unittest.TestCase):
             self.assertTrue((Path(tmp) / "stack_operator.pt").exists())
 
 
+class OperatorCurriculumSmokeTests(unittest.TestCase):
+    scripts = [
+        ROOT / "experiments" / "12_raw_trace_stack" / "raw_trace_stack.py",
+        ROOT / "experiments" / "13_multi_surface_stack" / "multi_surface_stack.py",
+        ROOT / "experiments" / "14_operator_guided_decoding" / "operator_guided_decoding.py",
+        ROOT / "experiments" / "15_comparator_transfer" / "comparator_transfer.py",
+        ROOT / "experiments" / "16_trace_to_operator_search" / "trace_to_operator_search.py",
+        ROOT / "experiments" / "18_operator_composition" / "operator_composition.py",
+        ROOT / "experiments" / "19_language_to_role_trace" / "language_to_role_trace.py",
+        ROOT / "experiments" / "20_runtime_learning_episode" / "runtime_learning_episode.py",
+        ROOT / "experiments" / "17_operator_registry" / "operator_registry.py",
+        ROOT / "experiments" / "21_lab_organ_demo" / "lab_organ_demo.py",
+    ]
+
+    def test_operator_curriculum_scripts(self) -> None:
+        for script in self.scripts:
+            with self.subTest(script=script.name):
+                result = run_cmd(str(script), timeout=60.0)
+                payload = json.loads(result.stdout)
+                self.assertTrue(payload["one_minute_rule"])
+                self.assertLess(payload["elapsed_s"], 60.0)
+
+
 if __name__ == "__main__":
     unittest.main()

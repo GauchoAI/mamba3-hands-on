@@ -1,0 +1,67 @@
+{
+  "script": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on/experiments/20_runtime_learning_episode/runtime_learning_episode.py",
+  "experiment": "runtime_learning_episode",
+  "claim": "A new transition rule can be learned and verified at runtime under the one-minute rule.",
+  "train": {
+    "train_acc": 1.0,
+    "train_loss": 0.026365,
+    "train_elapsed_s": 0.0354,
+    "n_params": 25
+  },
+  "tests": [
+    {
+      "seq": [
+        1,
+        0,
+        1,
+        1
+      ],
+      "pred": 1,
+      "expected": 1,
+      "ok": true
+    },
+    {
+      "seq": [
+        0,
+        0,
+        1
+      ],
+      "pred": 1,
+      "expected": 1,
+      "ok": true
+    },
+    {
+      "seq": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "pred": 1,
+      "expected": 1,
+      "ok": true
+    },
+    {
+      "seq": [
+        0,
+        1,
+        0,
+        1,
+        0
+      ],
+      "pred": 0,
+      "expected": 0,
+      "ok": true
+    }
+  ],
+  "pass_rate": 1.0,
+  "elapsed_s": 0.3098,
+  "one_minute_rule": true
+}

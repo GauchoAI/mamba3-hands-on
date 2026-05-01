@@ -1,0 +1,48 @@
+{
+  "script": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on/experiments/17_operator_registry/operator_registry.py",
+  "experiment": "operator_registry",
+  "claim": "Operators become reusable only when their contracts and evidence are registered.",
+  "registry": {
+    "schema": "lab.operator_registry.v1",
+    "entries": [
+      {
+        "operator": "stack_validity",
+        "source": "experiments/11_stack_operator_transfer/artifacts/stack_operator_results.json",
+        "sha256": "ea78776d2d57bd11303fba4694262a0fe0d4f10ccfa3d38c540a12c9728f7811",
+        "one_minute_rule": true,
+        "elapsed_s": 0.7141
+      },
+      {
+        "operator": "raw_trace_stack",
+        "source": "experiments/12_raw_trace_stack/artifacts/result.json",
+        "sha256": "ed4aaac1d4406a22eb186f19c434100e8bae07b1ea020b1932b82d52c7095304",
+        "one_minute_rule": true,
+        "elapsed_s": 0.4958
+      },
+      {
+        "operator": "multi_surface_stack",
+        "source": "experiments/13_multi_surface_stack/artifacts/result.json",
+        "sha256": "ef2f4c93b274d12af4e3d53a65d4443599a7fa0ef6cd7c57bef545888c9b34cc",
+        "one_minute_rule": true,
+        "elapsed_s": 0.3264
+      },
+      {
+        "operator": "guided_decoding",
+        "source": "experiments/14_operator_guided_decoding/artifacts/result.json",
+        "sha256": "2d246b9179d85f66871097c229535029c3cdff33bbcede2d3d3a667d51dfa717",
+        "one_minute_rule": true,
+        "elapsed_s": 0.4091
+      },
+      {
+        "operator": "comparator",
+        "source": "experiments/15_comparator_transfer/artifacts/result.json",
+        "sha256": "7706eeca61b5a4a47e94dc32d08635aa52a1c25731d229f135e81f01ae009d4d",
+        "one_minute_rule": true,
+        "elapsed_s": 0.3625
+      }
+    ],
+    "n_entries": 5
+  },
+  "elapsed_s": 0.0005,
+  "one_minute_rule": true
+}

@@ -1,0 +1,14 @@
+{
+  "script": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on/experiments/21_lab_organ_demo/lab_organ_demo.py",
+  "experiment": "lab_organ_demo",
+  "claim": "The Lab can run a small language-to-role/operator/registry loop without long training.",
+  "evidence_count": 4,
+  "demo": {
+    "language_adapter": "bounded role/task parser",
+    "operator_induction": "runtime parity rule + trace search",
+    "registry_entries": 5,
+    "all_one_minute": true
+  },
+  "elapsed_s": 0.0002,
+  "one_minute_rule": true
+}

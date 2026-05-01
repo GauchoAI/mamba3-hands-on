@@ -1,0 +1,27 @@
+{
+  "script": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on/experiments/13_multi_surface_stack/multi_surface_stack.py",
+  "experiment": "multi_surface_stack",
+  "claim": "The same learned stack-validity policy transfers across remapped token surfaces.",
+  "train_surfaces": [
+    "paren",
+    "bracket"
+  ],
+  "heldout_surfaces": [
+    "brace",
+    "call"
+  ],
+  "train": {
+    "train_acc": 1.0,
+    "train_loss": 0.010207,
+    "train_elapsed_s": 0.045,
+    "n_params": 217
+  },
+  "surface_acc": {
+    "paren": 1.0,
+    "bracket": 1.0,
+    "brace": 1.0,
+    "call": 1.0
+  },
+  "elapsed_s": 0.3264,
+  "one_minute_rule": true
+}

@@ -1,0 +1,34 @@
+{
+  "script": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on/experiments/19_language_to_role_trace/language_to_role_trace.py",
+  "experiment": "language_to_role_trace",
+  "claim": "Language is a thin adapter into role traces; exactness is owned by the role/operator layer.",
+  "rows": [
+    {
+      "prompt": "Make a balanced parenthesis expression with 4 pairs.",
+      "task": {
+        "target_pairs": 4,
+        "surface": "paren"
+      },
+      "valid": true
+    },
+    {
+      "prompt": "Generate 6 matching bracket pairs.",
+      "task": {
+        "target_pairs": 6,
+        "surface": "bracket"
+      },
+      "valid": true
+    },
+    {
+      "prompt": "Create a BEGIN END block with 5 nested pairs.",
+      "task": {
+        "target_pairs": 5,
+        "surface": "block"
+      },
+      "valid": true
+    }
+  ],
+  "pass_rate": 1.0,
+  "elapsed_s": 0.0001,
+  "one_minute_rule": true
+}

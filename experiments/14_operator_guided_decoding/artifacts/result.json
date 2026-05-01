@@ -1,0 +1,16 @@
+{
+  "script": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on/experiments/14_operator_guided_decoding/operator_guided_decoding.py",
+  "experiment": "operator_guided_decoding",
+  "claim": "A learned validity operator can steer a noisy token-role decoder during generation, not after generation.",
+  "train": {
+    "train_acc": 1.0,
+    "train_loss": 0.037689,
+    "train_elapsed_s": 0.0391,
+    "n_params": 161
+  },
+  "baseline_pass_rate": 0.0,
+  "guided_pass_rate_n12": 1.0,
+  "guided_pass_rate_n20": 1.0,
+  "elapsed_s": 0.4091,
+  "one_minute_rule": true
+}
