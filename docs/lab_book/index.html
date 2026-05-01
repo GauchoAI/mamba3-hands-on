@@ -25,6 +25,20 @@
       --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --serif: Georgia, "Times New Roman", serif;
     }
+    html.dark-theme {
+      color-scheme: dark;
+      --ink: #fff8e8;
+      --muted: #c7bfb4;
+      --line: #5a5148;
+      --paper: #171512;
+      --soft: #2a251f;
+      --panel: #211d18;
+      --accent: #2dd4bf;
+      --gold: #f6c56f;
+      --good: #8ee6a4;
+      --warn: #f8bf6a;
+      --bad: #ff9a9a;
+    }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
     html.print-view {
@@ -54,6 +68,7 @@
       background: #faf6ee;
       overflow-y: auto;
     }
+    html.dark-theme aside { background: #1f1b17; }
     main {
       max-width: 1240px;
       min-width: 0;
@@ -163,6 +178,12 @@
       padding: 10px 11px;
     }
     input, select { width: 100%; background: #fff; }
+    html.dark-theme input,
+    html.dark-theme select,
+    html.dark-theme button {
+      background: #211d18;
+      color: var(--ink);
+    }
     button {
       background: #fff;
       cursor: pointer;
@@ -231,6 +252,16 @@
       background: #fff;
       margin: 14px 0 18px;
       padding: 14px;
+    }
+    html.dark-theme .chapter-card,
+    html.dark-theme .md-section,
+    html.dark-theme .source-card,
+    html.dark-theme .stat,
+    html.dark-theme .panel {
+      background: #211d18;
+    }
+    html.dark-theme .doc-frontmatter {
+      background: #0f2f2a;
     }
     .chapter-card-grid {
       display: grid;
@@ -406,6 +437,7 @@
       letter-spacing: .04em;
       text-transform: uppercase;
     }
+    html.dark-theme tr:hover td { background: #29231d; }
     td {
       border-bottom: 1px solid #eee8dd;
       padding: 8px 7px;
@@ -431,6 +463,12 @@
     .pill.good { color: var(--good); background: #e8f5ec; }
     .pill.warn { color: var(--warn); background: #fff1db; }
     .pill.bad { color: var(--bad); background: #fde7e7; }
+    html.dark-theme .pill { background: #2a251f; }
+    html.dark-theme .pill.good,
+    html.dark-theme .pill.warn,
+    html.dark-theme .pill.bad {
+      background: #2a251f;
+    }
     .event {
       display: grid;
       grid-template-columns: 120px 110px minmax(0, 1fr);
@@ -486,11 +524,58 @@
       margin: 8px 0;
       background: #fbf7ef;
     }
+    html.dark-theme .sample { background: #211d18; }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .empty {
       color: var(--muted);
       padding: 18px 0;
+    }
+    .source-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: none;
+      background: rgba(23, 21, 18, .34);
+      padding: clamp(14px, 4vw, 42px);
+    }
+    .source-modal.open {
+      display: grid;
+      place-items: stretch;
+    }
+    .source-shell {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fffdf8;
+      box-shadow: 0 18px 70px rgba(23, 21, 18, .25);
+      min-height: 0;
+      overflow: hidden;
+    }
+    html.dark-theme .source-shell { background: #171512; }
+    .source-shell-head {
+      align-items: center;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+      background: #faf6ee;
+      padding: 12px 14px;
+    }
+    html.dark-theme .source-shell-head { background: #1f1b17; }
+    .source-title {
+      font: 12px/1.4 var(--mono);
+      overflow-wrap: anywhere;
+    }
+    .source-terminal {
+      margin: 0;
+      overflow: auto;
+      background: #11100e;
+      color: #fffaf0;
+      padding: 16px;
+      font: 12px/1.55 var(--mono);
+      white-space: pre-wrap;
     }
     @media (max-width: 980px) {
       .layout { grid-template-columns: minmax(0, 1fr); }
@@ -516,6 +601,9 @@
         align-items: flex-start;
         flex-direction: column;
       }
+      .source-shell-head {
+        grid-template-columns: 1fr;
+      }
       table {
         display: block;
         overflow-x: auto;
@@ -538,6 +626,12 @@
             <option value="platform">Platform</option>
             <option value="runs">Runs</option>
           </select>
+          <select id="theme" aria-label="Theme">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+        <div class="tool-row">
           <select id="focus" aria-label="Focus">
             <option value="">All</option>
             <option value="prose">Prose</option>
@@ -545,8 +639,6 @@
             <option value="tables">Tables</option>
             <option value="evidence">Evidence</option>
           </select>
-        </div>
-        <div class="tool-row">
           <select id="hide" aria-label="Hide">
             <option value="">Hide nothing</option>
             <option value="charts">Hide charts</option>
@@ -583,6 +675,7 @@
 
   <script>
     const FB = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app";
+    const RAW_REPO = "https://raw.githubusercontent.com/GauchoAI/mamba3-hands-on/main/";
     const COLORS = ["#0f766e", "#7c3aed", "#b45309", "#2563eb", "#be123c", "#15803d", "#9333ea", "#0369a1"];
     const chartRefs = [];
     const MARKDOWN_SOURCES = [
@@ -640,6 +733,8 @@
       focus: "",
       hide: "",
       sort: "timeline",
+      theme: "light",
+      sourcePath: "",
       routeApplying: false,
       routeTicking: false,
     };
@@ -685,9 +780,36 @@
       return await res.json();
     }
     async function getText(path) {
-      const res = await fetch(`/${path}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`${path}: ${res.status}`);
-      return await res.text();
+      return await fetchRepoText(path);
+    }
+    function repoPageIsNested() {
+      return location.pathname.includes("/docs/lab_book/");
+    }
+    function localRepoUrl(path) {
+      const clean = cleanRepoPath(path);
+      if (repoPageIsNested()) return new URL(`../../${clean}`, document.baseURI).href;
+      return new URL(clean, `${location.origin}/`).href;
+    }
+    function rawRepoUrl(path) {
+      return `${RAW_REPO}${cleanRepoPath(path)}`;
+    }
+    function cleanRepoPath(path) {
+      return String(path || "").split("#")[0].replace(/^\/+/, "").replace(/^\.\//, "");
+    }
+    async function fetchRepoText(path) {
+      const clean = cleanRepoPath(path);
+      const urls = [localRepoUrl(clean), rawRepoUrl(clean)];
+      let lastError = null;
+      for (const url of urls) {
+        try {
+          const res = await fetch(url, { cache: "no-store" });
+          if (res.ok) return await res.text();
+          lastError = new Error(`${clean}: ${res.status}`);
+        } catch (err) {
+          lastError = err;
+        }
+      }
+      throw lastError || new Error(`Unable to load ${clean}`);
     }
     async function getAll() {
       $("load-meta").textContent = "Loading Firebase chapters...";
@@ -860,19 +982,20 @@
       }).filter(section => section.body);
       return { intro, sections };
     }
-    function renderMarkdownBody(markdown, attrs = {}) {
+    function renderMarkdownBody(markdown, attrs = {}, sourcePath = "") {
       const body = stripLeadHeading(markdown).trim();
       const { intro, sections } = splitMarkdownSections(body);
       const shouldSection = sections.length > 0 && (attrs.sections === "true" || (sections.length >= 3 && (body.length > 7000 || attrs.sections !== "flat")));
-      if (!shouldSection) return `<div class="prose">${marked.parse(body)}</div>`;
-      const introHtml = intro ? `<div class="prose">${marked.parse(intro)}</div>` : "";
+      const sourceAttr = `data-source-path="${esc(sourcePath)}"`;
+      if (!shouldSection) return `<div class="prose" ${sourceAttr}>${marked.parse(body)}</div>`;
+      const introHtml = intro ? `<div class="prose" ${sourceAttr}>${marked.parse(intro)}</div>` : "";
       const openCount = Number(attrs.open_sections || 1);
       const sectionHtml = sections.map((section, i) => {
         const open = i < openCount ? "open" : "";
         const slug = slugify(section.title);
         return `<details class="md-section" ${open} data-section="${esc(section.title.toLowerCase())}" data-section-slug="${esc(slug)}">
           <summary><span class="section-title"><strong>${esc(section.title)}</strong><button class="section-link" data-copy-section="${esc(slug)}" type="button">Copy</button></span><span>${num(wordCount(section.body))} words</span></summary>
-          <div class="prose">${marked.parse(section.body)}</div>
+          <div class="prose" ${sourceAttr}>${marked.parse(section.body)}</div>
         </details>`;
       }).join("");
       return introHtml + sectionHtml;
@@ -896,7 +1019,7 @@
       const summary = parsed.attrs.summary
         ? `<div class="doc-frontmatter"><div class="doc-frontmatter-head"><strong>${esc(parsed.attrs.title || "Chapter summary")}</strong>${parsed.attrs.status ? `<span class="pill good">${esc(parsed.attrs.status)}</span>` : ""}${parsed.attrs.chapter ? `<span class="pill">${esc(`Chapter ${parsed.attrs.chapter}`)}</span>` : ""}<span class="pill">${esc(path)}</span></div>${esc(renderedSummary)}</div>`
         : "";
-      return `${summary}${chapterCard({ ...parsed.attrs, summary: renderedSummary }, path)}${renderMarkdownBody(renderTemplate(parsed.body, context), parsed.attrs)}`;
+      return `${summary}${chapterCard({ ...parsed.attrs, summary: renderedSummary }, path)}${renderMarkdownBody(renderTemplate(parsed.body, context), parsed.attrs, path)}`;
     }
     function sourceCards(sources) {
       return `<div class="source-list">${sources.map(src => `<div class="source-card"><div class="mono">${esc(src.path)}</div><strong>${esc(src.title)}</strong></div>`).join("")}</div>`;
@@ -1197,6 +1320,7 @@
       attachTocHandlers();
       attachSectionRouteHandlers();
       attachCopyHandlers();
+      attachSourceLinkHandlers();
       clearViewStateClasses();
       drawCharts(legacy, tasks);
       applyViewState();
@@ -1360,6 +1484,9 @@
     function applyRoute() {
       const params = new URLSearchParams(window.location.search);
       applyParamsToState(params);
+      if (params.get("source")) {
+        openSourceModal(params.get("source"));
+      }
       const chapterId = params.get("chapter") || params.get("id");
       if (!chapterId) {
         syncRouteFromViewport();
@@ -1451,6 +1578,81 @@
         });
       });
     }
+    function attachSourceLinkHandlers() {
+      document.querySelectorAll(".prose a[href]").forEach(link => {
+        link.addEventListener("click", (event) => {
+          const href = link.getAttribute("href") || "";
+          const sourcePath = link.closest(".prose")?.dataset.sourcePath || "";
+          const repoPath = resolveRepoLink(href, sourcePath);
+          if (!repoPath || !isViewableSource(repoPath)) return;
+          event.preventDefault();
+          openSourceModal(repoPath);
+        });
+      });
+    }
+    function resolveRepoLink(href, sourcePath = "") {
+      if (!href || href.startsWith("#") || href.startsWith("mailto:")) return "";
+      if (/^https?:\/\//i.test(href)) {
+        try {
+          const url = new URL(href);
+          if (url.hostname === "github.com") {
+            const parts = url.pathname.split("/").filter(Boolean);
+            const blobAt = parts.indexOf("blob");
+            if (blobAt >= 0) return parts.slice(blobAt + 2).join("/");
+          }
+          if (url.hostname === "raw.githubusercontent.com") {
+            const parts = url.pathname.split("/").filter(Boolean);
+            return parts.slice(3).join("/");
+          }
+        } catch {
+          return "";
+        }
+        return "";
+      }
+      const cleanHref = href.split("#")[0].split("?")[0];
+      if (!cleanHref) return "";
+      const base = sourcePath ? sourcePath.split("/").slice(0, -1) : [];
+      const parts = cleanHref.startsWith("/") ? [] : [...base];
+      for (const part of cleanHref.replace(/^\/+/, "").split("/")) {
+        if (!part || part === ".") continue;
+        if (part === "..") parts.pop();
+        else parts.push(part);
+      }
+      const resolved = cleanRepoPath(parts.join("/"));
+      const docsAt = resolved.indexOf("/docs/");
+      if (docsAt > 0) return resolved.slice(docsAt + 1);
+      return resolved;
+    }
+    function isViewableSource(path) {
+      return /\.(md|txt|json|jsonl|py|rs|js|ts|html|css|toml|yaml|yml|sh)$/i.test(path);
+    }
+    async function openSourceModal(path) {
+      const modal = $("source-modal");
+      const body = $("source-body");
+      const title = $("source-title");
+      state.sourcePath = cleanRepoPath(path);
+      title.textContent = state.sourcePath;
+      body.textContent = "Loading source...";
+      modal.classList.add("open");
+      modal.setAttribute("aria-hidden", "false");
+      const params = new URLSearchParams(window.location.search);
+      params.set("source", state.sourcePath);
+      history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+      try {
+        body.textContent = await fetchRepoText(state.sourcePath);
+      } catch (err) {
+        body.textContent = `Unable to load ${state.sourcePath}\n\n${err.message}`;
+      }
+    }
+    function closeSourceModal() {
+      const modal = $("source-modal");
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+      state.sourcePath = "";
+      const params = new URLSearchParams(window.location.search);
+      params.delete("source");
+      history.replaceState(null, "", `${window.location.pathname}?${params.toString()}`);
+    }
     function copyCurrentUrl(button) {
       navigator.clipboard?.writeText(window.location.href).catch(() => {});
       const old = button.textContent;
@@ -1527,6 +1729,7 @@
       state.focus = $("focus").value;
       state.hide = $("hide").value;
       state.sort = $("sort").value;
+      state.theme = $("theme").value;
       const params = new URLSearchParams(window.location.search);
       writeStateToParams(params);
       const chapter = chapterAtViewport();
@@ -1541,11 +1744,13 @@
       state.focus = params.get("focus") || "";
       state.hide = params.get("hide") || "";
       state.sort = params.get("sort") || state.sort || "timeline";
+      state.theme = params.get("theme") || state.theme || "light";
       $("filter").value = state.filter;
       $("mode").value = state.mode;
       $("focus").value = state.focus;
       $("hide").value = state.hide;
       $("sort").value = state.sort;
+      $("theme").value = state.theme;
       applyViewState();
     }
     function writeStateToParams(params) {
@@ -1555,6 +1760,7 @@
         ["focus", state.focus],
         ["hide", state.hide],
         ["sort", state.sort !== "timeline" ? state.sort : ""],
+        ["theme", state.theme !== "light" ? state.theme : ""],
       ];
       for (const [key, value] of entries) {
         if (value) params.set(key, value);
@@ -1573,6 +1779,7 @@
         document.body.classList.toggle(`hide-${name}`, state.hide.split(",").includes(name));
       }
       document.documentElement.classList.toggle("print-view", new URLSearchParams(window.location.search).get("print") === "1");
+      document.documentElement.classList.toggle("dark-theme", state.theme === "dark");
     }
     function clearViewStateClasses() {
       document.body.classList.remove(
@@ -1592,8 +1799,21 @@
     $("focus").addEventListener("change", applyFilter);
     $("hide").addEventListener("change", applyFilter);
     $("sort").addEventListener("change", applyFilter);
+    $("theme").addEventListener("change", applyFilter);
     window.addEventListener("scroll", scheduleRouteSync, { passive: true });
     window.addEventListener("popstate", applyRoute);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeSourceModal();
+    });
+    document.addEventListener("DOMContentLoaded", () => {
+      $("source-close").addEventListener("click", closeSourceModal);
+      $("source-modal").addEventListener("click", (event) => {
+        if (event.target === $("source-modal")) closeSourceModal();
+      });
+      $("source-open").addEventListener("click", () => {
+        if (state.sourcePath) window.open(rawRepoUrl(state.sourcePath), "_blank", "noreferrer");
+      });
+    });
     function buildFromUrl() {
       applyParamsToState(new URLSearchParams(window.location.search));
       buildBook();
@@ -1605,5 +1825,15 @@
       $("load-meta").textContent = `Load failed: ${err.message}`;
     });
   </script>
+  <div id="source-modal" class="source-modal" aria-hidden="true">
+    <div class="source-shell" role="dialog" aria-modal="true" aria-labelledby="source-title">
+      <div class="source-shell-head">
+        <div id="source-title" class="source-title">Source</div>
+        <button id="source-open" type="button">Open raw</button>
+        <button id="source-close" type="button">Close</button>
+      </div>
+      <pre id="source-body" class="source-terminal"></pre>
+    </div>
+  </div>
 </body>
 </html>
