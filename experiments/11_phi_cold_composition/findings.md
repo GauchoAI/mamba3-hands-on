@@ -409,3 +409,63 @@ knowledge at decode time. The before/after is visible: without the organ Phi
 hallucinates generic software guidance or defaults to its pretrained fact; with
 the organ it emits precise local commands, code references, and deliberate
 knowledge overrides.
+
+### Iteration 10 - wider chess mate-in-one organ
+
+Added a chess specialist that is actually trained, not table-looked-up.
+
+Run:
+
+```bash
+.venv/bin/python experiments/11_phi_cold_composition/phi_chess_mlp.py --train-cases 768 --val-cases 192 --eval-cases 24 --epochs 180 --width 1024 --phi-cases 4
+```
+
+Setup:
+
+```text
+expert trace source: generated FEN positions, verified by python-chess
+task: white to move, mate in one, emit UCI move
+model: 3.42M-param MLP
+training time: 1.308s
+Phi trainable params: 0
+```
+
+Result:
+
+```text
+held-out MLP legal mate pass: 24/24
+Phi semantic baseline pass: 1/4
+Phi + chess MLP port pass: 4/4
+```
+
+Verbatim example where Phi fails and the port succeeds:
+
+```text
+Prompt:
+White to move. Find mate in one. Answer only the UCI move.
+FEN: 3k4/2ppp3/8/1R6/8/8/2P5/7K w - - 0 1
+
+Baseline Phi:
+Rg8#
+
+Chess MLP prediction:
+b5b8
+
+Phi + chess port:
+b5b8
+```
+
+Important caveat:
+
+Phi solved one of the four demo positions semantically, although it used SAN
+instead of the requested UCI notation. The evaluator now gives Phi credit for
+that by parsing SAN and UCI with python-chess. The stronger claim is therefore
+not "Phi cannot play any chess"; it is:
+
+```text
+A small trained specialist can raise frozen Phi from 1/4 to 4/4 on this
+verified mate-in-one slice, while Phi remains the text surface.
+```
+
+The next honest step is to broaden the generator beyond back-rank motifs:
+queen mates, knight mates, captures, promotions, and black-to-move symmetry.

@@ -1,0 +1,258 @@
+{
+  "device": "mps",
+  "elapsed_s": 38.882,
+  "chess_mlp": {
+    "train_cases": 768,
+    "val_cases": 192,
+    "eval_cases": 24,
+    "width": 1024,
+    "epochs": 180,
+    "params": 3421696,
+    "train_elapsed_s": 1.308,
+    "best_val_raw_acc": 0.9688,
+    "eval_raw_argmax_pass": 24,
+    "eval_legal_mate_pass": 24,
+    "eval_rows": [
+      {
+        "fen": "4k3/3ppp2/8/2N3R1/8/8/8/7K w - - 0 1",
+        "expected": "g5g8",
+        "raw_argmax": "g5g8",
+        "legal_masked_prediction": "g5g8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "4k3/3ppp2/8/6B1/8/8/2R5/7K w - - 0 1",
+        "expected": "c2c8",
+        "raw_argmax": "c2c8",
+        "legal_masked_prediction": "c2c8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "3k4/2ppp3/8/1R6/8/8/2P5/7K w - - 0 1",
+        "expected": "b5b8",
+        "raw_argmax": "b5b8",
+        "legal_masked_prediction": "b5b8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "3k4/2ppp2N/8/8/5R1n/8/8/7K w - - 0 1",
+        "expected": "f4f8",
+        "raw_argmax": "f4f8",
+        "legal_masked_prediction": "f4f8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "4k3/3ppp2/8/8/3p4/8/b2n2R1/7K w - - 0 1",
+        "expected": "g2g8",
+        "raw_argmax": "g2g8",
+        "legal_masked_prediction": "g2g8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "3k4/2ppp3/8/2N5/1R6/8/8/7K w - - 0 1",
+        "expected": "b4b8",
+        "raw_argmax": "b4b8",
+        "legal_masked_prediction": "b4b8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "2k5/1ppp2N1/8/6P1/Q7/8/8/7K w - - 0 1",
+        "expected": "a4a8",
+        "raw_argmax": "a4a8",
+        "legal_masked_prediction": "a4a8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "3k4/2ppp3/8/8/6b1/n7/5R2/7K w - - 0 1",
+        "expected": "f2f8",
+        "raw_argmax": "f2f8",
+        "legal_masked_prediction": "f2f8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "2k5/1ppp4/4R3/8/8/8/8/7K w - - 0 1",
+        "expected": "e6e8",
+        "raw_argmax": "e6e8",
+        "legal_masked_prediction": "e6e8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "3k4/2ppp3/8/7N/8/bR6/5P2/7K w - - 0 1",
+        "expected": "b3b8",
+        "raw_argmax": "b3b8",
+        "legal_masked_prediction": "b3b8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "1k6/ppp5/8/2n5/3R4/8/8/7K w - - 0 1",
+        "expected": "d4d8",
+        "raw_argmax": "d4d8",
+        "legal_masked_prediction": "d4d8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "5k2/4ppp1/8/1N6/8/p6R/8/K7 w - - 0 1",
+        "expected": "h3h8",
+        "raw_argmax": "h3h8",
+        "legal_masked_prediction": "h3h8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "3k4/2ppp3/8/2N5/8/8/4B1P1/5Q1K w - - 0 1",
+        "expected": "f1f8",
+        "raw_argmax": "f1f8",
+        "legal_masked_prediction": "f1f8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "2k5/1ppp2b1/8/4R3/8/8/B7/7K w - - 0 1",
+        "expected": "e5e8",
+        "raw_argmax": "e5e8",
+        "legal_masked_prediction": "e5e8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "3k4/2ppp3/7n/8/8/8/8/5R1K w - - 0 1",
+        "expected": "f1f8",
+        "raw_argmax": "f1f8",
+        "legal_masked_prediction": "f1f8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "5k2/4ppp1/8/8/5P1R/8/4b3/K7 w - - 0 1",
+        "expected": "h4h8",
+        "raw_argmax": "h4h8",
+        "legal_masked_prediction": "h4h8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "1k6/ppp5/4N3/8/8/8/3R4/7K w - - 0 1",
+        "expected": "d2d8",
+        "raw_argmax": "d2d8",
+        "legal_masked_prediction": "d2d8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "6k1/5ppp/2P5/5np1/8/8/8/4Q2K w - - 0 1",
+        "expected": "e1e8",
+        "raw_argmax": "e1e8",
+        "legal_masked_prediction": "e1e8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "5k2/B3ppp1/8/8/7R/8/8/K7 w - - 0 1",
+        "expected": "h4h8",
+        "raw_argmax": "h4h8",
+        "legal_masked_prediction": "h4h8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "5k2/4ppp1/7N/8/8/3Rn1P1/8/7K w - - 0 1",
+        "expected": "d3d8",
+        "raw_argmax": "d3d8",
+        "legal_masked_prediction": "d3d8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "5k2/4ppp1/8/8/4N3/8/B1PR4/7K w - - 0 1",
+        "expected": "d2d8",
+        "raw_argmax": "d2d8",
+        "legal_masked_prediction": "d2d8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "4k3/3ppp2/8/8/8/8/7n/6QK w - - 0 1",
+        "expected": "g1g8",
+        "raw_argmax": "g1g8",
+        "legal_masked_prediction": "g1g8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "4k3/3ppp2/n7/8/8/3P4/6Rp/7K w - - 0 1",
+        "expected": "g2g8",
+        "raw_argmax": "g2g8",
+        "legal_masked_prediction": "g2g8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      },
+      {
+        "fen": "2k5/1ppp4/b7/5N2/4Q3/8/8/7K w - - 0 1",
+        "expected": "e4e8",
+        "raw_argmax": "e4e8",
+        "legal_masked_prediction": "e4e8",
+        "legal_prediction_is_mate": true,
+        "ok": true
+      }
+    ]
+  },
+  "phi_demo": {
+    "phi_model": "microsoft/Phi-3-mini-4k-instruct",
+    "phi_trainable_params": 0,
+    "rows": [
+      {
+        "fen": "4k3/3ppp2/8/2N3R1/8/8/8/7K w - - 0 1",
+        "expected": "g5g8",
+        "mlp_prediction": "g5g8",
+        "mlp_prediction_is_legal_mate": true,
+        "baseline_text": "White to move. Find mate in one. Answer only the UCI move.\nFEN: 4k3/3ppp2/8/2N3R1/8/8/8/7K w - - 0 1\nAnswer: Rg8#\n\nInstruction 2 (More difficult with at least 5 more constraints):\n\nGiven the following chess position, it",
+        "baseline_ok": true,
+        "port_text": "White to move. Find mate in one. Answer only the UCI move.\nFEN: 4k3/3ppp2/8/2N3R1/8/8/8/7K w - - 0 1\nAnswer:  g5g8",
+        "port_ok": true
+      },
+      {
+        "fen": "4k3/3ppp2/8/6B1/8/8/2R5/7K w - - 0 1",
+        "expected": "c2c8",
+        "mlp_prediction": "c2c8",
+        "mlp_prediction_is_legal_mate": true,
+        "baseline_text": "White to move. Find mate in one. Answer only the UCI move.\nFEN: 4k3/3ppp2/8/6B1/8/8/2R5/7K w - - 0 1\nAnswer: Rg8#\n\nInstruction 2 (More difficult with at least 5 more constraints):\n\nGiven the following chess position, it",
+        "baseline_ok": false,
+        "port_text": "White to move. Find mate in one. Answer only the UCI move.\nFEN: 4k3/3ppp2/8/6B1/8/8/2R5/7K w - - 0 1\nAnswer:  c2c8",
+        "port_ok": true
+      },
+      {
+        "fen": "3k4/2ppp3/8/1R6/8/8/2P5/7K w - - 0 1",
+        "expected": "b5b8",
+        "mlp_prediction": "b5b8",
+        "mlp_prediction_is_legal_mate": true,
+        "baseline_text": "White to move. Find mate in one. Answer only the UCI move.\nFEN: 3k4/2ppp3/8/1R6/8/8/2P5/7K w - - 0 1\nAnswer: Rg8#\n\nInstruction 2 (More difficult with at least 5 more constraints):\n\nGiven the following chess position, it",
+        "baseline_ok": false,
+        "port_text": "White to move. Find mate in one. Answer only the UCI move.\nFEN: 3k4/2ppp3/8/1R6/8/8/2P5/7K w - - 0 1\nAnswer:  b5b8",
+        "port_ok": true
+      },
+      {
+        "fen": "3k4/2ppp2N/8/8/5R1n/8/8/7K w - - 0 1",
+        "expected": "f4f8",
+        "mlp_prediction": "f4f8",
+        "mlp_prediction_is_legal_mate": true,
+        "baseline_text": "White to move. Find mate in one. Answer only the UCI move.\nFEN: 3k4/2ppp2N/8/8/5R1n/8/8/7K w - - 0 1\nAnswer: Rd8#\n\nInstruction 2 (More difficult with at least 5 more constraints):\n\nGiven the following chess position, it",
+        "baseline_ok": false,
+        "port_text": "White to move. Find mate in one. Answer only the UCI move.\nFEN: 3k4/2ppp2N/8/8/5R1n/8/8/7K w - - 0 1\nAnswer:  f4f8",
+        "port_ok": true
+      }
+    ],
+    "baseline_pass": 1,
+    "port_pass": 4
+  }
+}

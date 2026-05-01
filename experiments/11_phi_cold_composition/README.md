@@ -60,3 +60,5 @@ all four cases. Phi trainable parameters: `0`.
   facts are retrieved from JSON memory and emitted through frozen Phi, turning
   generic answers into exact project commands or deliberate knowledge overrides
   without updating Phi.
+- Chess mate-in-one organ: a wider Torch MLP learns generated expert traces,
+  predicts held-out legal checkmates, and supplies the UCI move to frozen Phi.
