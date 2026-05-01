@@ -224,6 +224,26 @@ class LogicSolver(SequenceEmitterSolver):
         return "TRUE" if value else "FALSE"
 
 
+class HanoiSolver(SequenceEmitterSolver):
+    name = "hanoi"
+    start_marker = "<LAB:hanoi>"
+
+    def target_text(self, input_ids: torch.Tensor, text: str, tokenizer) -> str:
+        body = text.split(self.start_marker, 1)[-1].split(":", 1)[0]
+        n_match = re.search(r"\d+", body)
+        n = int(n_match.group(0)) if n_match else 3
+        moves: list[str] = []
+        self._solve(n, "A", "C", "B", moves)
+        return " " + " ".join(moves)
+
+    def _solve(self, n: int, src: str, dst: str, aux: str, moves: list[str]) -> None:
+        if n <= 0:
+            return
+        self._solve(n - 1, src, aux, dst, moves)
+        moves.append(f"{src}>{dst}")
+        self._solve(n - 1, aux, dst, src, moves)
+
+
 def eval_bool_expr(expr: str) -> bool:
     cleaned = expr.lower()
     if not re.fullmatch(r"[truefalsandorotn()\s]+", cleaned):
@@ -367,7 +387,7 @@ def main() -> None:
         raise SystemExit(f"emit symbol {args.emit!r} is not a single token")
 
     solver = UnaryCounterSolver(args.symbol, args.emit, args.emit_bias, args.stop_bias)
-    port = SolverPort([solver, SortSolver(), FactOverrideSolver(), LogicSolver()])
+    port = SolverPort([solver, SortSolver(), FactOverrideSolver(), LogicSolver(), HanoiSolver()])
 
     rows: list[EvalRow] = []
     for n in [int(x) for x in args.ns.split(",") if x.strip()]:
@@ -404,6 +424,8 @@ def main() -> None:
     user_request = "Please solve this logic statement: ( true and false ) or ( not false )"
     compiled_prompt = compile_user_request(user_request)
     compiled_text, _ = cortex_generate(model, tokenizer, compiled_prompt, 6, dev, port)
+    hanoi_prompt = "<LAB:hanoi> 3 :"
+    hanoi_text, _ = cortex_generate(model, tokenizer, hanoi_prompt, 36, dev, port)
 
     payload = {
         "model": args.model,
@@ -452,6 +474,11 @@ def main() -> None:
             "text": compiled_text,
             "ok": "TRUE" in compiled_text,
         },
+        "hanoi_demo": {
+            "prompt": hanoi_prompt,
+            "text": hanoi_text,
+            "ok": "A>C A>B C>B A>C B>A B>C A>C" in hanoi_text,
+        },
     }
     out = HERE / "artifacts"
     out.mkdir(exist_ok=True)
@@ -469,6 +496,8 @@ def main() -> None:
         raise SystemExit("logic solver failed")
     if not payload["compiled_request_demo"]["ok"]:
         raise SystemExit("compiled request demo failed")
+    if not payload["hanoi_demo"]["ok"]:
+        raise SystemExit("hanoi solver failed")
 
 
 if __name__ == "__main__":

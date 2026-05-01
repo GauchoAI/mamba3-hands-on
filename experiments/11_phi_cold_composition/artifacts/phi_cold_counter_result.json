@@ -8,7 +8,7 @@
     "contract": "PuzzleSolver.token_bias(decoded_prefix, tokenizer) -> {token_id: logit_bias}"
   },
   "phi_trainable_params": 0,
-  "elapsed_s": 14.25,
+  "elapsed_s": 17.838,
   "rows": [
     {
       "n": 3,
@@ -54,6 +54,11 @@
     "user_request": "Please solve this logic statement: ( true and false ) or ( not false )",
     "compiled_prompt": "<LAB:logic>  ( true and false ) or ( not false ) :",
     "text": "<LAB:logic>  ( true and false ) or ( not false ) : TRUE\n\n\n###",
+    "ok": true
+  },
+  "hanoi_demo": {
+    "prompt": "<LAB:hanoi> 3 :",
+    "text": "<LAB:hanoi> 3 :  A>C A>B C>B A>C B>A B>C A>C\n\n\n### Response:The given problem is a classic example",
     "ok": true
   }
 }

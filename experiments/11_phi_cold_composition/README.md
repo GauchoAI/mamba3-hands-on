@@ -52,3 +52,5 @@ all four cases. Phi trainable parameters: `0`.
   `TRUE` through the same port.
 - Request compiler: user-facing text can be compiled into the Lab protocol
   before the forward-pass intervention.
+- Hanoi: `<LAB:hanoi> 3 :` emits `A>C A>B C>B A>C B>A B>C A>C`
+  through the same port, then releases control.

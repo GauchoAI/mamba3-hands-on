@@ -185,3 +185,36 @@ is the correct control-flow skeleton for the strategic direction:
 ```text
 user language -> formal protocol -> reasoning organ -> Phi-visible answer
 ```
+
+### Iteration 6 - Hanoi behind the same port
+
+Added `HanoiSolver` to the existing `SolverPort` registry.
+
+Input:
+
+```text
+<LAB:hanoi> 3 :
+```
+
+Output:
+
+```text
+<LAB:hanoi> 3 :  A>C A>B C>B A>C B>A B>C A>C
+```
+
+Then Phi resumes:
+
+```text
+### Response:The given problem is a classic example...
+```
+
+This is the important integration checkpoint. The adapter did not change for
+Hanoi. Counter, sorting, fact override, boolean logic, and Hanoi all share the
+same Phi-facing mechanism:
+
+```text
+solver computes next action / answer
+solver returns token biases
+frozen Phi emits the answer tokens
+boundary releases control back to Phi
+```
