@@ -1,0 +1,94 @@
+expansions:
+- id: english_to_propositional
+  parent_path:
+  - language_bridge
+  category: language_bridge
+  prompt: "Given a short English sentence expressing a logical relationship (e.g.\
+    \ 'If it rains then the ground is wet'), translate it into a propositional logic\
+    \ formula using standard connectives (\u2192, \u2227, \u2228, \xAC); verifier\
+    \ checks that the formula is syntactically valid and that the named propositions\
+    \ and connective structure match the sentence's meaning via a reference parse."
+  target_n: 25
+  difficulty: 2
+  tags:
+  - formal
+  - bridge
+  - language_grounded
+  requires:
+  - logic.modus_ponens
+  - logic.contrapositive
+  _added_at: '2026-04-30T00:11:20Z'
+- id: word_to_equation
+  parent_path:
+  - word_problems
+  category: language_bridge
+  prompt: Given a short English algebra word problem (one unknown, linear), produce
+    the symbolic equation and then solve for the unknown; verifier checks the equation
+    is syntactically valid and the numeric solution satisfies it by substitution.
+  target_n: 25
+  difficulty: 2
+  tags:
+  - bridge
+  - language_grounded
+  - foundation
+  requires:
+  - word_problems.addition_subtraction_story
+  _added_at: '2026-04-30T00:11:20Z'
+- id: english_to_sql_select
+  parent_path:
+  - language_bridge
+  category: language_bridge
+  prompt: Given a plain-English query over a described single-table schema (e.g. 'List
+    all employees whose salary exceeds 50000'), produce the corresponding SQL SELECT
+    statement; verifier parses the SQL with a grammar checker and checks that the
+    table name, column references, and WHERE condition match the specification.
+  target_n: 20
+  difficulty: 2
+  tags:
+  - bridge
+  - language_grounded
+  - parseable
+  - programming
+  requires: []
+  _added_at: '2026-04-30T00:11:20Z'
+- id: story_to_state_machine
+  parent_path:
+  - language_bridge
+  category: language_bridge
+  prompt: 'Given a short narrative describing a simple process with named states and
+    transitions (e.g. a vending machine accepting coins), produce a state-machine
+    description as a JSON object with fields: states (list), initial, transitions
+    (list of {from, on, to}); verifier parses the JSON, checks all referenced states
+    exist, and confirms the initial state is in the states list.'
+  target_n: 20
+  difficulty: 3
+  tags:
+  - bridge
+  - language_grounded
+  - formal
+  - parseable
+  - compositional
+  requires:
+  - state_tracking.conditional_branch
+  - structured_output.json_minimal
+  _added_at: '2026-04-30T00:11:20Z'
+- id: english_spec_to_pseudocode
+  parent_path:
+  - language_bridge
+  category: language_bridge
+  prompt: Given a one-paragraph English specification of a simple iterative algorithm
+    (e.g. 'sum all even numbers from 1 to N'), produce structured pseudocode with
+    explicit FOR/WHILE, IF, and RETURN statements; verifier checks that the pseudocode
+    contains the required control-flow keywords and that tracing it on a small input
+    produces the expected output.
+  target_n: 20
+  difficulty: 3
+  tags:
+  - bridge
+  - language_grounded
+  - programming
+  - compositional
+  requires:
+  - state_tracking.fixed_loop_accumulator
+  - state_tracking.sequential_assignment
+  _added_at: '2026-04-30T00:11:20Z'

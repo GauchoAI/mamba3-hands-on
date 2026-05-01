@@ -1,0 +1,281 @@
+{
+  "math.number_theory.parity_product": {
+    "tile_id": "math.number_theory.parity_product",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777508249.6367419,
+    "last_trained_at": 1777582229.245148,
+    "student_acc": 0.9434541487198391,
+    "cost_usd": 0.11830215000000002
+  },
+  "math.number_theory.parity_sum": {
+    "tile_id": "math.number_theory.parity_sum",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777508347.872606,
+    "last_trained_at": 1777582553.9094882,
+    "student_acc": 0.9263478730421731,
+    "cost_usd": 0.120582
+  },
+  "math.modular_arithmetic.addition_basic": {
+    "tile_id": "math.modular_arithmetic.addition_basic",
+    "n_generated": 30,
+    "n_validated": 30,
+    "last_generated_at": 1777508156.130216,
+    "last_trained_at": 1777581906.349215,
+    "student_acc": 0.9540930624055015,
+    "cost_usd": 0.13045830000000003
+  },
+  "math.sequences.arithmetic_progression": {
+    "tile_id": "math.sequences.arithmetic_progression",
+    "n_generated": 30,
+    "n_validated": 30,
+    "last_generated_at": 1777508449.263065,
+    "last_trained_at": 1777582907.259157,
+    "student_acc": 0.9563337322126088,
+    "cost_usd": 0.12567299999999998
+  },
+  "math.modular_arithmetic.subtraction_basic": {
+    "tile_id": "math.modular_arithmetic.subtraction_basic",
+    "n_generated": 30,
+    "n_validated": 30,
+    "last_generated_at": 1777508572.3533719,
+    "last_trained_at": 1777583185.1528509,
+    "student_acc": 0.9248379295125568,
+    "cost_usd": 0.13572299999999995
+  },
+  "math.number_theory.gcd_euclidean": {
+    "tile_id": "math.number_theory.gcd_euclidean",
+    "n_generated": 25,
+    "n_validated": 25,
+    "last_generated_at": 1777508677.30516,
+    "last_trained_at": 1777583391.333714,
+    "student_acc": 0.929994846011167,
+    "cost_usd": 0.12032249999999999
+  },
+  "math.number_theory.lcm_basic": {
+    "tile_id": "math.number_theory.lcm_basic",
+    "n_generated": 25,
+    "n_validated": 25,
+    "last_generated_at": 1777508794.683201,
+    "last_trained_at": 1777583568.577086,
+    "student_acc": 0.9589094895791052,
+    "cost_usd": 0.1329825
+  },
+  "math.sequences.geometric_progression": {
+    "tile_id": "math.sequences.geometric_progression",
+    "n_generated": 30,
+    "n_validated": 30,
+    "last_generated_at": 1777508928.797359,
+    "last_trained_at": 1777583704.055344,
+    "student_acc": 0.9583744479771574,
+    "cost_usd": 0.11271300000000001
+  },
+  "logic.modus_ponens": {
+    "tile_id": "logic.modus_ponens",
+    "n_generated": 30,
+    "n_validated": 30,
+    "last_generated_at": 1777509076.3996,
+    "last_trained_at": 1777583867.0825999,
+    "student_acc": 0.9014048639495825,
+    "cost_usd": 0.13930800000000004
+  },
+  "state_tracking.sequential_assignment": {
+    "tile_id": "state_tracking.sequential_assignment",
+    "n_generated": 30,
+    "n_validated": 30,
+    "last_generated_at": 1777509184.1413782,
+    "last_trained_at": 1777584030.1580732,
+    "student_acc": 0.962885081849796,
+    "cost_usd": 0.13795800000000005
+  },
+  "state_tracking.balanced_parens_depth": {
+    "tile_id": "state_tracking.balanced_parens_depth",
+    "n_generated": 25,
+    "n_validated": 25,
+    "last_generated_at": 1777509310.082766,
+    "last_trained_at": 1777584195.863032,
+    "student_acc": 0.9319403903477501,
+    "cost_usd": 0.15023250000000002
+  },
+  "sets.intersection": {
+    "tile_id": "sets.intersection",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777509392.579016,
+    "last_trained_at": 1777584361.85362,
+    "student_acc": 0.9581580647514117,
+    "cost_usd": 0.108522
+  },
+  "sets.union": {
+    "tile_id": "sets.union",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777509497.1318688,
+    "last_trained_at": 1777584530.686959,
+    "student_acc": 0.9529988116316539,
+    "cost_usd": 0.12119699999999999
+  },
+  "word_problems.addition_subtraction_story": {
+    "tile_id": "word_problems.addition_subtraction_story",
+    "n_generated": 30,
+    "n_validated": 30,
+    "last_generated_at": 1777509609.7429929,
+    "last_trained_at": 1777584699.499008,
+    "student_acc": 0.9137101830122052,
+    "cost_usd": 0.13069800000000004
+  },
+  "word_problems.distance_speed_time": {
+    "tile_id": "word_problems.distance_speed_time",
+    "n_generated": 25,
+    "n_validated": 25,
+    "last_generated_at": 1777509697.6406322,
+    "last_trained_at": 1777584869.695572,
+    "student_acc": 0.957142004039975,
+    "cost_usd": 0.0956775
+  },
+  "word_problems.multiplication_story": {
+    "tile_id": "word_problems.multiplication_story",
+    "n_generated": 25,
+    "n_validated": 25,
+    "last_generated_at": 1777509800.9126961,
+    "last_trained_at": 1777585035.980831,
+    "student_acc": 0.9297442171663298,
+    "cost_usd": 0.10707750000000002
+  },
+  "combinatorics.permutations_basic": {
+    "tile_id": "combinatorics.permutations_basic",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777509900.769152,
+    "last_trained_at": 1777585206.1172009,
+    "student_acc": 0.9417233732699365,
+    "cost_usd": 0.10237199999999999
+  },
+  "combinatorics.choose_k_from_n": {
+    "tile_id": "combinatorics.choose_k_from_n",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777510011.3516438,
+    "last_trained_at": 1777585380.785573,
+    "student_acc": 0.9559227766460163,
+    "cost_usd": 0.11792699999999999
+  },
+  "structured_output.json_minimal": {
+    "tile_id": "structured_output.json_minimal",
+    "n_generated": 25,
+    "n_validated": 25,
+    "last_generated_at": 1777510205.6500669,
+    "last_trained_at": 1777585545.984103,
+    "student_acc": 0.8938622751366997,
+    "cost_usd": 0.17874750000000003
+  },
+  "structured_output.markdown_table": {
+    "tile_id": "structured_output.markdown_table",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777510365.866401,
+    "last_trained_at": 1777585712.068247,
+    "student_acc": 0.8888490060464239,
+    "cost_usd": 0.14281200000000002
+  },
+  "structured_output.function_signature_to_call": {
+    "tile_id": "structured_output.function_signature_to_call",
+    "n_generated": 25,
+    "n_validated": 25,
+    "last_generated_at": 1777510514.59295,
+    "last_trained_at": 1777585881.6993039,
+    "student_acc": 0.90718817270337,
+    "cost_usd": 0.14039249999999998
+  },
+  "bilingual.en_to_es_short": {
+    "tile_id": "bilingual.en_to_es_short",
+    "n_generated": 25,
+    "n_validated": 25,
+    "last_generated_at": 1777510627.78937,
+    "last_trained_at": 1777586041.133104,
+    "student_acc": 0.8801273462876161,
+    "cost_usd": 0.1286475
+  },
+  "bilingual.es_to_en_short": {
+    "tile_id": "bilingual.es_to_en_short",
+    "n_generated": 25,
+    "n_validated": 25,
+    "last_generated_at": 1777510762.351568,
+    "last_trained_at": 1777586199.374681,
+    "student_acc": 0.9023840391311458,
+    "cost_usd": 0.14012249999999998
+  },
+  "bilingual.number_to_word_en": {
+    "tile_id": "bilingual.number_to_word_en",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777510864.0915651,
+    "last_trained_at": 1777586354.6129138,
+    "student_acc": 0.938672728775858,
+    "cost_usd": 0.090972
+  },
+  "bilingual.number_to_word_es": {
+    "tile_id": "bilingual.number_to_word_es",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777510965.960085,
+    "last_trained_at": 1777586516.509599,
+    "student_acc": 0.9537885814081972,
+    "cost_usd": 0.09244199999999998
+  },
+  "nl_to_formal.bubble_sort_swap_count": {
+    "tile_id": "nl_to_formal.bubble_sort_swap_count",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777511091.191348,
+    "last_trained_at": 1777586671.22274,
+    "student_acc": 0.9571194011521862,
+    "cost_usd": 0.146787
+  },
+  "nl_to_formal.monotone_run_detection": {
+    "tile_id": "nl_to_formal.monotone_run_detection",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777511250.352213,
+    "last_trained_at": 1777586823.527817,
+    "student_acc": 0.887958426667854,
+    "cost_usd": 0.15629699999999996
+  },
+  "language_bridge.english_to_sql_select": {
+    "tile_id": "language_bridge.english_to_sql_select",
+    "n_generated": 20,
+    "n_validated": 20,
+    "last_generated_at": 1777511366.689389,
+    "last_trained_at": 1777586975.867657,
+    "student_acc": 0.9468293669877079,
+    "cost_usd": 0.104322
+  },
+  "math.modular_arithmetic.addition_medium": {
+    "tile_id": "math.modular_arithmetic.addition_medium",
+    "n_generated": 30,
+    "n_validated": 30,
+    "last_generated_at": 1777511490.994849,
+    "last_trained_at": 1777587127.5746171,
+    "student_acc": 0.9344643440079612,
+    "cost_usd": 0.134058
+  },
+  "math.sequences.fibonacci_like": {
+    "tile_id": "math.sequences.fibonacci_like",
+    "n_generated": 25,
+    "n_validated": 25,
+    "last_generated_at": 1777511609.8782542,
+    "last_trained_at": 1777587281.547541,
+    "student_acc": 0.9271056932890417,
+    "cost_usd": 0.1320825
+  },
+  "logic.contrapositive": {
+    "tile_id": "logic.contrapositive",
+    "n_generated": 25,
+    "n_validated": 0,
+    "last_generated_at": 1777593711.449239,
+    "last_trained_at": null,
+    "student_acc": null,
+    "cost_usd": 0.12158264999999997
+  }
+}

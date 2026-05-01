@@ -1,0 +1,86 @@
+# mamba3-hands-on
+
+A research project building small Mamba-3 byte-level language models
+that **reason** through residual-stream primitives. The chapters
+below are individual experiments, ordered chronologically. Closed
+experiments stay archived here so the timeline is reconstructable;
+active ones are clearly marked.
+
+## Chapters
+
+| # | Chapter | Status | Synopsis |
+|---|---|---|---|
+| 01 | [`01_ga_tournament/`](01_ga_tournament/) | archival | Multi-task GA mastered 14 of 15 tasks in ~24 h H100 |
+| 02 | [`02_ptx_engine/`](02_ptx_engine/) | archival | Hand-rolled PTX Mamba-3 engine (~14× PyTorch); pod-archive branch |
+| 03 | [`03_synapse_parity/`](03_synapse_parity/) | archival | Early Mamba-3 / RoPE / parity foundations |
+| 04 | [`04_hanoi/`](04_hanoi/) | archival | Hanoi line: bounded-counter → EOS-bias → tool-use, 5,000× extrapolation |
+| 05 | [`05_lego_library/`](05_lego_library/) | archival | Step-function library + Light-CA + Cornell renderer |
+| 06 | [`06_cortex_existence/`](06_cortex_existence/) | archival | 772-param counter primitive, 16.7× OOD on a synthetic LM |
+| 07 | [`07_jepa/`](07_jepa/) | archival | Original JEPA-Cortex with Qwen-teacher distillation |
+| 08 | [`08_rlf_cortex/`](08_rlf_cortex/) | archival | RLF-inspired layer-recursion + lifeline |
+| 09 | [`09_cortex_bilingual/`](09_cortex_bilingual/) | **closed** 2026-04-30 | Counter on bilingual LM; ~17× OOD shift; closed by decision |
+| 10 | [`10_jepa_structured/`](10_jepa_structured/) | **active** | Structured-data JEPA-Cortex daemon (current daily driver) |
+
+Each chapter has its own `README.md` with synopsis, status, and a
+cross-link to the relevant `docs/findings/<topic>.md` entry.
+
+## Infrastructure (project root)
+
+The Kappa pipeline + supporting modules used by every chapter live at
+the root so they don't need to be duplicated per experiment:
+
+- **Persistence + telemetry**:
+  [`experiment_pusher.py`](experiment_pusher.py),
+  [`kappa_packer.py`](kappa_packer.py),
+  [`kappa_schemas.py`](kappa_schemas.py),
+  [`stream_reader.py`](stream_reader.py),
+  [`cloud_archive.py`](cloud_archive.py),
+  [`session_archiver.py`](session_archiver.py),
+  [`firebase_push.py`](firebase_push.py),
+  [`firebase_sync.py`](firebase_sync.py).
+- **Cluster control**:
+  [`cluster_dispatch.py`](cluster_dispatch.py),
+  [`cluster_sync.py`](cluster_sync.py).
+- **Models + kernels**:
+  [`mamba3_minimal.py`](mamba3_minimal.py),
+  [`mamba3_lm.py`](mamba3_lm.py),
+  [`cortex_counting.py`](cortex_counting.py) (the `Primitive` base
+  class + `CortexLM`),
+  [`ssm_*.py`](.) (SSM scan kernels).
+- **Corpora**:
+  [`make_bilingual_corpus.py`](make_bilingual_corpus.py),
+  [`make_opensubtitles_corpus.py`](make_opensubtitles_corpus.py),
+  [`make_teacher_corpus.py`](make_teacher_corpus.py).
+
+## Architecture documents
+
+- [`docs/KAPPA_ARCHITECTURE.md`](docs/KAPPA_ARCHITECTURE.md) — the
+  five-invariant Kappa pipeline (immutable JSONL log, Parquet
+  materialized view, two-sink storage, code auto-propagation,
+  Firebase signals).
+- [`docs/CLOUD_ARCHIVE.md`](docs/CLOUD_ARCHIVE.md) — HF Buckets
+  setup + LAN mirror.
+- [`docs/EXPERIMENT_FIREBASE_SCHEMA.md`](docs/EXPERIMENT_FIREBASE_SCHEMA.md)
+  — RTDB layout + free-tier accounting.
+- [`docs/UI_VISION.md`](docs/UI_VISION.md) — what the dashboard
+  surfaces.
+- [`VISION.md`](VISION.md) — project-level vision.
+- [`docs/legacy/`](docs/legacy/) — older planning / handoff documents
+  preserved for context.
+
+## Findings
+
+Cross-project findings live in
+[`findings.md`](findings.md) (root, shorter) and
+[`docs/findings/`](docs/findings/) (per-topic, deep). Per-chapter
+findings live alongside the chapter (e.g.
+[`09_cortex_bilingual/findings.md`](09_cortex_bilingual/findings.md)).
+
+## Tools
+
+[`tools/`](tools/) collects analysis / dashboard / cluster-control
+scripts that aren't part of any single chapter:
+[`tools/dashboard/`](tools/dashboard/),
+[`tools/db/`](tools/db/),
+[`tools/cluster/`](tools/cluster/),
+plus the `analyze_*` / `check_*` / `diagnostician` family.

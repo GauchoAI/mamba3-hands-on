@@ -1,0 +1,321 @@
+# Curriculum tree — the static "map" of tiles.
+#
+# Category weighting target: 70% formal, 30% language.
+#   formal   — math, logic, category theory, type theory, formal proofs,
+#              algorithms, state machines. Verifiable, grounds the model
+#              in truth.
+#   language — natural-language bridges to/from each formal layer
+#              (NL↔math, NL↔logic, NL↔code), plus a small dose of
+#              common-sense / grounding. Common knowledge per se is
+#              de-emphasised — Wikipedia/RAG at inference handles that.
+#
+# The curriculum_expander.py grows the tree autonomously via Claude
+# when the daemon would otherwise be idle, biased toward whichever
+# category is under-quota. Expansions land in curriculum.expansions.yaml
+# and are merged at load time.
+#
+# Shape:
+#   domains[]                 = roots of the forest, in priority order
+#     id, name, priority      (lower priority number = higher real priority)
+#     tags[]                  = inherited by all descendants
+#     children[]              = subtopics; can nest arbitrarily
+#       leaf tiles            = nodes with a `prompt` field (no further children)
+#         id, prompt, target_n, difficulty, tags[], requires[]
+#
+# Tile IDs are dotted paths from the root: "math.modular_arithmetic.addition_basic".
+# Disk paths mirror tile IDs: data/math/modular_arithmetic/addition_basic.jsonl.
+#
+# Iteration orders (implemented in curriculum.py):
+#   - dfs   : walk one domain to completion before next, in priority order
+#   - bfs   : all difficulty-1 tiles across domains, then 2, then 3, ...
+#   - rr    : round-robin across domains, weighted by priority
+#   - topo  : respect `requires` — yield prereqs first
+#
+# Iteration is composable with `--tag` to filter (e.g. only "scientific" tiles).
+
+version: 1
+
+domains:
+
+  - id: math
+    name: Mathematics
+    priority: 1
+    category: verifiable
+    tags: [scientific, formal, numeric]
+    children:
+      - id: modular_arithmetic
+        children:
+          - id: addition_basic
+            prompt: "modular arithmetic with addition: small operands, modulus 3-9, single-digit numbers"
+            target_n: 30
+            difficulty: 1
+          - id: addition_medium
+            prompt: "modular arithmetic with addition: two-digit operands, modulus 7-13"
+            target_n: 30
+            difficulty: 2
+            requires: [math.modular_arithmetic.addition_basic]
+          - id: subtraction_basic
+            prompt: "modular arithmetic with subtraction: handle negative-result wraparound, modulus 3-9"
+            target_n: 30
+            difficulty: 2
+      - id: sequences
+        children:
+          - id: arithmetic_progression
+            prompt: "arithmetic sequence next-term: common differences 2-7, sequence length 4-5"
+            target_n: 30
+            difficulty: 1
+          - id: geometric_progression
+            prompt: "geometric sequence next-term: common ratios 2-4, sequence length 3-4"
+            target_n: 30
+            difficulty: 2
+          - id: fibonacci_like
+            prompt: "Fibonacci-like sequence next-term: arbitrary first two seeds, length 5-6"
+            target_n: 25
+            difficulty: 3
+            requires: [math.sequences.arithmetic_progression]
+      - id: number_theory
+        children:
+          - id: gcd_euclidean
+            prompt: "greatest common divisor by Euclidean steps: pairs where one is 30-100, the other 5-30"
+            target_n: 25
+            difficulty: 2
+          - id: lcm_basic
+            prompt: "least common multiple of two integers under 30 via prime factorisation"
+            target_n: 25
+            difficulty: 2
+          - id: parity_sum
+            prompt: "parity of a sum of integers: justify using even+even, odd+odd, even+odd rules"
+            target_n: 20
+            difficulty: 1
+            tags: [foundation]
+          - id: parity_product
+            prompt: "parity of a product of integers: justify using parity multiplication rules"
+            target_n: 20
+            difficulty: 1
+            tags: [foundation]
+
+  - id: logic
+    name: Propositional Logic
+    priority: 2
+    category: verifiable
+    tags: [scientific, formal]
+    children:
+      - id: modus_ponens
+        prompt: "modus ponens with concrete entities and named scenarios (weather, transit, biology)"
+        target_n: 30
+        difficulty: 1
+        tags: [foundation]
+      - id: contrapositive
+        prompt: "contrapositive of an implication; show negation of consequent forces negation of antecedent"
+        target_n: 25
+        difficulty: 2
+        requires: [logic.modus_ponens]
+      - id: disjunctive_syllogism
+        prompt: "disjunctive syllogism: two-option scenarios where one disjunct is ruled out"
+        target_n: 25
+        difficulty: 2
+        requires: [logic.modus_ponens]
+      - id: chain_two_step
+        prompt: "two-step modus ponens chain: A→B, B→C, A; conclude C with both intermediate steps shown"
+        target_n: 20
+        difficulty: 3
+        requires: [logic.modus_ponens]
+
+  - id: state_tracking
+    name: State Tracking and Variable Tracing
+    priority: 3
+    category: verifiable
+    tags: [scientific, compositional, programming]
+    children:
+      - id: sequential_assignment
+        prompt: "trace 3-4 sequential variable assignments with integer arithmetic; show each intermediate value"
+        target_n: 30
+        difficulty: 1
+        tags: [foundation]
+      - id: conditional_branch
+        prompt: "trace through if-else with integer condition; show which branch taken and why"
+        target_n: 25
+        difficulty: 2
+        requires: [state_tracking.sequential_assignment]
+      - id: fixed_loop_accumulator
+        prompt: "trace fixed-iteration loop with accumulator (sum or product); show value after each iteration"
+        target_n: 25
+        difficulty: 3
+        requires: [state_tracking.conditional_branch]
+      - id: balanced_parens_depth
+        prompt: "balanced parentheses depth tracking: input length 4-12, show depth after each char"
+        target_n: 25
+        difficulty: 2
+      - id: stack_pushpop_final
+        prompt: "final stack contents after a sequence of push and pop operations; integer values"
+        target_n: 25
+        difficulty: 2
+        requires: [state_tracking.balanced_parens_depth]
+
+  - id: sets
+    name: Set Operations
+    priority: 4
+    category: verifiable
+    tags: [scientific, formal]
+    children:
+      - id: intersection
+        prompt: "set intersection of two finite sets, sizes 3-5 each, integers under 20"
+        target_n: 20
+        difficulty: 1
+      - id: union
+        prompt: "set union of two finite sets, sizes 3-5 each, with overlap, integers under 20"
+        target_n: 20
+        difficulty: 1
+      - id: difference
+        prompt: "set difference A \\ B with overlapping small finite sets"
+        target_n: 20
+        difficulty: 2
+        requires: [sets.intersection]
+
+  - id: word_problems
+    name: Grounded Word Problems (NL → arithmetic bridge)
+    priority: 5
+    category: language_bridge
+    tags: [common_sense, language_grounded]
+    children:
+      - id: addition_subtraction_story
+        prompt: "word problem reducing to addition or subtraction; named entities, concrete amounts"
+        target_n: 30
+        difficulty: 2
+      - id: multiplication_story
+        prompt: "word problem reducing to multiplication; rates, batches, or grouped totals"
+        target_n: 25
+        difficulty: 2
+      - id: distance_speed_time
+        prompt: "distance-speed-time problem; integer values; one-sentence setup"
+        target_n: 25
+        difficulty: 2
+      - id: fraction_comparison
+        prompt: "compare two fractions with small numerators/denominators by cross-multiplication"
+        target_n: 20
+        difficulty: 3
+        requires: [math.number_theory.lcm_basic]
+
+  - id: combinatorics
+    name: Small Combinatorics
+    priority: 6
+    category: verifiable
+    tags: [scientific, formal]
+    children:
+      - id: choose_k_from_n
+        prompt: "ways to choose k from n where n+k ≤ 7; show formula and computation"
+        target_n: 20
+        difficulty: 3
+      - id: permutations_basic
+        prompt: "permutations of n distinct items, n in {3,4,5}; show factorial computation"
+        target_n: 20
+        difficulty: 2
+
+  - id: algorithms
+    name: Algorithm Tracing
+    priority: 7
+    category: verifiable
+    tags: [scientific, compositional, programming]
+
+  - id: structured_output
+    name: Structured Output (JSON, Markdown, Code)
+    priority: 8
+    category: verifiable
+    tags: [parseable, formal]
+    children:
+      - id: json_minimal
+        prompt: "produce a tiny well-formed JSON object given a one-sentence spec; show the produced JSON and explain why it parses"
+        target_n: 25
+        difficulty: 1
+      - id: json_array
+        prompt: "produce a JSON array of 3-5 objects from a one-sentence spec; verify each field type is consistent"
+        target_n: 25
+        difficulty: 2
+        requires: [structured_output.json_minimal]
+      - id: markdown_table
+        prompt: "produce a small markdown table (2-3 columns, 3-4 rows) from a one-sentence description; show the table and explain alignment syntax"
+        target_n: 20
+        difficulty: 1
+      - id: function_signature_to_call
+        prompt: "given a function signature (Python or pseudocode), write one valid call site with concrete arguments and explain why each argument matches its type"
+        target_n: 25
+        difficulty: 2
+
+  - id: bilingual
+    name: Bilingual Fluency (EN ↔ ES, grammar-checkable)
+    priority: 9
+    category: verifiable
+    tags: [language, parseable]
+    children:
+      - id: en_to_es_short
+        prompt: "translate one short English sentence to Spanish; the 'solution' field gives the translation, the 'paraphrase' gives an alternative valid Spanish rendering"
+        target_n: 25
+        difficulty: 1
+      - id: es_to_en_short
+        prompt: "translate one short Spanish sentence to English; same dual-rendering pattern"
+        target_n: 25
+        difficulty: 1
+      - id: number_to_word_es
+        prompt: "given a small integer (under 100), write its Spanish word form (cardinal); show the rule applied"
+        target_n: 20
+        difficulty: 1
+      - id: number_to_word_en
+        prompt: "given a small integer (under 1000), write its English word form (cardinal); show the rule applied"
+        target_n: 20
+        difficulty: 1
+
+  - id: nl_to_formal
+    name: Natural Language to Formal Layers (bridge)
+    priority: 10
+    category: language_bridge
+    tags: [bridge, language_grounded]
+    children:
+      - id: english_to_propositional_logic
+        prompt: "translate an English statement to propositional logic notation (∧, ∨, ¬, →); show the variable mapping"
+        target_n: 25
+        difficulty: 2
+      - id: english_to_arithmetic_equation
+        prompt: "translate a one-sentence English math statement into an equation; solve and verify"
+        target_n: 25
+        difficulty: 2
+      - id: english_spec_to_pseudocode
+        prompt: "translate a one-sentence functional spec into 3-5 lines of pseudocode; trace it on one input to verify"
+        target_n: 25
+        difficulty: 2
+    children:
+      - id: hanoi_count
+        prompt: "Tower of Hanoi minimum-moves count for n disks, n in {2,3,4,5}; recurrence shown"
+        target_n: 25
+        difficulty: 3
+        requires: [state_tracking.fixed_loop_accumulator]
+      - id: bubble_sort_swap_count
+        prompt: "count swaps in one bubble-sort pass over a 4-5 element array"
+        target_n: 20
+        difficulty: 3
+      - id: monotone_run_detection
+        prompt: "detect longest monotone run in a 6-8 element integer sequence"
+        target_n: 20
+        difficulty: 3
+
+# Cross-cutting iteration orders are documented for reference; implementations
+# live in curriculum.py.
+iteration_orders:
+  - name: dfs
+    description: One domain at a time, top to bottom, domains in priority order.
+    use_when: Establishing the model on one mental discipline before next.
+  - name: bfs
+    description: All difficulty-1 tiles first, then difficulty-2, then 3.
+    use_when: Building broad foundation before specialisation.
+  - name: rr
+    description: Round-robin across domains; one tile per domain per cycle.
+    use_when: Avoiding catastrophic forgetting; balanced exposure across topics.
+  - name: topo
+    description: Topological order respecting `requires`; never train a child before its parent.
+    use_when: Compositional skills where prerequisite mastery matters.
+
+# Tag combinations enable focused passes:
+#   --tag scientific      → math + logic + state_tracking + sets + combinatorics + algorithms
+#   --tag common_sense    → word_problems
+#   --tag formal          → strict proof / formal-rule tiles
+#   --tag programming     → state_tracking + algorithms
+#   --tag foundation      → smallest-unit tiles to seed everything else
