@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import random
 import time
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 HERE = Path(__file__).resolve().parent
 ARTIFACTS = HERE / "artifacts"
+CHESS_SKILL = HERE / "chess_skill.md"
 N_MOVE_CLASSES = 64 * 64
 PIECE_TO_PLANE = {
     chess.PAWN: 0,
@@ -278,46 +280,6 @@ def biased_phi(phi, tokenizer, prompt: str, answer: str, dev: str) -> str:
     return tokenizer.decode(ids[0].tolist(), skip_special_tokens=False)
 
 
-def run_phi_demo(args, chess_model: ChessMateMLP, cases: list[ChessCase], dev: str) -> dict:
-    tokenizer = AutoTokenizer.from_pretrained(args.phi_model, trust_remote_code=False)
-    phi = AutoModelForCausalLM.from_pretrained(
-        args.phi_model,
-        dtype=torch.float16 if dev in {"mps", "cuda"} else torch.float32,
-        trust_remote_code=False,
-        attn_implementation="eager",
-    ).to(dev).eval()
-    for p in phi.parameters():
-        p.requires_grad_(False)
-
-    rows = []
-    for case in cases[: args.phi_cases]:
-        board = chess.Board(case.fen)
-        pred = legal_masked_prediction(chess_model, board, dev)
-        after = board.copy(stack=False)
-        after.push(pred)
-        answer = pred.uci()
-        prompt = f"White to move. Find mate in one. Answer only the UCI move.\nFEN: {case.fen}\nAnswer:"
-        baseline = greedy_phi(phi, tokenizer, prompt, args.max_new, dev)
-        port = biased_phi(phi, tokenizer, prompt, answer, dev)
-        rows.append({
-            "fen": case.fen,
-            "expected": case.move_uci,
-            "mlp_prediction": answer,
-            "mlp_prediction_is_legal_mate": after.is_checkmate(),
-            "baseline_text": baseline,
-            "baseline_ok": baseline_contains_move(baseline, board, case.move_uci),
-            "port_text": port,
-            "port_ok": answer in port and after.is_checkmate(),
-        })
-    return {
-        "phi_model": args.phi_model,
-        "phi_trainable_params": sum(p.numel() for p in phi.parameters() if p.requires_grad),
-        "rows": rows,
-        "baseline_pass": sum(row["baseline_ok"] for row in rows),
-        "port_pass": sum(row["port_ok"] for row in rows),
-    }
-
-
 def baseline_contains_move(text: str, board: chess.Board, expected_uci: str) -> bool:
     answer = text.split("Answer:", 1)[-1].splitlines()[0]
     tokens = [tok.strip(".,;:()[]{}") for tok in answer.split()]
@@ -339,6 +301,83 @@ def baseline_contains_move(text: str, board: chess.Board, expected_uci: str) -> 
     return False
 
 
+def one_sided_mcnemar_pvalue(baseline_only: int, port_only: int) -> float:
+    n = baseline_only + port_only
+    if n == 0:
+        return 1.0
+    # Exact one-sided sign test over discordant paired outcomes.
+    return sum(math.comb(n, k) for k in range(port_only, n + 1)) / (2 ** n)
+
+
+def paired_summary(rows: list[dict], left_key: str, right_key: str) -> dict:
+    both_correct = sum(row[left_key] and row[right_key] for row in rows)
+    both_wrong = sum((not row[left_key]) and (not row[right_key]) for row in rows)
+    left_only = sum(row[left_key] and (not row[right_key]) for row in rows)
+    right_only = sum((not row[left_key]) and row[right_key] for row in rows)
+    return {
+        "n": len(rows),
+        "both_correct": both_correct,
+        "both_wrong": both_wrong,
+        "left_only": left_only,
+        "right_only": right_only,
+        "one_sided_mcnemar_p": round(one_sided_mcnemar_pvalue(left_only, right_only), 8),
+    }
+
+
+def run_phi_demo(args, chess_model: ChessMateMLP, cases: list[ChessCase], dev: str) -> dict:
+    tokenizer = AutoTokenizer.from_pretrained(args.phi_model, trust_remote_code=False)
+    phi = AutoModelForCausalLM.from_pretrained(
+        args.phi_model,
+        dtype=torch.float16 if dev in {"mps", "cuda"} else torch.float32,
+        trust_remote_code=False,
+        attn_implementation="eager",
+    ).to(dev).eval()
+    for p in phi.parameters():
+        p.requires_grad_(False)
+
+    rows = []
+    skill_text = CHESS_SKILL.read_text()
+    phi_cases = cases[: min(args.phi_cases, len(cases))]
+    for case in phi_cases:
+        board = chess.Board(case.fen)
+        pred = legal_masked_prediction(chess_model, board, dev)
+        after = board.copy(stack=False)
+        after.push(pred)
+        answer = pred.uci()
+        task = f"White to move. Find mate in one. Answer only the UCI move.\nFEN: {case.fen}\nAnswer:"
+        skill_prompt = f"{skill_text}\n\nTask:\n{task}"
+        baseline = greedy_phi(phi, tokenizer, task, args.max_new, dev)
+        skill_baseline = greedy_phi(phi, tokenizer, skill_prompt, args.max_new, dev)
+        port = biased_phi(phi, tokenizer, task, answer, dev)
+        rows.append({
+            "fen": case.fen,
+            "expected": case.move_uci,
+            "mlp_prediction": answer,
+            "mlp_prediction_is_legal_mate": after.is_checkmate(),
+            "baseline_text": baseline,
+            "baseline_ok": baseline_contains_move(baseline, board, case.move_uci),
+            "skill_baseline_text": skill_baseline,
+            "skill_baseline_ok": baseline_contains_move(skill_baseline, board, case.move_uci),
+            "port_text": port,
+            "port_ok": answer in port and after.is_checkmate(),
+        })
+    return {
+        "phi_model": args.phi_model,
+        "phi_trainable_params": sum(p.numel() for p in phi.parameters() if p.requires_grad),
+        "scoring": "paired semantic chess scoring; baseline gets credit for UCI or SAN parsed by python-chess",
+        "chess_skill": str(CHESS_SKILL.relative_to(HERE.parent.parent)),
+        "rows": rows,
+        "baseline_pass": sum(row["baseline_ok"] for row in rows),
+        "skill_baseline_pass": sum(row["skill_baseline_ok"] for row in rows),
+        "port_pass": sum(row["port_ok"] for row in rows),
+        "paired": {
+            "baseline_vs_port": paired_summary(rows, "baseline_ok", "port_ok"),
+            "skill_baseline_vs_port": paired_summary(rows, "skill_baseline_ok", "port_ok"),
+            "baseline_vs_skill_baseline": paired_summary(rows, "baseline_ok", "skill_baseline_ok"),
+        },
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=7)
@@ -349,7 +388,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=180)
     parser.add_argument("--lr", type=float, default=2e-3)
     parser.add_argument("--phi-model", default="microsoft/Phi-3-mini-4k-instruct")
-    parser.add_argument("--phi-cases", type=int, default=4)
+    parser.add_argument("--phi-cases", type=int, default=24)
     parser.add_argument("--max-new", type=int, default=32)
     parser.add_argument("--skip-phi", action="store_true")
     args = parser.parse_args()

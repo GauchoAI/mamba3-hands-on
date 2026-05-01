@@ -62,3 +62,5 @@ all four cases. Phi trainable parameters: `0`.
   without updating Phi.
 - Chess mate-in-one organ: a wider Torch MLP learns generated expert traces,
   predicts held-out legal checkmates, and supplies the UCI move to frozen Phi.
+- Paired chess benchmark: raw Phi, notation-skill Phi, and Phi plus the chess
+  MLP are scored on the same held-out positions with semantic chess parsing.

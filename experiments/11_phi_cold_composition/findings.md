@@ -469,3 +469,61 @@ verified mate-in-one slice, while Phi remains the text surface.
 
 The next honest step is to broaden the generator beyond back-rank motifs:
 queen mates, knight mates, captures, promotions, and black-to-move symmetry.
+
+### Iteration 11 - paired chess benchmark with notation-only skill
+
+The previous 4-case Phi demo was too small. Replaced it with a paired
+24-position benchmark over the same held-out positions used to evaluate the
+MLP. Each position is scored three ways:
+
+```text
+1. raw frozen Phi
+2. frozen Phi with `chess_skill.md` notation guidance
+3. frozen Phi with the trained chess MLP supplying the move
+```
+
+The notation skill is deliberately limited to interface conventions: FEN, UCI,
+SAN, and "answer only the UCI move." It does not teach tactics.
+
+Run:
+
+```bash
+.venv/bin/python experiments/11_phi_cold_composition/phi_chess_mlp.py
+```
+
+Result:
+
+```text
+held-out MLP legal mate pass: 24/24
+raw Phi semantic pass: 3/24
+Phi + notation skill semantic pass: 2/24
+Phi + chess MLP port pass: 24/24
+```
+
+Paired comparison:
+
+```text
+raw Phi vs port:
+  both correct: 3
+  raw-only wins: 0
+  port-only wins: 21
+  one-sided exact McNemar/sign p: 4.8e-07
+
+notation-skill Phi vs port:
+  both correct: 2
+  skill-only wins: 0
+  port-only wins: 22
+  one-sided exact McNemar/sign p: 2.4e-07
+
+raw Phi vs notation-skill Phi:
+  raw-only wins: 2
+  skill-only wins: 1
+  p: 0.875
+```
+
+Interpretation:
+
+This is now a proper arrangement. The notation skill is useful documentation,
+but it does not improve chess tactics on this benchmark. The learned MLP organ
+is the source of the improvement: it turns the same frozen Phi text interface
+from `3/24` or `2/24` into `24/24` on paired held-out mate-in-one positions.
