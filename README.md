@@ -33,8 +33,7 @@ This also installs the `lab` CLI plus utility commands such as
 | 07 | [`experiments/07_jepa/`](experiments/07_jepa/) | archival | Original JEPA-Cortex with Qwen-teacher distillation |
 | 08 | [`experiments/08_rlf_cortex/`](experiments/08_rlf_cortex/) | archival | RLF-inspired layer-recursion + lifeline |
 | 09 | [`experiments/09_cortex_bilingual/`](experiments/09_cortex_bilingual/) | **closed** 2026-04-30 | Counter on bilingual LM; ~17× OOD shift; closed by decision |
-| 10 | [`experiments/10_jepa_structured/`](experiments/10_jepa_structured/) | archival / paused | Structured-data JEPA-Cortex daemon; paused by the one-minute discipline |
-| 11 | [`experiments/11_stack_operator_transfer/`](experiments/11_stack_operator_transfer/) | **active** | One-minute stack-operator transfer: tiny learned transition policies over role-state |
+| 10 | [`experiments/10_jepa_structured/`](experiments/10_jepa_structured/) | **active** | Structured-data JEPA-Cortex daemon (current daily driver) |
 
 Each chapter has its own `README.md` with synopsis, status, and a
 cross-link to the relevant `docs/findings/<topic>.md` entry.
