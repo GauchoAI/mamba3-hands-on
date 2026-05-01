@@ -4,146 +4,158 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Lab Book</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/handlebars@latest/dist/handlebars.min.js"></script>
   <style>
     :root {
       color-scheme: light;
-      --ink: #151515;
-      --muted: #6f6a60;
-      --line: #ded8cc;
+      --ink: #171512;
+      --muted: #686058;
+      --line: #d8d0c4;
       --paper: #fffdf8;
-      --soft: #f3efe6;
+      --soft: #f4efe6;
+      --panel: #fff;
       --accent: #0f766e;
-      --accent-2: #8a3ffc;
+      --gold: #b7791f;
+      --good: #15803d;
       --warn: #b45309;
       --bad: #b91c1c;
-      --good: #15803d;
       --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
       --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       --serif: Georgia, "Times New Roman", serif;
     }
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
-      font-family: var(--sans);
       color: var(--ink);
       background: var(--paper);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.45;
     }
-    .app {
+    .layout {
       display: grid;
-      grid-template-columns: 280px minmax(0, 1fr);
+      grid-template-columns: 310px minmax(0, 1fr);
       min-height: 100vh;
     }
     aside {
       position: sticky;
       top: 0;
       height: 100vh;
-      padding: 24px 18px;
+      padding: 28px 20px;
       border-right: 1px solid var(--line);
-      background: #fbf7ef;
+      background: #faf6ee;
       overflow-y: auto;
     }
     main {
-      padding: 28px clamp(18px, 4vw, 48px) 56px;
-      max-width: 1220px;
+      max-width: 1240px;
       width: 100%;
+      padding: 34px clamp(20px, 4vw, 56px) 80px;
     }
-    h1 {
-      margin: 0 0 4px;
-      font-family: var(--serif);
-      font-size: 34px;
-      line-height: 1.05;
+    h1, h2, h3 {
+      margin: 0;
       letter-spacing: 0;
+    }
+    h1, h2 { font-family: var(--serif); }
+    h1 {
+      font-size: 40px;
+      line-height: 1.02;
     }
     h2 {
-      margin: 0 0 14px;
-      font-family: var(--serif);
-      font-size: 28px;
-      letter-spacing: 0;
+      font-size: clamp(30px, 4vw, 48px);
+      line-height: 1.03;
+      margin-bottom: 12px;
     }
     h3 {
-      margin: 0 0 8px;
       font-size: 15px;
-      letter-spacing: 0;
+      margin-bottom: 10px;
+    }
+    p { margin: 0; }
+    .subtitle, .muted {
+      color: var(--muted);
     }
     .subtitle {
-      margin: 0;
-      color: var(--muted);
+      margin-top: 8px;
       font-size: 13px;
     }
-    .nav {
+    .toc {
       display: grid;
-      gap: 6px;
-      margin-top: 24px;
+      gap: 5px;
+      margin-top: 28px;
     }
-    .nav button {
-      width: 100%;
-      border: 0;
+    .toc a {
       border-left: 3px solid transparent;
-      background: transparent;
       color: var(--ink);
-      text-align: left;
-      padding: 9px 10px;
-      font: inherit;
-      cursor: pointer;
+      display: block;
+      padding: 8px 10px;
+      text-decoration: none;
+      font-size: 13px;
     }
-    .nav button[aria-current="true"] {
+    .toc a:hover {
+      background: #eee7db;
       border-left-color: var(--accent);
-      background: #ede7dc;
-      font-weight: 700;
     }
     .tools {
       display: grid;
       gap: 10px;
-      margin-top: 24px;
+      margin-top: 22px;
     }
-    input {
-      width: 100%;
+    input, button {
       border: 1px solid var(--line);
-      background: #fff;
-      padding: 10px 11px;
+      border-radius: 7px;
       font: inherit;
-      border-radius: 6px;
+      padding: 10px 11px;
     }
-    .button {
-      border: 1px solid var(--line);
+    input { width: 100%; background: #fff; }
+    button {
       background: #fff;
-      color: var(--ink);
-      padding: 10px 11px;
-      border-radius: 6px;
-      font: inherit;
       cursor: pointer;
     }
-    .button.primary {
+    button.primary {
+      color: #fff;
       background: var(--accent);
       border-color: var(--accent);
-      color: #fff;
     }
-    .meta {
+    .load-meta {
       margin-top: 18px;
       color: var(--muted);
-      font: 12px var(--mono);
+      font: 12px/1.5 var(--mono);
       overflow-wrap: anywhere;
     }
     .chapter {
-      display: none;
-      min-height: 70vh;
+      padding: 34px 0 54px;
+      border-bottom: 1px solid var(--line);
     }
-    .chapter.active { display: block; }
-    .grid {
+    .chapter:first-child { padding-top: 0; }
+    .chapter-kicker {
+      margin-bottom: 8px;
+      color: var(--gold);
+      font: 12px var(--mono);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+    .chapter-intro {
+      max-width: 820px;
+      margin-bottom: 22px;
+      color: #3f3933;
+      font-size: 17px;
+    }
+    .stat-grid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 12px;
-      margin-bottom: 24px;
+      margin: 22px 0;
     }
     .stat, .panel {
       border: 1px solid var(--line);
-      background: #fff;
       border-radius: 8px;
+      background: var(--panel);
       padding: 14px;
     }
     .stat strong {
       display: block;
-      font-size: 26px;
+      font-size: 28px;
       line-height: 1;
       margin-bottom: 5px;
     }
@@ -151,372 +163,486 @@
       color: var(--muted);
       font-size: 12px;
     }
-    .panel {
-      margin-bottom: 16px;
+    .grid-2 {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 14px;
+      margin-top: 14px;
     }
-    .wide { grid-column: 1 / -1; }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .chart {
+      position: relative;
+      height: 280px;
+    }
+    .chart.small { height: 210px; }
     table {
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
     }
     th {
-      text-align: left;
       color: var(--muted);
       border-bottom: 2px solid var(--line);
       padding: 8px 7px;
+      text-align: left;
       font-size: 11px;
-      text-transform: uppercase;
       letter-spacing: .04em;
+      text-transform: uppercase;
     }
     td {
       border-bottom: 1px solid #eee8dd;
-      padding: 9px 7px;
+      padding: 8px 7px;
       vertical-align: top;
     }
-    tr:hover td { background: #faf6ed; }
+    tr:hover td { background: #faf6ef; }
+    .right { text-align: right; }
     .mono {
       font-family: var(--mono);
       font-size: 12px;
       overflow-wrap: anywhere;
     }
-    .right { text-align: right; }
     .pill {
       display: inline-block;
-      padding: 2px 7px;
       border-radius: 999px;
       background: var(--soft);
       color: var(--muted);
+      padding: 2px 7px;
       font-size: 11px;
       white-space: nowrap;
     }
     .pill.good { color: var(--good); background: #e8f5ec; }
     .pill.warn { color: var(--warn); background: #fff1db; }
     .pill.bad { color: var(--bad); background: #fde7e7; }
-    a {
-      color: var(--accent);
-      text-decoration: none;
-    }
-    a:hover { text-decoration: underline; }
-    .split {
+    .event {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(280px, .55fr);
-      gap: 16px;
+      grid-template-columns: 120px 110px minmax(0, 1fr);
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid #eee8dd;
+      font-size: 13px;
     }
+    .sample {
+      border-left: 3px solid var(--accent);
+      padding: 8px 0 8px 12px;
+      margin: 8px 0;
+      background: #fbf7ef;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
     .empty {
       color: var(--muted);
-      padding: 20px 0;
+      padding: 18px 0;
     }
-    pre {
-      margin: 0;
-      overflow: auto;
-      max-height: 520px;
-      background: #111;
-      color: #f7f1df;
-      padding: 14px;
-      border-radius: 8px;
-      font: 12px/1.45 var(--mono);
-    }
-    @media (max-width: 860px) {
-      .app { grid-template-columns: 1fr; }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
       aside {
         position: static;
         height: auto;
         border-right: 0;
         border-bottom: 1px solid var(--line);
       }
-      main { padding-top: 20px; }
-      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .split { grid-template-columns: 1fr; }
+      .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      .event { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <div class="app">
+  <div class="layout">
     <aside>
       <h1>Lab Book</h1>
-      <p class="subtitle">Runs, streams, archive, and platform state.</p>
-      <nav class="nav" aria-label="Chapters">
-        <button data-chapter="overview" aria-current="true">Overview</button>
-        <button data-chapter="experiments">Experiments</button>
-        <button data-chapter="streams">Streams</button>
-        <button data-chapter="archive">Archive</button>
-        <button data-chapter="nodes">Nodes</button>
-        <button data-chapter="schema">Schema</button>
-      </nav>
+      <p class="subtitle">A narrative dashboard over the current Firebase schema and Hugging Face archive pointers.</p>
+      <nav id="toc" class="toc" aria-label="Table of contents"></nav>
       <div class="tools">
-        <input id="search" placeholder="Filter">
-        <button id="refresh" class="button primary">Refresh</button>
+        <input id="filter" placeholder="Filter chapters and tables">
+        <button id="refresh" class="primary">Refresh</button>
       </div>
-      <div id="load-meta" class="meta">Waiting for data.</div>
+      <div id="load-meta" class="load-meta">Waiting for data.</div>
     </aside>
-    <main>
-      <section id="chapter-overview" class="chapter active">
-        <h2>Overview</h2>
-        <div id="overview-grid" class="grid"></div>
-        <div class="split">
-          <div class="panel">
-            <h3>Recent Runs</h3>
-            <div id="recent-runs"></div>
-          </div>
-          <div class="panel">
-            <h3>Live Streams</h3>
-            <div id="recent-streams"></div>
-          </div>
-        </div>
-      </section>
-      <section id="chapter-experiments" class="chapter">
-        <h2>Experiments</h2>
-        <div class="panel"><div id="experiments-table"></div></div>
-      </section>
-      <section id="chapter-streams" class="chapter">
-        <h2>Streams</h2>
-        <div class="panel"><div id="streams-table"></div></div>
-      </section>
-      <section id="chapter-archive" class="chapter">
-        <h2>Archive</h2>
-        <div class="panel"><div id="archive-table"></div></div>
-      </section>
-      <section id="chapter-nodes" class="chapter">
-        <h2>Nodes</h2>
-        <div class="panel"><div id="nodes-table"></div></div>
-      </section>
-      <section id="chapter-schema" class="chapter">
-        <h2>Schema</h2>
-        <div class="split">
-          <div class="panel"><div id="schema-table"></div></div>
-          <div class="panel"><pre id="schema-json">{}</pre></div>
-        </div>
-      </section>
-    </main>
+    <main id="book"></main>
   </div>
+
+  <script id="chapter-template" type="text/x-handlebars-template">
+    <article id="{{id}}" class="chapter" data-filter="{{filterText}}">
+      <div class="chapter-kicker">Chapter {{number}}</div>
+      <h2>{{title}}</h2>
+      <p class="chapter-intro">{{intro}}</p>
+      {{{body}}}
+    </article>
+  </script>
 
   <script>
     const FB = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app";
+    const COLORS = ["#0f766e", "#7c3aed", "#b45309", "#2563eb", "#be123c", "#15803d", "#9333ea", "#0369a1"];
+    const chartRefs = [];
     const state = {
+      snapshot: {},
+      threePop: {},
+      mambaExperiments: {},
+      events: {},
+      gpuHistory: {},
+      nodes: {},
+      teacherBlobs: {},
       experiments: {},
       streamsMeta: {},
-      nodes: {},
       schemas: {},
-      sealed: {},
       filter: "",
-      loadedAt: null,
     };
-
     const $ = (id) => document.getElementById(id);
-    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
-    })[c]);
-    const fmtTime = (ts) => {
-      if (!ts) return "";
-      const n = Number(ts);
-      if (!Number.isFinite(n)) return "";
+    const tpl = Handlebars.compile($("chapter-template").innerHTML);
+
+    Handlebars.registerHelper("safe", (html) => new Handlebars.SafeString(html));
+
+    function esc(v) {
+      return String(v ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+      })[c]);
+    }
+    function pct(v) {
+      const n = Number(v || 0);
+      return `${Math.round(n * 100)}%`;
+    }
+    function num(v) {
+      const n = Number(v || 0);
+      return Number.isFinite(n) ? n.toLocaleString() : "";
+    }
+    function ts(v) {
+      const n = Number(v || 0);
+      if (!n) return "";
       return new Date(n * 1000).toLocaleString();
-    };
-    const ageClass = (ts) => {
-      if (!ts) return "bad";
-      const age = Date.now() / 1000 - Number(ts);
+    }
+    function ageClass(t) {
+      const n = Number(t || 0);
+      if (!n) return "bad";
+      const age = Date.now() / 1000 - n;
       if (age < 120) return "good";
       if (age < 600) return "warn";
       return "bad";
-    };
-    const includesFilter = (...vals) => {
-      const q = state.filter.trim().toLowerCase();
-      if (!q) return true;
-      return vals.join(" ").toLowerCase().includes(q);
-    };
+    }
     async function get(path) {
       const res = await fetch(`${FB}/${path}.json`, { cache: "no-store" });
       if (!res.ok) throw new Error(`${path}: ${res.status}`);
       return await res.json();
     }
-    function flattenRuns() {
-      const rows = [];
+    async function getAll() {
+      $("load-meta").textContent = "Loading Firebase chapters...";
+      const [
+        snapshot, threePop, mambaExperiments, events, gpuHistory,
+        nodes, teacherBlobs, experiments, streamsMeta, schemas
+      ] = await Promise.all([
+        get("mamba3/snapshot").catch(() => ({})),
+        get("mamba3/three_pop").catch(() => ({})),
+        get("mamba3/experiments").catch(() => ({})),
+        get("mamba3/events").catch(() => ({})),
+        get("mamba3/gpu_history").catch(() => ({})),
+        get("mamba3/nodes").catch(() => ({})),
+        get("mamba3/teacher_blobs_meta").catch(() => ({})),
+        get("experiments").catch(() => ({})),
+        get("streams_meta").catch(() => ({})),
+        get("_schemas").catch(() => ({})),
+      ]);
+      Object.assign(state, {
+        snapshot: snapshot || {},
+        threePop: threePop || {},
+        mambaExperiments: mambaExperiments || {},
+        events: events || {},
+        gpuHistory: gpuHistory || {},
+        nodes: nodes || {},
+        teacherBlobs: teacherBlobs || {},
+        experiments: experiments || {},
+        streamsMeta: streamsMeta || {},
+        schemas: schemas || {},
+      });
+      $("load-meta").textContent = `Loaded ${new Date().toLocaleTimeString()}`;
+    }
+    function rows(obj) {
+      if (!obj) return [];
+      if (Array.isArray(obj)) {
+        return obj.map((v, i) => v == null ? null : { key: String(i), value: v }).filter(Boolean);
+      }
+      return Object.entries(obj).map(([key, value]) => ({ key, value }));
+    }
+    function table(headers, bodyRows, empty = "No data available") {
+      if (!bodyRows.length) return `<div class="empty">${empty}</div>`;
+      return `<table><thead><tr>${headers.map(h => `<th class="${h.cls || ""}">${esc(h.label)}</th>`).join("")}</tr></thead><tbody>${bodyRows.join("")}</tbody></table>`;
+    }
+    function statGrid(items) {
+      return `<div class="stat-grid">${items.map(([label, value]) => `<div class="stat"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join("")}</div>`;
+    }
+    function canvas(id, small = false) {
+      return `<div class="chart ${small ? "small" : ""}"><canvas id="${id}"></canvas></div>`;
+    }
+    function renderChart(id, config) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      chartRefs.push(new Chart(el, config));
+    }
+    function lineChart(id, labels, datasets, yTitle = "") {
+      renderChart(id, {
+        type: "line",
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: { legend: { position: "bottom", labels: { boxWidth: 10, font: { size: 10 } } } },
+          scales: {
+            x: { ticks: { maxTicksLimit: 8 } },
+            y: { title: { display: Boolean(yTitle), text: yTitle } }
+          }
+        }
+      });
+    }
+    function barChart(id, labels, data, label, max = 100) {
+      renderChart(id, {
+        type: "bar",
+        data: {
+          labels,
+          datasets: [{ label, data, backgroundColor: "#0f766e" }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          plugins: { legend: { display: false } },
+          scales: { y: { min: 0, max } }
+        }
+      });
+    }
+    function flattenLegacyExperiments() {
+      return rows(state.mambaExperiments).map(({ key, value }) => ({
+        id: key,
+        ...value,
+        cycles: rows(value?.cycles).map(r => ({ cycle: Number(r.key), ...(r.value || {}) }))
+          .filter(r => Number.isFinite(r.cycle))
+          .sort((a, b) => a.cycle - b.cycle),
+      })).sort((a, b) => (b.best_fresh || 0) - (a.best_fresh || 0));
+    }
+    function flattenExperimentRuns() {
+      const out = [];
       for (const [experimentId, exp] of Object.entries(state.experiments || {})) {
-        const runs = exp?.runs || {};
-        for (const [runId, run] of Object.entries(runs)) {
-          const meta = run?.meta || {};
-          rows.push({
+        for (const [runId, run] of Object.entries(exp?.runs || {})) {
+          out.push({
             experimentId,
             runId,
             name: exp?.meta?.name || experimentId,
-            kind: exp?.meta?.kind || meta.kind || "",
-            started: meta.started_at || exp?.meta?.started_at,
-            ended: meta.ended_at,
-            state: meta.final_state || run?.status?.state || "running",
-            purpose: meta.purpose || "",
-            git: meta.git_sha || exp?.meta?.git_sha || "",
+            kind: exp?.meta?.kind || "",
+            hypothesis: exp?.meta?.hypothesis || "",
+            meta: run?.meta || {},
+            status: run?.status || {},
           });
         }
       }
-      return rows.sort((a, b) => (b.started || 0) - (a.started || 0));
+      return out.sort((a, b) => (b.meta?.started_at || 0) - (a.meta?.started_at || 0));
     }
     function flattenStreams() {
-      const rows = [];
+      const out = [];
       for (const [experimentId, runs] of Object.entries(state.streamsMeta || {})) {
         for (const [runId, streams] of Object.entries(runs || {})) {
           for (const [stream, meta] of Object.entries(streams || {})) {
-            rows.push({
-              experimentId,
-              runId,
-              stream,
-              kind: meta.kind || "",
-              records: meta.current_record_count || 0,
-              bytes: meta.current_size_bytes || 0,
-              progress: meta.pack_progress_pct || 0,
-              lastPack: meta.last_pack_at,
-              lastFile: meta.last_pack_filename || "",
-              hfUser: meta.hf_user || "",
-              hfBucket: meta.hf_bucket || "",
-              prefix: meta.prefix || "",
-              browse: meta.url_browse_template || "",
-              sync: meta.url_hfsync_template || "",
-            });
+            out.push({ experimentId, runId, stream, ...(meta || {}) });
           }
         }
       }
-      return rows.sort((a, b) => (b.lastPack || 0) - (a.lastPack || 0));
+      return out.sort((a, b) => (b.last_pack_at || 0) - (a.last_pack_at || 0));
     }
-    function flattenNodes() {
-      return Object.entries(state.nodes || {}).map(([id, n]) => ({
+    function eventRows(limit = 80) {
+      return rows(state.events).map(({ key, value }) => ({ key, ...(value || {}) }))
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).slice(0, limit);
+    }
+    function addChapter(chapters, id, title, intro, body) {
+      chapters.push({
         id,
-        status: n?.status || "",
-        last: n?.last_heartbeat || 0,
-        backends: (n?.backends || []).join(", "),
-        gpu: n?.gpu_name || n?.arch || "",
-        vram: n?.vram_mb || 0,
-        workingDir: n?.working_dir || "",
-      })).sort((a, b) => (b.last || 0) - (a.last || 0));
+        number: chapters.length + 1,
+        title,
+        intro,
+        body,
+        filterText: `${title} ${intro} ${body.replace(/<[^>]+>/g, " ")}`.toLowerCase(),
+      });
     }
-    function table(headers, rows, empty = "No data") {
-      if (!rows.length) return `<div class="empty">${empty}</div>`;
-      return `<table><thead><tr>${headers.map(h => `<th class="${h.cls || ""}">${esc(h.label)}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
-    }
-    function renderOverview() {
-      const runs = flattenRuns();
+    function buildBook() {
+      chartRefs.splice(0).forEach(c => c.destroy());
+      const chapters = [];
+      const snapshot = state.snapshot || {};
+      const three = state.threePop || {};
+      const tasks = Object.entries(three.tasks || snapshot.tasks || {})
+        .map(([task, info]) => ({ task, ...(info || {}) }))
+        .sort((a, b) => (b.best_accuracy ?? b.acc ?? 0) - (a.best_accuracy ?? a.acc ?? 0));
+      const mastered = tasks.filter(t => t.status === "mastered" || Number(t.best_accuracy ?? t.acc ?? 0) >= 0.99);
+      const legacy = flattenLegacyExperiments();
+      const runs = flattenExperimentRuns();
       const streams = flattenStreams();
-      const nodes = flattenNodes();
-      const activeRuns = runs.filter(r => !r.ended && r.state !== "completed").length;
-      const liveStreams = streams.filter(s => s.records > 0).length;
-      const onlineNodes = nodes.filter(n => ageClass(n.last) === "good").length;
-      const schemas = Object.keys(state.schemas || {}).length;
-      $("overview-grid").innerHTML = [
-        ["Runs", runs.length],
-        ["Active", activeRuns],
-        ["Live streams", liveStreams],
-        ["Online nodes", `${onlineNodes}/${nodes.length}`],
-        ["Schema groups", schemas],
-        ["Archived shards", streams.filter(s => s.lastFile).length],
-        ["Experiments", Object.keys(state.experiments || {}).length],
-        ["V2 records", Object.keys(state.sealed || {}).length],
-      ].map(([label, value]) => `<div class="stat"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join("");
-      renderRunList("recent-runs", runs.slice(0, 10));
-      renderStreamList("recent-streams", streams.slice(0, 10));
+      const events = eventRows();
+      const nodes = rows(state.nodes).map(({ key, value }) => ({ id: key, ...(value || {}) }));
+      const schemas = rows(state.schemas);
+
+      addChapter(chapters, "chapter-prologue", "Prologue: System State",
+        "This opening chapter summarizes the whole lab using the current Firebase feed: task mastery, active workers, archive streams, nodes, and recent events.",
+        statGrid([
+          ["Tasks tracked", tasks.length || (snapshot.leaderboard || []).length],
+          ["Mastered", mastered.length],
+          ["Workers", three.n_workers ?? snapshot.n_running ?? 0],
+          ["Teachers", three.n_teachers ?? snapshot?.three_pop?.n_teachers ?? 0],
+          ["Legacy experiments", legacy.length],
+          ["Lab runs", runs.length],
+          ["Streams", streams.length],
+          ["Schemas", schemas.length],
+        ]) +
+        `<div class="grid-2">
+          <div class="panel"><h3>Current Task Accuracy</h3>${canvas("chart-overview-tasks")}</div>
+          <div class="panel"><h3>GPU / Memory History</h3>${canvas("chart-overview-gpu")}</div>
+        </div>
+        <div class="panel"><h3>Recent Events</h3>${renderEvents(events.slice(0, 18))}</div>`
+      );
+
+      addChapter(chapters, "chapter-curriculum", "Curriculum Map",
+        "The three-population curriculum is the most populated existing schema. This chapter uses `/mamba3/three_pop`, `/mamba3/snapshot`, teacher metadata, and events before asking for any new schema.",
+        `<div class="panel">${table([
+          { label: "Task" }, { label: "Status" }, { label: "Accuracy", cls: "right" },
+          { label: "Cycles", cls: "right" }, { label: "Node" }, { label: "Config" }
+        ], tasks.map(t => {
+          const acc = Number(t.best_accuracy ?? t.acc ?? 0);
+          const cls = acc >= .99 ? "good" : acc >= .7 ? "warn" : "bad";
+          const cfg = t.config || {};
+          return `<tr><td class="mono">${esc(t.task)}</td><td><span class="pill ${cls}">${esc(t.status || "tracked")}</span></td><td class="right">${pct(acc)}</td><td class="right">${num(t.total_cycles)}</td><td>${esc(t.node || "")}</td><td class="mono">d=${esc(cfg.d_model || "")} L=${esc(cfg.n_kernel_layers || "")} ${esc(cfg.optimizer || "")}</td></tr>`;
+        }))}</div>
+        <div class="grid-2">
+          <div class="panel"><h3>Leaderboard</h3>${canvas("chart-curriculum-leaderboard")}</div>
+          <div class="panel"><h3>Teacher Blobs</h3>${renderTeacherBlobs()}</div>
+        </div>`
+      );
+
+      addChapter(chapters, "chapter-legacy-experiments", "Evolution Experiments",
+        "Each row here is one legacy `/mamba3/experiments/<task>` record. The charts recover the old fresh-accuracy and loss curves instead of hiding them behind raw tables.",
+        `<div class="panel">${table([
+          { label: "Experiment" }, { label: "Best Fresh", cls: "right" }, { label: "Cycle", cls: "right" }, { label: "Status" }, { label: "History" }
+        ], legacy.map(exp => `<tr><td class="mono"><a href="#exp-${esc(exp.id)}">${esc(exp.id)}</a></td><td class="right">${pct(exp.best_fresh)}</td><td class="right">${num(exp.cycle)}</td><td><span class="pill">${esc(exp.status || "")}</span></td><td>${num(exp.cycles.length)} points</td></tr>`))}</div>`
+      );
+
+      for (const [i, exp] of legacy.entries()) {
+        if (state.filter && !exp.id.toLowerCase().includes(state.filter)) continue;
+        const last = exp.cycles[exp.cycles.length - 1] || {};
+        const body = statGrid([
+          ["Best fresh", pct(exp.best_fresh)],
+          ["Cycles", exp.cycles.length],
+          ["Last fresh", pct(last.fresh)],
+          ["Last loss", Number(last.loss || 0).toFixed(4)],
+        ]) +
+        `<div class="grid-2">
+          <div class="panel"><h3>Fresh Accuracy</h3>${canvas(`chart-exp-fresh-${i}`)}</div>
+          <div class="panel"><h3>Loss</h3>${canvas(`chart-exp-loss-${i}`)}</div>
+        </div>
+        <div class="panel"><h3>Experiment Events</h3>${renderEvents(events.filter(e => e.exp_id === exp.id).slice(0, 18))}</div>`;
+        addChapter(chapters, `exp-${exp.id}`, `Experiment: ${exp.id}`,
+          "A sequential experiment chapter reconstructed from the existing cycle history and event stream.",
+          body);
+      }
+
+      addChapter(chapters, "chapter-lab-runs", "Lab Runs and Streams",
+        "This chapter uses the newer `/experiments`, `/streams_meta`, and archive pointers written by the current Lab run facade. It keeps the schema stable while making Firebase and Hugging Face feel like one surface.",
+        `<div class="panel">${table([
+          { label: "Run" }, { label: "Kind" }, { label: "State" }, { label: "Started" }, { label: "Purpose" }
+        ], runs.map(r => `<tr><td><div class="mono">${esc(r.experimentId)}</div><div class="mono">${esc(r.runId)}</div></td><td>${esc(r.kind)}</td><td><span class="pill ${r.meta.final_state === "completed" ? "good" : "warn"}">${esc(r.meta.final_state || r.status.state || "running")}</span></td><td>${esc(ts(r.meta.started_at))}</td><td>${esc(r.meta.purpose || r.hypothesis || "")}</td></tr>`))}</div>
+        <div class="panel"><h3>Stream Archive Pointers</h3>${renderStreams(streams)}</div>`
+      );
+
+      addChapter(chapters, "chapter-archive", "Archive",
+        "The archive chapter uses existing `streams_meta` Hugging Face pointers and teacher blob metadata. It is intentionally v1-first; v2 sealed shard records can enrich this later.",
+        `<div class="grid-2">
+          <div class="panel"><h3>Hugging Face Stream Shards</h3>${renderArchive(streams)}</div>
+          <div class="panel"><h3>Firebase Teacher Blob Manifests</h3>${renderTeacherBlobs()}</div>
+        </div>`
+      );
+
+      addChapter(chapters, "chapter-infrastructure", "Infrastructure",
+        "Nodes, schemas, and protocol documents are part of the story because they explain why data appears where it does.",
+        `<div class="grid-2">
+          <div class="panel"><h3>Nodes</h3>${renderNodes(nodes)}</div>
+          <div class="panel"><h3>Published Schemas</h3>${renderSchemas()}</div>
+        </div>`
+      );
+
+      const q = state.filter.trim().toLowerCase();
+      const visible = q ? chapters.filter(ch => ch.filterText.includes(q)) : chapters;
+      $("book").innerHTML = visible.map(ch => tpl(ch)).join("") || `<div class="empty">No chapters match the filter.</div>`;
+      $("toc").innerHTML = visible.map(ch => `<a href="#${esc(ch.id)}">Chapter ${ch.number}: ${esc(ch.title.replace(/^Chapter \d+:\s*/, ""))}</a>`).join("");
+      drawCharts(legacy, tasks);
     }
-    function renderRunList(target, rows) {
-      const filtered = rows.filter(r => includesFilter(r.experimentId, r.runId, r.kind, r.purpose));
-      $(target).innerHTML = table([
-        { label: "Run" }, { label: "Kind" }, { label: "State" }, { label: "Started" }
-      ], filtered.map(r => `<tr><td><div class="mono">${esc(r.experimentId)}</div><div class="mono">${esc(r.runId)}</div></td><td>${esc(r.kind)}</td><td><span class="pill ${r.state === "completed" ? "good" : "warn"}">${esc(r.state)}</span></td><td>${esc(fmtTime(r.started))}</td></tr>`));
+    function renderEvents(events) {
+      if (!events.length) return `<div class="empty">No matching events.</div>`;
+      return events.map(e => `<div class="event"><div class="mono">${esc(ts(e.timestamp))}</div><div><span class="pill">${esc(e.type || e.event_type || "")}</span></div><div><b>${esc(e.exp_id || "")}</b> ${esc(e.details || "")}</div></div>`).join("");
     }
-    function renderStreamList(target, rows) {
-      const filtered = rows.filter(s => includesFilter(s.experimentId, s.runId, s.stream, s.kind));
-      $(target).innerHTML = table([
-        { label: "Stream" }, { label: "Open" }, { label: "Packed" }
-      ], filtered.map(s => `<tr><td><div class="mono">${esc(s.stream)}</div><div class="mono">${esc(s.runId)}</div></td><td class="right">${esc(s.records)}</td><td>${s.lastFile ? `<span class="pill good">${esc(s.lastFile)}</span>` : `<span class="pill warn">open</span>`}</td></tr>`));
+    function renderTeacherBlobs() {
+      const blobs = rows(state.teacherBlobs).map(({ key, value }) => ({ task: key, ...(value || {}) }))
+        .sort((a, b) => a.task.localeCompare(b.task));
+      return table([
+        { label: "Task" }, { label: "Size", cls: "right" }, { label: "Uploaded" }, { label: "SHA" }
+      ], blobs.map(b => `<tr><td class="mono">${esc(b.task)}</td><td class="right">${num(b.size)}</td><td>${esc(ts(b.uploaded_at))}</td><td class="mono">${esc(String(b.sha256 || "").slice(0, 16))}</td></tr>`), "No teacher blob manifests.");
     }
-    function renderExperiments() {
-      renderRunList("experiments-table", flattenRuns());
+    function renderStreams(streams) {
+      return table([
+        { label: "Stream" }, { label: "Run" }, { label: "Open", cls: "right" }, { label: "Pack" }, { label: "Last Shard" }
+      ], streams.map(s => `<tr><td><span class="pill">${esc(s.stream)}</span></td><td><div class="mono">${esc(s.experiment_id || s.experimentId)}</div><div class="mono">${esc(s.run_id || s.runId)}</div></td><td class="right">${num(s.current_record_count)}</td><td>${esc(s.pack_progress_pct || 0)}%</td><td class="mono">${esc(s.last_pack_filename || "open")}</td></tr>`));
     }
-    function renderStreams() {
-      const rows = flattenStreams().filter(s => includesFilter(s.experimentId, s.runId, s.stream, s.kind, s.prefix));
-      $("streams-table").innerHTML = table([
-        { label: "Stream" }, { label: "Run" }, { label: "Open Records", cls: "right" },
-        { label: "Bytes", cls: "right" }, { label: "Pack" }, { label: "Last Pack" }
-      ], rows.map(s => `<tr><td><span class="pill">${esc(s.stream)}</span></td><td><div class="mono">${esc(s.experimentId)}</div><div class="mono">${esc(s.runId)}</div></td><td class="right">${esc(s.records)}</td><td class="right">${esc(s.bytes)}</td><td>${esc(s.progress)}%</td><td>${s.lastFile ? `<div>${esc(fmtTime(s.lastPack))}</div><div class="mono">${esc(s.lastFile)}</div>` : `<span class="pill warn">open</span>`}</td></tr>`));
-    }
-    function renderArchive() {
-      const rows = flattenStreams().filter(s => includesFilter(s.experimentId, s.runId, s.stream, s.prefix, s.lastFile));
-      $("archive-table").innerHTML = table([
-        { label: "Shard" }, { label: "HF Bucket" }, { label: "Prefix" }, { label: "Links" }
-      ], rows.map(s => {
-        const browse = s.lastFile && s.browse ? s.browse.replace("{filename}", s.lastFile) : "";
-        const sync = s.lastFile && s.sync ? s.sync.replace("{filename}", s.lastFile) : "";
-        return `<tr><td><div class="mono">${esc(s.lastFile || "open")}</div><div>${esc(s.stream)}</div></td><td class="mono">${esc(s.hfUser)}/${esc(s.hfBucket)}</td><td class="mono">${esc(s.prefix)}</td><td>${browse ? `<a href="${esc(browse)}" target="_blank" rel="noreferrer">browse</a>` : ""}${sync ? `<div class="mono">${esc(sync)}</div>` : ""}</td></tr>`;
+    function renderArchive(streams) {
+      return table([
+        { label: "Shard" }, { label: "Bucket" }, { label: "Prefix" }, { label: "Link" }
+      ], streams.map(s => {
+        const file = s.last_pack_filename;
+        const browse = file && s.url_browse_template ? s.url_browse_template.replace("{filename}", file) : "";
+        return `<tr><td class="mono">${esc(file || "open")}</td><td class="mono">${esc(s.hf_user)}/${esc(s.hf_bucket)}</td><td class="mono">${esc(s.prefix)}</td><td>${browse ? `<a href="${esc(browse)}" target="_blank" rel="noreferrer">open</a>` : ""}</td></tr>`;
       }));
     }
-    function renderNodes() {
-      const rows = flattenNodes().filter(n => includesFilter(n.id, n.status, n.backends, n.gpu, n.workingDir));
-      $("nodes-table").innerHTML = table([
-        { label: "Node" }, { label: "Status" }, { label: "Backends" }, { label: "VRAM", cls: "right" }, { label: "Working Dir" }
-      ], rows.map(n => `<tr><td><div class="mono">${esc(n.id)}</div><div>${esc(n.gpu)}</div></td><td><span class="pill ${ageClass(n.last)}">${esc(n.status || ageClass(n.last))}</span><div>${esc(fmtTime(n.last))}</div></td><td>${esc(n.backends)}</td><td class="right">${esc(n.vram ? Math.round(n.vram / 1024) + " GB" : "")}</td><td class="mono">${esc(n.workingDir)}</td></tr>`));
+    function renderNodes(nodes) {
+      return table([
+        { label: "Node" }, { label: "Status" }, { label: "Backends" }, { label: "VRAM", cls: "right" }
+      ], nodes.sort((a, b) => (b.last_heartbeat || 0) - (a.last_heartbeat || 0)).map(n => `<tr><td><div class="mono">${esc(n.id)}</div><div>${esc(n.gpu_name || n.arch || "")}</div></td><td><span class="pill ${ageClass(n.last_heartbeat)}">${esc(n.status || ageClass(n.last_heartbeat))}</span><div>${esc(ts(n.last_heartbeat))}</div></td><td>${esc((n.backends || []).join(", "))}</td><td class="right">${n.vram_mb ? `${Math.round(n.vram_mb / 1024)} GB` : ""}</td></tr>`));
     }
-    function renderSchema() {
-      const groups = state.schemas || {};
-      const rows = [];
-      for (const [name, versions] of Object.entries(groups)) {
+    function renderSchemas() {
+      const out = [];
+      for (const [name, versions] of Object.entries(state.schemas || {})) {
         for (const [version, doc] of Object.entries(versions || {})) {
-          rows.push(`<tr data-schema="${esc(name)}" data-version="${esc(version)}"><td class="mono">${esc(name)}</td><td class="mono">${esc(version)}</td><td>${esc(doc?.title || "")}</td></tr>`);
+          out.push(`<tr><td class="mono">${esc(name)}</td><td class="mono">${esc(version)}</td><td>${esc(doc.title || "")}</td></tr>`);
         }
       }
-      $("schema-table").innerHTML = table([{ label: "Name" }, { label: "Version" }, { label: "Title" }], rows);
-      $("schema-table").querySelectorAll("tr[data-schema]").forEach(row => {
-        row.addEventListener("click", () => {
-          const name = row.dataset.schema;
-          const version = row.dataset.version;
-          $("schema-json").textContent = JSON.stringify(groups?.[name]?.[version] || {}, null, 2);
-        });
+      return table([{ label: "Name" }, { label: "Version" }, { label: "Title" }], out);
+    }
+    function drawCharts(legacy, tasks) {
+      const topTasks = tasks.slice(0, 30);
+      barChart("chart-overview-tasks", topTasks.map(t => t.task), topTasks.map(t => Math.round(Number(t.best_accuracy ?? t.acc ?? 0) * 100)), "Accuracy");
+      const gpu = rows(state.gpuHistory).map(({ key, value }) => ({ key, ...(value || {}) })).slice(-120);
+      lineChart("chart-overview-gpu", gpu.map(g => g.key), [
+        { label: "GPU", data: gpu.map(g => Number(g.gpu || 0)), borderColor: COLORS[0], backgroundColor: "transparent", pointRadius: 0 },
+        { label: "Memory", data: gpu.map(g => Number(g.mem || 0)), borderColor: COLORS[2], backgroundColor: "transparent", pointRadius: 0 },
+        { label: "Workers x5", data: gpu.map(g => Number(g.workers || 0) * 5), borderColor: COLORS[1], backgroundColor: "transparent", pointRadius: 0 },
+      ], "%");
+      barChart("chart-curriculum-leaderboard", topTasks.map(t => t.task), topTasks.map(t => Math.round(Number(t.best_accuracy ?? t.acc ?? 0) * 100)), "Best");
+      legacy.forEach((exp, i) => {
+        if (state.filter && !exp.id.toLowerCase().includes(state.filter)) return;
+        const labels = exp.cycles.map(c => c.cycle);
+        lineChart(`chart-exp-fresh-${i}`, labels, [
+          { label: "fresh", data: exp.cycles.map(c => Math.round(Number(c.fresh || 0) * 100)), borderColor: COLORS[0], backgroundColor: "transparent", pointRadius: 0 }
+        ], "%");
+        lineChart(`chart-exp-loss-${i}`, labels, [
+          { label: "loss", data: exp.cycles.map(c => Number(c.loss || 0)), borderColor: COLORS[2], backgroundColor: "transparent", pointRadius: 0 }
+        ], "loss");
       });
-      const firstName = Object.keys(groups)[0];
-      if (firstName) {
-        const firstVersion = Object.keys(groups[firstName] || {})[0];
-        $("schema-json").textContent = JSON.stringify(groups[firstName][firstVersion], null, 2);
-      } else {
-        $("schema-json").textContent = "{}";
-      }
     }
-    function renderAll() {
-      renderOverview();
-      renderExperiments();
-      renderStreams();
-      renderArchive();
-      renderNodes();
-      renderSchema();
+    function applyFilter() {
+      state.filter = $("filter").value.trim().toLowerCase();
+      buildBook();
     }
-    async function refresh() {
-      $("load-meta").textContent = "Loading...";
-      const [experiments, streamsMeta, nodes, schemas, sealed] = await Promise.all([
-        get("experiments").catch(() => ({})),
-        get("streams_meta").catch(() => ({})),
-        get("mamba3/nodes").catch(() => ({})),
-        get("_schemas").catch(() => ({})),
-        get("archive_v2/sealed_shards").catch(() => ({})),
-      ]);
-      state.experiments = experiments || {};
-      state.streamsMeta = streamsMeta || {};
-      state.nodes = nodes || {};
-      state.schemas = schemas || {};
-      state.sealed = sealed || {};
-      state.loadedAt = new Date();
-      $("load-meta").textContent = `Loaded ${state.loadedAt.toLocaleTimeString()}`;
-      renderAll();
-    }
-    document.querySelectorAll(".nav button").forEach(btn => {
-      btn.addEventListener("click", () => {
-        document.querySelectorAll(".nav button").forEach(b => b.setAttribute("aria-current", "false"));
-        btn.setAttribute("aria-current", "true");
-        document.querySelectorAll(".chapter").forEach(ch => ch.classList.remove("active"));
-        $(`chapter-${btn.dataset.chapter}`).classList.add("active");
-      });
-    });
-    $("search").addEventListener("input", (e) => {
-      state.filter = e.target.value;
-      renderAll();
-    });
-    $("refresh").addEventListener("click", () => refresh().catch(err => {
+    $("filter").addEventListener("input", applyFilter);
+    $("refresh").addEventListener("click", () => getAll().then(buildBook).catch(err => {
       $("load-meta").textContent = `Load failed: ${err.message}`;
     }));
-    refresh().catch(err => {
+    getAll().then(buildBook).catch(err => {
       $("load-meta").textContent = `Load failed: ${err.message}`;
     });
   </script>
