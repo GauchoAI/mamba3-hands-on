@@ -218,3 +218,78 @@ solver returns token biases
 frozen Phi emits the answer tokens
 boundary releases control back to Phi
 ```
+
+### Iteration 7 - natural prompts, hidden-state router
+
+This addresses the main criticism of the visible protocol demos.
+
+New script:
+
+```bash
+.venv/bin/python experiments/11_phi_cold_composition/phi_natural_router.py
+```
+
+Setup:
+
+```text
+frozen microsoft/Phi-3-mini-4k-instruct
+tiny router trained on Phi final hidden state
+15 labeled natural prompts
+router params: 15,365
+router train time: 0.45s
+Phi trainable params: 0
+no <LAB:...> protocol in user prompts
+```
+
+Result:
+
+```text
+baseline pass: 1/4 task prompts
+natural-router port pass: 4/4 task prompts
+negative natural prompt classified as none
+```
+
+Verbatim examples:
+
+```text
+Prompt:
+For each mark here, write one letter a: § § § § § §
+
+Baseline:
+Answer:
+
+a
+
+Port:
+Answer:  a a a a a a
+```
+
+```text
+Prompt:
+Evaluate this boolean expression: ( true and false ) or ( not false )
+
+Baseline:
+explains the steps but does not emit the exact verified answer in the checked span
+
+Port:
+Answer:  TRUE
+```
+
+```text
+Prompt:
+Solve Tower of Hanoi with 4 disks from A to C.
+
+Baseline:
+starts a prose solution and does not produce the verified full move trace
+
+Port:
+Answer:  A>B A>C B>C A>B C>A C>B A>B A>C B>C B>A C>A B>C A>B A>C B>C
+```
+
+Interpretation:
+
+This is a better proof than the protocol-only demo. Phi is not asked to emit a
+tool call. A tiny learned router reads Phi hidden state and selects a reasoning
+organ. The solver output is still injected through token bias, so Phi remains
+the emitting surface. This is not yet a learned semantic router at scale, but it
+does remove the visible formal language from the user path.

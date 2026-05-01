@@ -54,3 +54,5 @@ all four cases. Phi trainable parameters: `0`.
   before the forward-pass intervention.
 - Hanoi: `<LAB:hanoi> 3 :` emits `A>C A>B C>B A>C B>A B>C A>C`
   through the same port, then releases control.
+- Natural hidden-state router: normal user prompts are classified from Phi's
+  final hidden state, then solvers emit answers without visible protocol tokens.
