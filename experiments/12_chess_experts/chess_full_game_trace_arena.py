@@ -1,0 +1,284 @@
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import time
+from dataclasses import dataclass
+from pathlib import Path
+
+import chess
+import torch
+import torch.nn.functional as F
+
+import chess_jepa_bridge as jepa
+import chess_motif_generalization as motif
+from chess_competition_sweep import train_jepa_encoder
+from chess_full_game_arena import Player, material_score, play_game, warmup_board
+from chess_policy_arena import JepaPolicy
+
+
+HERE = Path(__file__).resolve().parent
+ARTIFACT = HERE / "artifacts" / "chess_full_game_trace_arena_result.json"
+
+
+@dataclass(frozen=True)
+class TraceCase:
+    fen: str
+    move_uci: str
+    phase: str
+    ply: int
+
+
+def mobility(board: chess.Board) -> int:
+    return board.legal_moves.count()
+
+
+def king_safety(board: chess.Board, color: chess.Color) -> float:
+    king = board.king(color)
+    if king is None:
+        return -8.0
+    attackers = board.attackers(not color, king)
+    score = -1.5 * len(attackers)
+    file = chess.square_file(king)
+    rank = chess.square_rank(king)
+    home_rank = 0 if color == chess.WHITE else 7
+    if rank == home_rank and file in (0, 1, 2, 6, 7):
+        score += 0.4
+    return score
+
+
+def phase(board: chess.Board) -> str:
+    plies = (board.fullmove_number - 1) * 2 + (0 if board.turn == chess.WHITE else 1)
+    queens = sum(1 for piece in board.piece_map().values() if piece.piece_type == chess.QUEEN)
+    pieces = len(board.piece_map())
+    if plies < 16 and queens >= 2:
+        return "opening"
+    if pieces <= 12 or queens == 0:
+        return "endgame"
+    return "middlegame"
+
+
+def teacher_score(board: chess.Board, move: chess.Move, seen: dict[str, int]) -> float:
+    before_material = material_score(board)
+    before_mobility = mobility(board)
+    after = board.copy(stack=False)
+    after.push(move)
+    if after.is_checkmate():
+        return 1_000.0
+    if after.is_stalemate() or after.can_claim_draw():
+        draw_penalty = -1.2
+    else:
+        draw_penalty = 0.0
+
+    material_delta = material_score(after) - before_material
+    if board.turn == chess.BLACK:
+        material_delta = -material_delta
+    mobility_delta = mobility(after) - before_mobility
+    if board.turn == chess.BLACK:
+        mobility_delta = -mobility_delta
+    score = 2.0 * material_delta
+    score += 0.05 * mobility_delta
+    score += 0.8 if board.gives_check(move) else 0.0
+    score += 0.7 if board.is_castling(move) else 0.0
+    score += 0.8 if move.promotion is not None else 0.0
+    score += 0.12 * (3.5 - abs(chess.square_file(move.to_square) - 3.5))
+    score += 0.12 * (3.5 - abs(chess.square_rank(move.to_square) - 3.5))
+    score += king_safety(after, board.turn) - king_safety(board, board.turn)
+    score -= 1.5 * seen.get(" ".join(after.fen().split(" ")[:4]), 0)
+    score += draw_penalty
+    return score
+
+
+def teacher_move(board: chess.Board, seen: dict[str, int], rng: random.Random, temperature: float) -> chess.Move:
+    scored = [(teacher_score(board, move, seen), move) for move in board.legal_moves]
+    scored.sort(key=lambda item: item[0], reverse=True)
+    if temperature <= 0:
+        return scored[0][1]
+    top = scored[: min(6, len(scored))]
+    best = top[0][0]
+    weights = [pow(2.718281828, (score - best) / temperature) for score, _ in top]
+    total = sum(weights)
+    pick = rng.random() * total
+    running = 0.0
+    for weight, (_, move) in zip(weights, top):
+        running += weight
+        if running >= pick:
+            return move
+    return top[0][1]
+
+
+def generate_trace_cases(args) -> list[TraceCase]:
+    rng = random.Random(args.seed)
+    cases: list[TraceCase] = []
+    for game_idx in range(args.teacher_games):
+        board = warmup_board(args.seed + game_idx, args.opening_plies)
+        seen = {" ".join(board.fen().split(" ")[:4]): 1}
+        for ply in range(args.teacher_max_plies):
+            if board.is_game_over(claim_draw=True):
+                break
+            move = teacher_move(board, seen, rng, args.teacher_temperature)
+            cases.append(TraceCase(board.fen(), move.uci(), phase(board), ply))
+            board.push(move)
+            key = " ".join(board.fen().split(" ")[:4])
+            seen[key] = seen.get(key, 0) + 1
+            if len(cases) >= args.max_trace_cases:
+                return cases
+    return cases
+
+
+def train_direct_policy(cases: list[TraceCase], args, dev: str) -> motif.MateMLP:
+    x_train = torch.stack([motif.board_features(chess.Board(case.fen)) for case in cases]).to(dev)
+    y_train = torch.tensor(
+        [motif.move_class(chess.Move.from_uci(case.move_uci)) for case in cases],
+        dtype=torch.long,
+        device=dev,
+    )
+    model = motif.MateMLP(x_train.shape[-1], args.policy_width).to(dev)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    for _ in range(args.policy_epochs):
+        order = torch.randperm(x_train.shape[0], device=dev)
+        for start in range(0, x_train.shape[0], args.batch_size):
+            idx = order[start : start + args.batch_size]
+            loss = F.cross_entropy(model(x_train[idx]), y_train[idx])
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
+    model.eval()
+    return model
+
+
+def train_jepa_trace_policy(encoder: jepa.Encoder, cases: list[TraceCase], args, dev: str) -> JepaPolicy:
+    x_train = torch.stack([jepa.board_to_tensor(chess.Board(case.fen)) for case in cases]).to(dev)
+    y_train = torch.tensor(
+        [motif.move_class(chess.Move.from_uci(case.move_uci)) for case in cases],
+        dtype=torch.long,
+        device=dev,
+    )
+    policy = JepaPolicy(encoder, args.latent_dim, args.policy_width).to(dev)
+    if args.freeze_encoder:
+        for param in policy.encoder.parameters():
+            param.requires_grad_(False)
+    opt = torch.optim.AdamW((p for p in policy.parameters() if p.requires_grad), lr=args.lr, weight_decay=1e-4)
+    for _ in range(args.policy_epochs):
+        order = torch.randperm(x_train.shape[0], device=dev)
+        for start in range(0, x_train.shape[0], args.batch_size):
+            idx = order[start : start + args.batch_size]
+            loss = F.cross_entropy(policy(x_train[idx]), y_train[idx])
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
+    policy.eval()
+    return policy
+
+
+def trace_summary(cases: list[TraceCase]) -> dict:
+    phases: dict[str, int] = {}
+    for case in cases:
+        phases[case.phase] = phases.get(case.phase, 0) + 1
+    return {
+        "cases": len(cases),
+        "phases": phases,
+    }
+
+
+def game_summary(games: list[dict]) -> dict:
+    wins = {"direct_full_trace": 0, "jepa_full_trace": 0, "draw": 0}
+    terminations: dict[str, int] = {}
+    plies = 0
+    for game in games:
+        winner = game["winner"]
+        if winner in wins:
+            wins[winner] += 1
+        else:
+            wins["draw"] += 1
+        terminations[game["termination"]] = terminations.get(game["termination"], 0) + 1
+        plies += game["plies"]
+    decisive = wins["direct_full_trace"] + wins["jepa_full_trace"]
+    return {
+        "games": len(games),
+        "direct_full_trace_wins": wins["direct_full_trace"],
+        "jepa_full_trace_wins": wins["jepa_full_trace"],
+        "draws": wins["draw"],
+        "decisive_games": decisive,
+        "avg_plies": round(plies / max(len(games), 1), 2),
+        "terminations": terminations,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=211)
+    parser.add_argument("--teacher-games", type=int, default=180)
+    parser.add_argument("--teacher-max-plies", type=int, default=120)
+    parser.add_argument("--max-trace-cases", type=int, default=9000)
+    parser.add_argument("--teacher-temperature", type=float, default=0.08)
+    parser.add_argument("--games", type=int, default=32)
+    parser.add_argument("--max-plies", type=int, default=240)
+    parser.add_argument("--opening-plies", type=int, default=4)
+    parser.add_argument("--jepa-pairs", type=int, default=12000)
+    parser.add_argument("--jepa-val-pairs", type=int, default=1200)
+    parser.add_argument("--jepa-width", type=int, default=384)
+    parser.add_argument("--latent-dim", type=int, default=96)
+    parser.add_argument("--jepa-epochs", type=int, default=32)
+    parser.add_argument("--policy-width", type=int, default=768)
+    parser.add_argument("--policy-epochs", type=int, default=120)
+    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--freeze-encoder", action="store_true")
+    parser.add_argument("--lr", type=float, default=2e-3)
+    parser.add_argument("--blend", type=float, default=0.86)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--anti-repetition", type=float, default=2.5)
+    args = parser.parse_args()
+
+    t0 = time.time()
+    dev = motif.device()
+    traces = generate_trace_cases(args)
+    direct = Player("direct_full_trace", train_direct_policy(traces, args, dev), "motif")
+    encoder, bridge_metrics = train_jepa_encoder(args, dev, args.seed)
+    jepa_player = Player("jepa_full_trace", train_jepa_trace_policy(encoder, traces, args, dev), "jepa")
+
+    games = []
+    for game_idx in range(args.games):
+        pair_idx = game_idx // 2
+        start = warmup_board(args.seed + 50_000 + pair_idx, args.opening_plies)
+        if game_idx % 2 == 0:
+            white, black = direct, jepa_player
+        else:
+            white, black = jepa_player, direct
+        games.append(
+            play_game(
+                white,
+                black,
+                start,
+                args.seed + 70_000 + game_idx,
+                args.max_plies,
+                dev,
+                args.blend,
+                args.temperature,
+                args.anti_repetition,
+            )
+        )
+
+    payload = {
+        "status": "full_game_trace_arena",
+        "scope": "full legal games after training both policies on generated full-game state/action traces",
+        "device": dev,
+        "elapsed_s": round(time.time() - t0, 3),
+        "config": vars(args),
+        "trace_summary": trace_summary(traces),
+        "jepa_bridge_pretrain": {
+            "cosine_mean": round(float(bridge_metrics["cosine_mean"]), 6),
+            "nearest_neighbor_top1": round(float(bridge_metrics["nearest_neighbor_top1"]), 4),
+            "nearest_neighbor_top5": round(float(bridge_metrics["nearest_neighbor_top5"]), 4),
+        },
+        "summary": game_summary(games),
+        "games": games,
+    }
+    ARTIFACT.parent.mkdir(exist_ok=True)
+    ARTIFACT.write_text(json.dumps(payload, indent=2) + "\n")
+    print(json.dumps(payload, indent=2))
+
+
+if __name__ == "__main__":
+    main()

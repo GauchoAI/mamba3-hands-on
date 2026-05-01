@@ -486,3 +486,106 @@ draw: 15
 The next improvement should train on full-game state/action traces, not only
 mate-in-one motifs. The arena now exists, so future experts can be judged by
 game result rather than by tactical classification alone.
+
+### Iteration 11 - full-game trace policies
+
+Implemented:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_full_game_trace_arena.py \
+  --teacher-games 180 \
+  --max-trace-cases 9000 \
+  --games 32 \
+  --max-plies 240 \
+  --jepa-pairs 12000 \
+  --jepa-val-pairs 1200 \
+  --jepa-epochs 32 \
+  --policy-epochs 120 \
+  --freeze-encoder
+```
+
+This directly attacks the previous limitation. Instead of training only on
+mate-in-one tactical motifs, the script generates full-game state/action traces
+with a shallow legal chess teacher:
+
+```text
+current board
+legal move candidates
+material delta
+check/checkmate pressure
+castling and promotion bonuses
+king safety
+mobility
+anti-repetition penalty
+selected teacher move
+```
+
+Then it trains two policies on the same trace set:
+
+```text
+direct_full_trace: board features -> move class
+jepa_full_trace:   frozen JEPA board encoder -> move class
+```
+
+Trace curriculum:
+
+```text
+trace cases: 9,000
+opening: 725
+middlegame: 961
+endgame: 7,314
+```
+
+Full-game result:
+
+```text
+games: 32
+direct_full_trace wins: 7
+JEPA_full_trace wins: 9
+draws: 16
+decisive games: 16
+average plies: 71.38
+checkmates: 16
+claimable draws: 16
+```
+
+JEPA bridge pretrain:
+
+```text
+held-out cosine: 0.998784
+nearest-neighbor top1: 0.5750
+nearest-neighbor top5: 0.9933
+```
+
+Interpretation:
+
+This is the first full-game result that improves the pressure of the arena
+itself. The previous full-game benchmark had:
+
+```text
+24 games
+9 decisive outcomes
+15 draws
+```
+
+The full-game trace policies produced:
+
+```text
+32 games
+16 decisive outcomes
+16 draws
+```
+
+The draw rate is still high, but now half the games finish decisively by
+checkmate, and the JEPA-backed full-trace policy edges the direct policy:
+
+```text
+JEPA_full_trace: 9 wins
+direct_full_trace: 7 wins
+```
+
+The result is not "good chess" yet. It is a better research object: the
+policies are learning from whole-game states, the evaluation is full legal
+games, and the failure mode is now visible. The trace generator overproduces
+endgames, so the next iteration should balance phases and include stronger
+opening/middlegame traces.
