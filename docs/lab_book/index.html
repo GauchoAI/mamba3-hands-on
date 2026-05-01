@@ -38,12 +38,14 @@
     .layout {
       display: grid;
       grid-template-columns: 310px minmax(0, 1fr);
+      min-width: 0;
       min-height: 100vh;
     }
     aside {
       position: sticky;
       top: 0;
       height: 100vh;
+      min-width: 0;
       padding: 28px 20px;
       border-right: 1px solid var(--line);
       background: #faf6ee;
@@ -51,12 +53,14 @@
     }
     main {
       max-width: 1240px;
+      min-width: 0;
       width: 100%;
       padding: 34px clamp(20px, 4vw, 56px) 80px;
     }
     h1, h2, h3 {
       margin: 0;
       letter-spacing: 0;
+      overflow-wrap: anywhere;
     }
     h1, h2 { font-family: var(--serif); }
     h1 {
@@ -92,10 +96,47 @@
       padding: 8px 10px;
       text-decoration: none;
       font-size: 13px;
+      overflow-wrap: anywhere;
     }
     .toc a:hover {
       background: #eee7db;
       border-left-color: var(--accent);
+    }
+    .toc-group {
+      border: 1px solid transparent;
+      border-radius: 8px;
+    }
+    .toc-group summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .05em;
+      list-style: none;
+      padding: 8px 10px 4px;
+      text-transform: uppercase;
+    }
+    .toc-group summary::-webkit-details-marker { display: none; }
+    .toc-group summary::before {
+      content: "+";
+      display: inline-block;
+      width: 14px;
+      color: var(--accent);
+    }
+    .toc-group[open] summary::before { content: "-"; }
+    .toc-group-count {
+      color: #958b7f;
+      font-weight: 500;
+      margin-left: 4px;
+    }
+    .toc-group-body {
+      display: grid;
+      gap: 2px;
+      padding-bottom: 4px;
+    }
+    .toc-sub a {
+      font-size: 12px;
+      padding-left: 20px;
     }
     .tools {
       display: grid;
@@ -145,6 +186,7 @@
     .prose {
       max-width: 860px;
       margin: 18px 0;
+      overflow-wrap: anywhere;
     }
     .prose h1, .prose h2, .prose h3 {
       font-family: var(--serif);
@@ -194,6 +236,7 @@
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--panel);
+      min-width: 0;
       padding: 14px;
     }
     .stat strong {
@@ -201,6 +244,7 @@
       font-size: 28px;
       line-height: 1;
       margin-bottom: 5px;
+      overflow-wrap: anywhere;
     }
     .stat span {
       color: var(--muted);
@@ -241,6 +285,7 @@
       border-bottom: 1px solid #eee8dd;
       padding: 8px 7px;
       vertical-align: top;
+      overflow-wrap: anywhere;
     }
     tr:hover td { background: #faf6ef; }
     .right { text-align: right; }
@@ -282,16 +327,25 @@
       padding: 18px 0;
     }
     @media (max-width: 980px) {
-      .layout { grid-template-columns: 1fr; }
+      .layout { grid-template-columns: minmax(0, 1fr); }
       aside {
         position: static;
         height: auto;
         border-right: 0;
         border-bottom: 1px solid var(--line);
       }
+      button { width: 100%; }
       .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid-2, .grid-3 { grid-template-columns: 1fr; }
       .event { grid-template-columns: 1fr; }
+      .prose pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+      table {
+        display: block;
+        overflow-x: auto;
+      }
     }
   </style>
 </head>
@@ -500,6 +554,32 @@
     function sourceCards(sources) {
       return `<div class="source-list">${sources.map(src => `<div class="source-card"><div class="mono">${esc(src.path)}</div><strong>${esc(src.title)}</strong></div>`).join("")}</div>`;
     }
+    function tocGroup(chapter) {
+      if (chapter.id === "chapter-prologue") return { key: "Opening", open: true };
+      if (chapter.id === "doc-ch01" || chapter.id === "chapter-curriculum" || chapter.id === "chapter-legacy-experiments") return { key: "01 - GA tournament", open: true };
+      if (chapter.id.startsWith("exp-")) return { key: "01B - Task run appendix", open: false, sub: true };
+      if (chapter.id.startsWith("doc-ch")) return { key: "02-10 - Experiment chapters", open: true };
+      return { key: "Platform and archive", open: true };
+    }
+    function renderToc(chapters) {
+      const grouped = [];
+      for (const chapter of chapters) {
+        const group = tocGroup(chapter);
+        let bucket = grouped.find(item => item.key === group.key);
+        if (!bucket) {
+          bucket = { ...group, items: [] };
+          grouped.push(bucket);
+        }
+        bucket.items.push(chapter);
+      }
+      return grouped.map(group => {
+        const links = group.items.map(ch => `<a href="#${esc(ch.id)}">Chapter ${ch.number}: ${esc(ch.title.replace(/^Chapter \d+:\s*/, ""))}</a>`).join("");
+        return `<details class="toc-group ${group.sub ? "toc-sub" : ""}" ${group.open ? "open" : ""}>
+          <summary>${esc(group.key)}<span class="toc-group-count">${num(group.items.length)}</span></summary>
+          <div class="toc-group-body">${links}</div>
+        </details>`;
+      }).join("");
+    }
     function renderChart(id, config) {
       const el = document.getElementById(id);
       if (!el) return;
@@ -707,6 +787,10 @@
         `<div class="panel">${table([
           { label: "Run" }, { label: "Kind" }, { label: "State" }, { label: "Started" }, { label: "Purpose" }
         ], runs.map(r => `<tr><td><div class="mono">${esc(r.experimentId)}</div><div class="mono">${esc(r.runId)}</div></td><td>${esc(r.kind)}</td><td><span class="pill ${r.meta.final_state === "completed" ? "good" : "warn"}">${esc(r.meta.final_state || r.status.state || "running")}</span></td><td>${esc(ts(r.meta.started_at))}</td><td>${esc(r.meta.purpose || r.hypothesis || "")}</td></tr>`))}</div>
+        <div class="grid-2">
+          <div class="panel"><h3>Open Stream Records</h3>${canvas("chart-stream-records", true)}</div>
+          <div class="panel"><h3>Archive Pack Progress</h3>${canvas("chart-stream-progress", true)}</div>
+        </div>
         <div class="panel"><h3>Stream Archive Pointers</h3>${renderStreams(streams)}</div>`
       );
 
@@ -729,13 +813,17 @@
         <div class="grid-2">
           <div class="panel"><h3>Self-Describing Firebase Meta</h3>${renderMeta()}</div>
           <div class="panel"><h3>Data Coverage</h3>${renderCoverage({modelCount, lineageCount, historyCount, taskSeriesCount})}</div>
+        </div>
+        <div class="grid-2">
+          <div class="panel"><h3>Model Catalog Sizes</h3>${canvas("chart-model-sizes", true)}</div>
+          <div class="panel"><h3>Learning Cycles to Mastery</h3>${canvas("chart-learning-cycles", true)}</div>
         </div>`
       );
 
       const q = state.filter.trim().toLowerCase();
       const visible = q ? chapters.filter(ch => ch.filterText.includes(q)) : chapters;
       $("book").innerHTML = visible.map(ch => tpl(ch)).join("") || `<div class="empty">No chapters match the filter.</div>`;
-      $("toc").innerHTML = visible.map(ch => `<a href="#${esc(ch.id)}">Chapter ${ch.number}: ${esc(ch.title.replace(/^Chapter \d+:\s*/, ""))}</a>`).join("");
+      $("toc").innerHTML = renderToc(visible);
       drawCharts(legacy, tasks);
     }
     function renderEvents(events) {
@@ -827,6 +915,19 @@
     function drawCharts(legacy, tasks) {
       const topTasks = tasks.slice(0, 30);
       barChart("chart-overview-tasks", topTasks.map(t => t.task), topTasks.map(t => Math.round(Number(t.best_accuracy ?? t.acc ?? 0) * 100)), "Accuracy");
+      const streams = flattenStreams();
+      const topStreams = streams.filter(s => Number(s.current_record_count || 0) > 0).slice(0, 20);
+      barChart("chart-stream-records", topStreams.map(s => `${s.experimentId}/${s.stream}`), topStreams.map(s => Number(s.current_record_count || 0)), "Records", Math.max(10, ...topStreams.map(s => Number(s.current_record_count || 0))));
+      barChart("chart-stream-progress", streams.slice(0, 20).map(s => `${s.experimentId}/${s.stream}`), streams.slice(0, 20).map(s => Number(s.pack_progress_pct || 0)), "Progress");
+      const modelRows = rows(state.models).map(({ key, value }) => ({ id: key, ...(value || {}) }))
+        .filter(m => Number(m.size_kb || 0) > 0)
+        .sort((a, b) => Number(b.size_kb || 0) - Number(a.size_kb || 0))
+        .slice(0, 20);
+      barChart("chart-model-sizes", modelRows.map(m => m.id), modelRows.map(m => Math.round(Number(m.size_kb || 0))), "KB", Math.max(10, ...modelRows.map(m => Math.round(Number(m.size_kb || 0)))));
+      const lrTasks = rows(state.learningRate?.tasks).map(({ key, value }) => ({ task: key, ...(value || {}) }))
+        .filter(t => Number(t.cycles || 0) > 0)
+        .sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
+      barChart("chart-learning-cycles", lrTasks.map(t => t.task), lrTasks.map(t => Number(t.cycles || 0)), "Cycles", Math.max(10, ...lrTasks.map(t => Number(t.cycles || 0))));
       const gpu = rows(state.gpuHistory).map(({ key, value }) => ({ key, ...(value || {}) })).slice(-120);
       lineChart("chart-overview-gpu", gpu.map(g => g.key), [
         { label: "GPU", data: gpu.map(g => Number(g.gpu || 0)), borderColor: COLORS[0], backgroundColor: "transparent", pointRadius: 0 },
