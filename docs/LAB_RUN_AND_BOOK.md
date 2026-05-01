@@ -2,6 +2,7 @@
 title: Lab Run and Lab Book
 chapter: Platform
 status: active
+sections: true
 summary: "This chapter is rendered from markdown front matter plus live data: {{lab.labRuns}} LabRun records, {{lab.streams}} stream metadata records, and {{firebase.rootStreams}} root stream namespaces."
 ---
 

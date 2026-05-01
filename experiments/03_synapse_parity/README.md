@@ -1,3 +1,10 @@
+---
+title: Synapse parity
+chapter: "03"
+status: archival
+summary: "One-to-one and one-to-many composition groundwork, rendered with any matching Firebase curves and the linked findings journal."
+---
+
 # Chapter 03 — Synapse / parity / RoPE
 
 **Status:** archival.

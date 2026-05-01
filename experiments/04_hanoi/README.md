@@ -1,3 +1,10 @@
+---
+title: Hanoi
+chapter: "04"
+status: archival
+summary: "Unbounded-computation chapter: Hanoi, LoopCounter, and byte-perfect extrapolation, cross-linked with the live task and model surfaces where available."
+---
+
 # Chapter 04 — Hanoi
 
 **Status:** archival.

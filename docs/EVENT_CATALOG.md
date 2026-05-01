@@ -1,3 +1,11 @@
+---
+title: Firebase Event Catalog
+chapter: Infrastructure
+status: reference
+open_sections: 0
+summary: "Reference catalog for the live Firebase event surface. The book currently renders {{firebase.mamba3Roots}} /mamba3 roots and surfaces {{firebase.signals}} signal namespace(s)."
+---
+
 # Firebase Event Catalog — Every Event We Can Send
 
 Every piece of data that moves through the system, captured and pushed to Firebase.

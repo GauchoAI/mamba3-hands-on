@@ -1,3 +1,11 @@
+---
+title: GA Findings Journal
+chapter: "01B"
+status: archival
+open_sections: 1
+summary: "Detailed GA-era findings behind the live appendix: {{lab.tasksTracked}} tracked tasks and {{lab.mastered}} currently mastered tasks."
+---
+
 # GA tournament / mass-evolution / multi-task arc — findings journal
 
 The middle period of the project: from "we can solve parity" to "we

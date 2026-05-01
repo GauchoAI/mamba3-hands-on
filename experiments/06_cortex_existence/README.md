@@ -1,3 +1,10 @@
+---
+title: Cortex existence proof
+chapter: "06"
+status: archival
+summary: "Counter primitive proof: the conceptual bridge between specialist models and the current {{lab.models}} model records."
+---
+
 # Chapter 06 — Cortex existence proof
 
 **Status:** archival.

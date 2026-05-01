@@ -1,8 +1,16 @@
+---
+title: JEPA Cortex
+chapter: "07"
+status: archival
+sections: true
+summary: "Original JEPA-Cortex experiment, preserved as the predecessor to the current structured-data chapter."
+---
+
 # Chapter 07 — JEPA / cortex (original)
 
 **Status:** archival (predecessor of [chapter 10](../10_jepa_structured/)).
 
-# jepa/ — JEPA-Cortex experiment
+## jepa/ — JEPA-Cortex experiment
 
 A small Mamba-3 byte-level LM that **talks** (English + Spanish, learned
 from a Qwen-2.5-1.5B teacher) and **reasons** (via residual-stream

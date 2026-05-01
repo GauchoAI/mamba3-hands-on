@@ -1,3 +1,11 @@
+---
+title: Cortex Findings Journal
+chapter: "06"
+status: archival
+open_sections: 1
+summary: "Detailed Cortex and counter-primitive arc, connected to the current model catalog of {{lab.models}} records."
+---
+
 # Cortex / Counter / LoopCounter arc — findings journal
 
 The Cortex arc: building byte-perfect algorithmic primitives that ride
@@ -753,4 +761,3 @@ Saved: `tower_of_hanoi_binary_paramfree.pt` (124,472 storage,
 107,832 actual params via weight tying).
 
 ---
-

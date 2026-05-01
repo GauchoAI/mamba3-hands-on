@@ -1,3 +1,10 @@
+---
+title: PTX engine
+chapter: "02"
+status: archival
+summary: "CUDA/PTX engine era: archived narrative, still useful as infrastructure context for the current {{lab.workers}} worker live-control plane."
+---
+
 # Chapter 02 — PTX engine
 
 **Status:** closed / archival (engine moved to `pod-archive` branch when

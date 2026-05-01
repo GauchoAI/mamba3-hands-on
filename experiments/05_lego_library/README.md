@@ -1,3 +1,10 @@
+---
+title: Lego library
+chapter: "05"
+status: archival
+summary: "Composable specialist library: small rule modules, orchestration without retraining, and a bridge toward the current Lab ecology."
+---
+
 # Chapter 05 — Lego library
 
 **Status:** archival.

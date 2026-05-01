@@ -2,6 +2,7 @@
 title: Kappa Architecture
 chapter: Infrastructure
 status: active
+open_sections: 1
 summary: "Infrastructure context for {{firebase.mamba3Roots}} current /mamba3 roots, {{lab.schemas}} published schema groups, {{firebase.signals}} signal namespaces, and {{firebase.messages}} message namespace(s)."
 ---
 

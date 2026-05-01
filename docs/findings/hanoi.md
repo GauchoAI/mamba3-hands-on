@@ -1,3 +1,11 @@
+---
+title: Hanoi Findings Journal
+chapter: "04"
+status: archival
+open_sections: 1
+summary: "Detailed Hanoi reasoning arc, paired in the book with matching Firebase experiment curves when available."
+---
+
 # Tower of Hanoi reasoning arc — findings journal
 
 A focused journal of all the entries about teaching small Mamba-3 models
@@ -720,4 +728,3 @@ within a single n-range so EOS prediction gets supervised at every
 length. Either should remove the EOS cliff entirely.
 
 ---
-

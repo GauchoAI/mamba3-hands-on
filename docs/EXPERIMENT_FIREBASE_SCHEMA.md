@@ -1,3 +1,11 @@
+---
+title: Cross-Experiment Firebase Schema
+chapter: Infrastructure
+status: v1-compatible plan
+open_sections: 0
+summary: "Schema planning document for the cross-experiment surface. The current book keeps v1 intact while rendering {{lab.labRuns}} LabRun records and {{lab.schemas}} schema group(s)."
+---
+
 # Cross-Experiment Firebase Schema
 
 A standardized way for *any* experiment in this repo (`three_populations`,

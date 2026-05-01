@@ -1,3 +1,11 @@
+---
+title: Synapse Findings Journal
+chapter: "03"
+status: archival
+open_sections: 1
+summary: "Detailed AttendBridge composition arc behind the Synapse chapter."
+---
+
 # Synapse v2 / AttendBridge composition arc — findings journal
 
 The synapse arc: a small adapter (~1.1k params on our scale) that
@@ -186,4 +194,3 @@ Paper: https://arxiv.org/abs/2603.15569
 Official repo: https://github.com/state-spaces/mamba (CUDA-only)
 
 ---
-

@@ -1,8 +1,17 @@
+---
+title: JEPA structured-data
+chapter: "10"
+status: active
+sections: true
+open_sections: 2
+summary: "Current daily-driver experiment, connected to {{lab.streams}} archive streams and {{lab.labRuns}} LabRun records."
+---
+
 # Chapter 10 — JEPA structured-data
 
 **Status:** **active**. The current daily-driver experiment.
 
-# jepa_structured_data — structure-in-data for JEPA-Cortex
+## jepa_structured_data — structure-in-data for JEPA-Cortex
 
 Sister experiment to `jepa/`. Same student (1M-param byte-level Mamba-3 with
 Cortex residual primitives), same losses (byte CE + JEPA latent regression +

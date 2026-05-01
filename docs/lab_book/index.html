@@ -195,9 +195,47 @@
       margin: 18px 0;
       padding: 12px 14px;
     }
-    .doc-frontmatter strong {
-      display: block;
-      margin-bottom: 4px;
+    .doc-frontmatter-head {
+      align-items: center;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 5px;
+    }
+    .doc-frontmatter-head strong {
+      margin-right: 4px;
+    }
+    .md-section {
+      max-width: 920px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      margin: 12px 0;
+      overflow: hidden;
+    }
+    .md-section summary {
+      cursor: pointer;
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 14px;
+      padding: 12px 14px;
+    }
+    .md-section summary strong {
+      font-family: var(--serif);
+      font-size: 18px;
+      line-height: 1.15;
+    }
+    .md-section summary span {
+      color: var(--muted);
+      flex: 0 0 auto;
+      font: 11px var(--mono);
+    }
+    .md-section .prose {
+      border-top: 1px solid #eee8dd;
+      margin: 0;
+      max-width: none;
+      padding: 14px;
     }
     .prose h1, .prose h2, .prose h3 {
       font-family: var(--serif);
@@ -218,6 +256,7 @@
       border-radius: 4px;
     }
     .prose pre {
+      max-height: 360px;
       overflow: auto;
       border-radius: 8px;
       background: #171512;
@@ -282,6 +321,16 @@
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
+    }
+    .table-wrap {
+      width: 100%;
+      overflow-x: auto;
+    }
+    .table-wrap.long {
+      border: 1px solid #eee8dd;
+      border-radius: 8px;
+      max-height: 520px;
+      overflow: auto;
     }
     th {
       color: var(--muted);
@@ -352,6 +401,10 @@
       .prose pre {
         white-space: pre-wrap;
         overflow-wrap: anywhere;
+      }
+      .md-section summary {
+        align-items: flex-start;
+        flex-direction: column;
       }
       table {
         display: block;
@@ -569,7 +622,8 @@
     }
     function table(headers, bodyRows, empty = "No data available") {
       if (!bodyRows.length) return `<div class="empty">${empty}</div>`;
-      return `<table><thead><tr>${headers.map(h => `<th class="${h.cls || ""}">${esc(h.label)}</th>`).join("")}</tr></thead><tbody>${bodyRows.join("")}</tbody></table>`;
+      const cls = bodyRows.length > 18 ? "table-wrap long" : "table-wrap";
+      return `<div class="${cls}"><table><thead><tr>${headers.map(h => `<th class="${h.cls || ""}">${esc(h.label)}</th>`).join("")}</tr></thead><tbody>${bodyRows.join("")}</tbody></table></div>`;
     }
     function statGrid(items) {
       return `<div class="stat-grid">${items.map(([label, value]) => `<div class="stat"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`).join("")}</div>`;
@@ -628,15 +682,51 @@
         return `${text}\n\n_Template error: ${err.message}_`;
       }
     }
+    function stripLeadHeading(markdown) {
+      return markdown.replace(/^\s*#\s+.+(?:\r?\n)+/, "");
+    }
+    function wordCount(markdown) {
+      return markdown.replace(/```[\s\S]*?```/g, " ").replace(/[^\w\s-]/g, " ").trim().split(/\s+/).filter(Boolean).length;
+    }
+    function splitMarkdownSections(markdown) {
+      const matches = [...markdown.matchAll(/^##\s+(.+)$/gm)];
+      if (!matches.length) return { intro: markdown, sections: [] };
+      const intro = markdown.slice(0, matches[0].index).trim();
+      const sections = matches.map((match, i) => {
+        const start = match.index + match[0].length;
+        const end = matches[i + 1]?.index ?? markdown.length;
+        return {
+          title: match[1].trim(),
+          body: markdown.slice(start, end).trim(),
+        };
+      }).filter(section => section.body);
+      return { intro, sections };
+    }
+    function renderMarkdownBody(markdown, attrs = {}) {
+      const body = stripLeadHeading(markdown).trim();
+      const { intro, sections } = splitMarkdownSections(body);
+      const shouldSection = sections.length > 0 && (attrs.sections === "true" || (sections.length >= 3 && (body.length > 7000 || attrs.sections !== "flat")));
+      if (!shouldSection) return `<div class="prose">${marked.parse(body)}</div>`;
+      const introHtml = intro ? `<div class="prose">${marked.parse(intro)}</div>` : "";
+      const openCount = Number(attrs.open_sections || 1);
+      const sectionHtml = sections.map((section, i) => {
+        const open = i < openCount ? "open" : "";
+        return `<details class="md-section" ${open} data-section="${esc(section.title.toLowerCase())}">
+          <summary><strong>${esc(section.title)}</strong><span>${num(wordCount(section.body))} words</span></summary>
+          <div class="prose">${marked.parse(section.body)}</div>
+        </details>`;
+      }).join("");
+      return introHtml + sectionHtml;
+    }
     function md(path) {
       const text = state.markdown[path] || "";
       if (!text) return `<div class="empty">Markdown source unavailable: ${esc(path)}</div>`;
       const parsed = parseFrontMatter(text);
       const context = templateContext(path, parsed.attrs);
       const summary = parsed.attrs.summary
-        ? `<div class="doc-frontmatter"><strong>${esc(parsed.attrs.title || "Chapter summary")}</strong>${esc(renderTemplate(parsed.attrs.summary, context))}</div>`
+        ? `<div class="doc-frontmatter"><div class="doc-frontmatter-head"><strong>${esc(parsed.attrs.title || "Chapter summary")}</strong>${parsed.attrs.status ? `<span class="pill good">${esc(parsed.attrs.status)}</span>` : ""}${parsed.attrs.chapter ? `<span class="pill">${esc(`Chapter ${parsed.attrs.chapter}`)}</span>` : ""}<span class="pill">${esc(path)}</span></div>${esc(renderTemplate(parsed.attrs.summary, context))}</div>`
         : "";
-      return `${summary}<div class="prose">${marked.parse(renderTemplate(parsed.body, context))}</div>`;
+      return `${summary}${renderMarkdownBody(renderTemplate(parsed.body, context), parsed.attrs)}`;
     }
     function sourceCards(sources) {
       return `<div class="source-list">${sources.map(src => `<div class="source-card"><div class="mono">${esc(src.path)}</div><strong>${esc(src.title)}</strong></div>`).join("")}</div>`;
@@ -783,6 +873,7 @@
       addChapter(chapters, "chapter-prologue", "Prologue: System State",
         "This opening chapter summarizes the whole lab using the current Firebase feed: task mastery, active workers, archive streams, nodes, and recent events.",
         md("index.md") +
+        md("VISION.md") +
         statGrid([
           ["Tasks tracked", tasks.length || (snapshot.leaderboard || []).length],
           ["Mastered", mastered.length],
@@ -906,6 +997,8 @@
           <div class="panel"><h3>Learning Cycles to Mastery</h3>${canvas("chart-learning-cycles", true)}</div>
         </div>
         <div class="panel"><h3>Firebase Surface Coverage</h3>${renderFirebaseSurface()}</div>
+        ${md("docs/EXPERIMENT_FIREBASE_SCHEMA.md")}
+        ${md("docs/UI_VISION.md")}
         ${md("docs/EVENT_CATALOG.md")}`
       );
 
@@ -914,6 +1007,7 @@
       $("book").innerHTML = visible.map(ch => tpl(ch)).join("") || `<div class="empty">No chapters match the filter.</div>`;
       $("toc").innerHTML = renderToc(visible);
       drawCharts(legacy, tasks);
+      applyRoute();
     }
     function renderEvents(events) {
       if (!events.length) return `<div class="empty">No matching events.</div>`;
@@ -1069,6 +1163,30 @@
           pointRadius: 0,
         })), "%");
       });
+    }
+    function applyRoute() {
+      const params = new URLSearchParams(window.location.search);
+      const chapterId = params.get("chapter") || params.get("id");
+      if (!chapterId) return;
+      const chapter = document.getElementById(chapterId);
+      if (!chapter) return;
+      if (params.get("expand") === "1") {
+        chapter.querySelectorAll(".md-section").forEach(section => {
+          section.open = true;
+        });
+      }
+      const sectionNeedle = (params.get("section") || "").toLowerCase();
+      if (sectionNeedle) {
+        const section = [...chapter.querySelectorAll(".md-section")].find(item =>
+          item.querySelector("summary strong")?.textContent.toLowerCase().includes(sectionNeedle)
+        );
+        if (section) {
+          section.open = true;
+          requestAnimationFrame(() => section.scrollIntoView({ block: "start" }));
+          return;
+        }
+      }
+      requestAnimationFrame(() => chapter.scrollIntoView({ block: "start" }));
     }
     function applyFilter() {
       state.filter = $("filter").value.trim().toLowerCase();

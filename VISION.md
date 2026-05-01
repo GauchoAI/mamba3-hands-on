@@ -1,3 +1,11 @@
+---
+title: Vision
+chapter: Prologue
+status: living
+open_sections: 1
+summary: "The north star behind the Lab: an ecology of small routed models, currently represented by {{lab.models}} model records and {{lab.streams}} archive streams."
+---
+
 # Vision — an ever-evolving ecology of small models
 
 ## The thesis

@@ -1,10 +1,18 @@
+---
+title: Cortex bilingual
+chapter: "09"
+status: closed
+sections: true
+summary: "Closed bilingual stress test for counter primitives attached to a language-trained small LM."
+---
+
 # Chapter 09 — Cortex bilingual
 
 **Status:** **closed** by decision 2026-04-30. See
 [`findings.md`](findings.md) for the closure entry and the claim
 hierarchy this experiment line tested.
 
-# cortex_bilingual/ — counter primitive on a language-trained LM
+## cortex_bilingual/ — counter primitive on a language-trained LM
 
 Stress-test of the cortex thesis: does a small algorithmic primitive
 ("forward-pass module in the residual stream") still compose when

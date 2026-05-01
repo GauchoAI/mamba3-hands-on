@@ -1,3 +1,11 @@
+---
+title: UI Vision
+chapter: Infrastructure
+status: planning
+open_sections: 0
+summary: "Design roadmap for turning Firebase into a richer reader experience; current book surface already sees {{lab.tasksTracked}} tasks, {{lab.models}} models, and {{lab.streams}} streams."
+---
+
 # UI Vision — Exploiting the Full Data Stack
 
 ## Data Architecture

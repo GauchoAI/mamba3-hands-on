@@ -1,3 +1,11 @@
+---
+title: Cloud Archive
+chapter: Archive
+status: active
+open_sections: 2
+summary: "Durable storage context for {{lab.streams}} stream metadata records and {{firebase.rootStreams}} root stream namespace(s), with Firebase kept as the live control plane."
+---
+
 # Cloud Archive — HuggingFace Buckets durable archive
 
 `cloud_archive.py` is the file-level analog of `experiment_pusher.py`:

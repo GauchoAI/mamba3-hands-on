@@ -1,3 +1,11 @@
+---
+title: Lego Findings Journal
+chapter: "05"
+status: archival
+open_sections: 1
+summary: "Detailed specialist-composition journal behind the Lego chapter."
+---
+
 # Lego library — findings journal
 
 The "Lego" thread: small step-function specialists (~500-1500 params each)
@@ -413,4 +421,3 @@ demonstration so far.** The step function pattern scales with no
 fall-off in correctness; what we don't get is C-speed comparisons.
 
 ---
-

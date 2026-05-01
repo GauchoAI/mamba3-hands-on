@@ -2,6 +2,7 @@
 title: Repository Index
 chapter: Prologue
 status: living
+open_sections: 1
 summary: "Live book context: {{lab.tasksTracked}} tasks tracked, {{lab.mastered}} mastered, {{lab.models}} model records, {{lab.streams}} archive streams, and {{lab.labRuns}} LabRun records are available from the current Firebase surface."
 ---
 

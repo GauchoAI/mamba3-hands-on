@@ -1,8 +1,16 @@
+---
+title: RLF Cortex
+chapter: "08"
+status: archival
+sections: true
+summary: "Recursive Latent Forcing fork, kept separate so the book can show it as an isolated experiment line."
+---
+
 # Chapter 08 — RLF cortex
 
 **Status:** archival.
 
-# rlf_cortex/ — RLF-inspired Cortex experiment
+## rlf_cortex/ — RLF-inspired Cortex experiment
 
 Fork of `jepa/` (at commit `7866268`) that explores **layer recursion**
 and the broader Recursive Latent Forcing (RLF) idea-set as architectural
