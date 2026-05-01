@@ -5,7 +5,7 @@ ephemeral) and DIFFERENT user prompts. If caching works:
   call 1: cache_creation_input_tokens > 0, cache_read_input_tokens = 0
   call 2: cache_creation_input_tokens = 0, cache_read_input_tokens > 0
 
-Run:  AWS_PROFILE=cc .venv/bin/python experiments/jepa_structured_data/probe_prompt_cache.py
+Run:  AWS_PROFILE=cc .venv/bin/python experiments/10_jepa_structured/probe_prompt_cache.py
 """
 import json
 import time

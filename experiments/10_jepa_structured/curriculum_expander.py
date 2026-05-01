@@ -32,6 +32,8 @@ from budget import DailyBudget
 from curriculum import Curriculum, Tile
 from gen_textbook import MODEL, REGION, PRICE_IN, PRICE_OUT, PRICE_CACHE_READ, PRICE_CACHE_WRITE
 
+EXPERIMENT_DIR = Path(__file__).resolve().parent
+
 
 EXPANDER_SYSTEM_PROMPT = """You are a curriculum architect for a 1-million-parameter byte-level language model. The training corpus is built from short worked-example tiles. Each tile teaches one atomic concept and produces JSON examples with fields: concept, question, solution (numbered steps), paraphrase.
 
@@ -273,11 +275,11 @@ def expand_once(
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--curriculum",
-                    default="experiments/jepa_structured_data/curriculum.yaml")
+                    default=str(EXPERIMENT_DIR / "curriculum.yaml"))
     ap.add_argument("--expansions",
-                    default="experiments/jepa_structured_data/curriculum.expansions.yaml")
+                    default=str(EXPERIMENT_DIR / "curriculum.expansions.yaml"))
     ap.add_argument("--budget-state",
-                    default="experiments/jepa_structured_data/state/daily_budget.json")
+                    default=str(EXPERIMENT_DIR / "state" / "daily_budget.json"))
     ap.add_argument("--cap-usd", type=float, default=5.0)
     ap.add_argument("--n", type=int, default=8)
     ap.add_argument("--dry-run", action="store_true")

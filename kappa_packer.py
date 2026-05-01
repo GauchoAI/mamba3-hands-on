@@ -1,6 +1,6 @@
 """kappa_packer.py — pack older append-only JSONL shards into Parquet.
 
-Generalized from `experiments/jepa_structured_data/storage_packer.py`.
+Generalized from `experiments/10_jepa_structured/storage_packer.py`.
 Same pattern: a directory contains time-sharded `*.jsonl` files (one
 record per line, append-only). Files older than `--age-hours` get
 read in, written as zstd-compressed Parquet, and the source JSONL

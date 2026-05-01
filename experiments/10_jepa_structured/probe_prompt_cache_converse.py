@@ -2,7 +2,7 @@
 prompt caching on Bedrock. cache_control becomes a structural element
 (`cachePoint`) rather than a field on a content block.
 
-Run: AWS_PROFILE=cc .venv/bin/python experiments/jepa_structured_data/probe_prompt_cache_converse.py
+Run: AWS_PROFILE=cc .venv/bin/python experiments/10_jepa_structured/probe_prompt_cache_converse.py
 """
 import time
 

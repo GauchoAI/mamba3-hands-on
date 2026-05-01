@@ -23,6 +23,8 @@ from pathlib import Path
 
 from curriculum import Curriculum, TileRegistry
 
+EXPERIMENT_DIR = Path(__file__).resolve().parent
+
 
 # pyarrow is optional — import lazily so the rest of the module works without it
 def _pa():
@@ -170,11 +172,11 @@ def cmd_pack(args: argparse.Namespace) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--curriculum",
-                    default="experiments/jepa_structured_data/curriculum.yaml")
+                    default=str(EXPERIMENT_DIR / "curriculum.yaml"))
     ap.add_argument("--out",
-                    default="experiments/jepa_structured_data/data")
+                    default=str(EXPERIMENT_DIR / "data"))
     ap.add_argument("--state-dir",
-                    default="experiments/jepa_structured_data/state")
+                    default=str(EXPERIMENT_DIR / "state"))
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("status")
     s.add_argument("--threshold-tb", type=float, default=3.0)

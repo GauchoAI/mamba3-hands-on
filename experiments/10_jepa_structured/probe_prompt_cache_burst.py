@@ -3,7 +3,7 @@
 Verifies that the cache TTL holds across a realistic burst, not just two
 calls back-to-back. Reports per-call usage and the steady-state savings.
 
-Run: AWS_PROFILE=cc .venv/bin/python experiments/jepa_structured_data/probe_prompt_cache_burst.py
+Run: AWS_PROFILE=cc .venv/bin/python experiments/10_jepa_structured/probe_prompt_cache_burst.py
 """
 import time
 

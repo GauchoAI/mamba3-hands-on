@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+EXPERIMENT_DIR = Path(__file__).resolve().parent
+
 
 @dataclass
 class DayLedger:
@@ -129,7 +131,7 @@ if __name__ == "__main__":
     import argparse
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--state", default="experiments/jepa_structured_data/state/daily_budget.json")
+    ap.add_argument("--state", default=str(EXPERIMENT_DIR / "state" / "daily_budget.json"))
     ap.add_argument("--cap-usd", type=float, default=5.0)
     args = ap.parse_args()
     b = DailyBudget(args.state, cap_usd=args.cap_usd)

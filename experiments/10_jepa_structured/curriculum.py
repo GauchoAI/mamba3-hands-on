@@ -30,6 +30,8 @@ from typing import Iterable, Iterator
 
 import yaml
 
+EXPERIMENT_DIR = Path(__file__).resolve().parent
+
 
 # -------- Tile + Curriculum --------
 
@@ -322,7 +324,7 @@ def main() -> None:
     ap.add_argument("--order", choices=list(ORDERS), default="dfs")
     ap.add_argument("--tag", help="filter by tag")
     ap.add_argument("--status", metavar="STATE_JSON", help="show registry status against this state file")
-    ap.add_argument("--state", default="experiments/jepa_structured_data/state/registry.json",
+    ap.add_argument("--state", default=str(EXPERIMENT_DIR / "state" / "registry.json"),
                     help="state file path (used when --status is implied)")
     args = ap.parse_args()
     if args.status:

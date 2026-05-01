@@ -14,13 +14,13 @@ disk via rsync over the USB-C link, so the mini always has the
 generated data ready for training.
 
 Run:
-  AWS_PROFILE=cc .venv/bin/python experiments/jepa_structured_data/tile_gen.py \\
+  AWS_PROFILE=cc .venv/bin/python experiments/10_jepa_structured/tile_gen.py \\
       --order topo --limit 3        # smallest tile-system first
 
-  AWS_PROFILE=cc .venv/bin/python experiments/jepa_structured_data/tile_gen.py \\
+  AWS_PROFILE=cc .venv/bin/python experiments/10_jepa_structured/tile_gen.py \\
       --tile math.modular_arithmetic.addition_basic   # one specific tile
 
-  AWS_PROFILE=cc .venv/bin/python experiments/jepa_structured_data/tile_gen.py \\
+  AWS_PROFILE=cc .venv/bin/python experiments/10_jepa_structured/tile_gen.py \\
       --tag foundation               # only foundation-tagged tiles
 """
 from __future__ import annotations
@@ -45,6 +45,7 @@ from gen_textbook import MODEL, REGION, call, parse_example, usage_cost
 from probe_prompt_cache import SYSTEM_PROMPT  # noqa: F401  imported for side-effect (cache)
 
 DEFAULT_RSYNC_DEST = "miguel-lemoss-Mac-mini.local:/Volumes/TB4/jepa_structured_data/"
+EXPERIMENT_DIR = Path(__file__).resolve().parent
 
 
 def generate_tile(
@@ -143,12 +144,12 @@ def rsync_to_mini(out_dir: Path, dest: str, tile_relpath: str | None = None) -> 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--curriculum",
-                    default="experiments/jepa_structured_data/curriculum.yaml")
+                    default=str(EXPERIMENT_DIR / "curriculum.yaml"))
     ap.add_argument("--out",
-                    default="experiments/jepa_structured_data/data",
+                    default=str(EXPERIMENT_DIR / "data"),
                     help="local output dir (mirrors curriculum tree)")
     ap.add_argument("--state",
-                    default="experiments/jepa_structured_data/state/registry.json")
+                    default=str(EXPERIMENT_DIR / "state" / "registry.json"))
     ap.add_argument("--order", choices=list(ORDERS), default="topo")
     ap.add_argument("--tag", help="filter by tag")
     ap.add_argument("--tile", help="generate one specific tile by id (overrides order/tag)")

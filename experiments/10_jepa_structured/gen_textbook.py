@@ -5,9 +5,9 @@ from the cache probes. Streams JSONL output (one example per line) so a
 crash mid-run only loses the in-flight call.
 
 Usage:
-  AWS_PROFILE=cc .venv/bin/python experiments/jepa_structured_data/gen_textbook.py \
+  AWS_PROFILE=cc .venv/bin/python experiments/10_jepa_structured/gen_textbook.py \
       --n 5 \
-      --out experiments/jepa_structured_data/data/textbook_smoke.jsonl
+      --out experiments/10_jepa_structured/data/textbook_smoke.jsonl
 
   --n            number of examples
   --out          local path for JSONL output (parent dir auto-created)

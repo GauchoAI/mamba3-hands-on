@@ -33,6 +33,8 @@ from curriculum import (
     with_tag_filter,
 )
 
+EXPERIMENT_DIR = Path(__file__).resolve().parent
+
 
 # -------- request queue (append-only file with consume-and-truncate) --------
 
@@ -425,11 +427,11 @@ def cmd_status(args: argparse.Namespace) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--curriculum",
-                    default="experiments/jepa_structured_data/curriculum.yaml")
+                    default=str(EXPERIMENT_DIR / "curriculum.yaml"))
     ap.add_argument("--out",
-                    default="experiments/jepa_structured_data/data")
+                    default=str(EXPERIMENT_DIR / "data"))
     ap.add_argument("--state-dir",
-                    default="experiments/jepa_structured_data/state")
+                    default=str(EXPERIMENT_DIR / "state"))
 
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -468,7 +470,7 @@ def main() -> None:
     tr.add_argument("--cycle-idle-sleep", type=float, default=30.0,
                     help="seconds to sleep when a full cycle had zero trainable tiles")
     tr.add_argument("--checkpoints",
-                    default="experiments/jepa_structured_data/checkpoints",
+                    default=str(EXPERIMENT_DIR / "checkpoints"),
                     help="directory for student.pt")
     tr.add_argument("--device", default=None,
                     help="torch device (mps/cuda/cpu); auto-detect if omitted")

@@ -95,7 +95,7 @@ trick that gave 16× OOD generalization for counting.
 ## How (sketch)
 
 ```
-experiments/jepa_structured_data/
+experiments/10_jepa_structured/
 ├── README.md                 ← this file
 ├── make_paraphrase_corpus.py ← Move 1 data generator
 ├── make_textbook_corpus.py   ← Move 2 data generator
@@ -129,13 +129,12 @@ fixes need to land.
 Each phase is independently shippable as its own findings entry; we only
 combine after all three pass their gates.
 
-## Decisions I need from you before P0
+## Current operating decisions
 
-1. **Folder location confirmed?** I put it at `experiments/jepa_structured_data/`
-   matching the recent `experiments/harness_3stage_mamba3/` convention.
-   Alternative: sister to `jepa/` at top level.
-2. **Sister-fork vs in-place?** Mirroring `jepa/`'s "ship your own copy"
-   convention is safest but doubles file count. OK to proceed that way?
+1. **Folder location:** canonical source is
+   `experiments/10_jepa_structured/`.
+2. **Sister-fork vs in-place:** the chapter keeps its own model/kernel copies,
+   matching the `jepa/` convention so active edits do not leak into baselines.
 3. **Teacher model**: keep Qwen-2.5-1.5B (matches `jepa/`) or upgrade for
    textbook generation? Stronger teacher → cleaner synthetic data, but
    needs more VRAM and changes the JEPA target dimension.
@@ -156,7 +155,7 @@ combine after all three pass their gates.
 - **Read**: `jepa/`, `data/bilingual.txt`, `data/teacher_thoughts.{bin,idx}`,
   the Lego library under `seeds/` or `generators/` (whichever has the step
   functions for stack/parity/sortedness).
-- **Write**: only inside `experiments/jepa_structured_data/` and a new
+- **Write**: only inside `experiments/10_jepa_structured/` and a new
   `data/structured/` subdir for the synthetic corpora.
 - **Compute**: one M4 Pro overnight slot per phase, plus one teacher-gen
   pass for P2 (~2 hours on 4070 Ti or ~6–8 hours on MPS).
