@@ -121,6 +121,51 @@ def conv_jepa_loss(student_thoughts: torch.Tensor,         # (B, L, D_teacher)
 
 
 # ---------------------------------------------------------------------------
+# Logit-projection KD — round 10. Per-byte teacher next-byte distribution
+# (from Qwen-2.5-1.5B vocab logits projected onto bytes via first-byte
+# marginalization, see make_logit_kd_corpus.py) → student softmax over
+# next byte → cross-entropy. The first auxiliary loss in this project
+# whose target is *forced* to depend on every byte of the input.
+# ---------------------------------------------------------------------------
+def kd_loss(student_logits: torch.Tensor,    # (B, L, 256)
+            teacher_byte_dist: torch.Tensor, # (B, K, 256)  fp32 in [0,1]
+            kd_byte_pos: torch.Tensor,       # (B, K)  long  — position in joined byte stream
+            kd_pad_mask: torch.Tensor,       # (B, K)  bool
+            ) -> torch.Tensor:
+    """Soft-target cross-entropy at BPE-boundary byte positions.
+
+    Convention: in a byte LM, `student_logits[t]` predicts the byte at
+    position `t + 1`. The teacher's distribution at boundary position
+    `kd_byte_pos[b, k]` describes the byte *immediately after* that
+    position (i.e. the first byte of the next BPE token). So we gather
+    student logits at exactly `kd_byte_pos[b, k]` and compare softmax
+    there to the teacher distribution.
+
+    Why CE on a soft target instead of explicit KL: CE(p_teacher,
+    p_student) = KL(p_teacher || p_student) + H(p_teacher); the H term
+    is a constant w.r.t. student params, so CE and KL have identical
+    gradients. CE is one fewer op.
+
+    Why this loss should pass the input-shuffle test
+    (feedback_loss_target_input_dependence): the teacher distribution
+    is computed by forwarding Qwen on the actual prompt+response bytes,
+    so shuffling the input across the batch produces wildly different
+    targets. The student CANNOT minimize this loss by predicting any
+    average distribution — at every supervised position, the right
+    answer is conditional on the prompt. Strongest gradient signal in
+    the project so far.
+    """
+    B, L, V = student_logits.shape
+    src = kd_byte_pos.clamp(0, L - 1)                          # (B, K)
+    idx = src.unsqueeze(-1).expand(-1, -1, V)                   # (B, K, V)
+    pred_logits = torch.gather(student_logits, 1, idx)          # (B, K, V)
+    log_pred = F.log_softmax(pred_logits, dim=-1)
+    ce = -(teacher_byte_dist * log_pred).sum(-1)                # (B, K)
+    m = kd_pad_mask.float()
+    return (ce * m).sum() / m.sum().clamp_min(1.0)
+
+
+# ---------------------------------------------------------------------------
 # Contrastive distillation — InfoNCE over the batch.
 # ---------------------------------------------------------------------------
 def contrastive_distill_loss(student_thoughts: torch.Tensor,    # (B, L, D_teacher)
