@@ -156,6 +156,7 @@
       </div>
       <div class="panel">
         <strong>Moves</strong>
+        <button id="copyPgnBtn" style="float:right; min-height:30px; padding:4px 8px">Copy PGN</button>
         <div id="moves" class="moves" style="margin-top:10px"></div>
       </div>
       <div class="panel">
@@ -250,6 +251,22 @@
     function classIndex(move) {
       return squareIndex(move.from) * 64 + squareIndex(move.to);
     }
+    function pgnText() {
+      const history = state.chess.history();
+      const pairs = [];
+      for (let i = 0; i < history.length; i += 2) {
+        pairs.push(`${Math.floor(i / 2) + 1}. ${history[i]}${history[i + 1] ? " " + history[i + 1] : ""}`);
+      }
+      return pairs.join(" ");
+    }
+    function pgnHtml() {
+      const history = state.chess.history();
+      const pairs = [];
+      for (let i = 0; i < history.length; i += 2) {
+        pairs.push(`<span class="chip">${Math.floor(i / 2) + 1}. ${history[i]}${history[i + 1] ? " " + history[i + 1] : ""}</span>`);
+      }
+      return pairs.join("");
+    }
     async function loadSession(name) {
       if (state.sessions[name]) return state.sessions[name];
       const spec = MODELS[name];
@@ -295,7 +312,7 @@
         </button>`;
       }).join("")).join("");
       $("fen").textContent = state.chess.fen();
-      $("moves").innerHTML = state.chess.history().map((m, i) => `<span class="chip">${i + 1}. ${m}</span>`).join("");
+      $("moves").innerHTML = pgnHtml();
       $("status").textContent = statusText();
     }
     async function newGame() {
@@ -355,6 +372,13 @@
     $("flipBtn").addEventListener("click", () => {
       state.flipped = !state.flipped;
       render();
+    });
+    $("copyPgnBtn").addEventListener("click", async () => {
+      const text = pgnText();
+      await navigator.clipboard?.writeText(text);
+      const old = $("copyPgnBtn").textContent;
+      $("copyPgnBtn").textContent = "Copied";
+      setTimeout(() => { $("copyPgnBtn").textContent = old; }, 900);
     });
     $("model").addEventListener("change", () => {
       $("status").textContent = "Model will change on the next expert move.";

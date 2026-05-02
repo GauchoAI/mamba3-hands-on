@@ -1034,3 +1034,19 @@ https://huggingface.co/miguelemosreverte/mamba3-chess-experts
 Added `chess_browser_play.html`, a static page that loads the ONNX model with
 `onnxruntime-web`, uses WebGPU when available, computes legal-move logits in
 the browser, and lets a user play against either archived policy.
+
+## Browser Play Polish
+
+The browser game now renders move history in standard PGN-style move pairs and
+includes a copy button:
+
+```text
+1. e4 e5 2. f3 c5 3. g4 c4 4. b3 Qh4+ 5. Ke2 Qg3 6. hxg3 d5 7. exd5 Bxg4 8. fxg4 e4 9. Ke1 f5 10. Qe2 fxg4 11. Qxe4+ Kf7 12. Qe6#
+```
+
+This sample game is legal and ends in checkmate. The interesting part is not
+that the expert played strong chess. It overextended the queen, lost it to
+`hxg3`, and still created enough pawn/king exposure that White later converted
+with a queen checkmate. That is a useful qualitative signal for this stage: the
+policy has tactical pressure patterns, but it still lacks stable full-game
+material discipline.

@@ -1130,13 +1130,17 @@
     function chessFeatureCard() {
       const labBase = localRepoUrl("experiments/12_chess_experts/chess_lab.html");
       const labUrl = `${labBase}?artifact=artifacts/chess_full_game_trace_arena_result.json&game=0&ply=12#games`;
+      const playUrl = localRepoUrl("experiments/12_chess_experts/chess_browser_play.html");
       return `<div class="feature-card" data-chess-preview="experiments/12_chess_experts/artifacts/chess_full_game_trace_arena_result.json">
         <div class="feature-card-head">
           <div>
             <h3>Interactive Chess Expert Replay</h3>
-            <div class="muted">A compact preview of the mixed-curriculum artifact. The full lab opens the playable board, artifact switcher, metrics, and raw JSON.</div>
+            <div class="muted">A compact preview of the mixed-curriculum artifact. The browser board loads the ONNX experts from Hugging Face and runs inference locally.</div>
           </div>
-          <a class="chapter-link" href="${esc(labUrl)}">Open full lab</a>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:end">
+            <a class="chapter-link" href="${esc(playUrl)}">Play in browser</a>
+            <a class="chapter-link" href="${esc(labUrl)}">Open full lab</a>
+          </div>
         </div>
         <div class="feature-card-body">
           <div class="mini-chess-board" data-chess-board><div class="empty">Loading board...</div></div>
