@@ -25,6 +25,11 @@ MAGIC = 0x4A455054  # "JEPT"
 RECORD_HEADER_FMT = "<IIIII"
 RECORD_HEADER_SIZE = struct.calcsize(RECORD_HEADER_FMT)
 
+# Logit-projection KD record (from make_logit_kd_corpus.py)
+KDTP_MAGIC = 0x4B445450  # "KDTP"
+KDTP_HEADER_FMT = "<IIII"
+KDTP_HEADER_SIZE = struct.calcsize(KDTP_HEADER_FMT)
+
 
 @dataclass
 class Record:
@@ -32,6 +37,16 @@ class Record:
     response: bytes
     thoughts: np.ndarray         # (K, D) float16
     thought_byte_pos: np.ndarray  # (K,) int32
+
+
+@dataclass
+class KDTPRecord:
+    """Logit-projection KD record: per-byte teacher next-byte distributions
+    at BPE boundary positions in the response."""
+    question: bytes
+    response: bytes
+    mark_byte_pos: np.ndarray   # (K,) int32 — student byte position of each mark
+    mark_byte_dist: np.ndarray  # (K, 256) uint8 — quantized teacher distribution
 
 
 class TeacherThoughtsDataset:
@@ -71,6 +86,47 @@ class TeacherThoughtsDataset:
         return Record(question, response, th, bp)
 
 
+class KDTPDataset:
+    """Random-access memmap reader for KDTP records (round-10 logit-KD).
+
+    Same shape as TeacherThoughtsDataset but for the KDTP format:
+    per-byte teacher next-byte distributions at BPE boundary positions.
+    """
+
+    def __init__(self, basename: str | Path):
+        base = Path(basename)
+        self.bin_path = base.with_suffix(".bin")
+        self.idx_path = base.with_suffix(".idx")
+        with open(self.idx_path, "rb") as f:
+            self.n = int(np.frombuffer(f.read(8), dtype=np.int64)[0])
+            self.offsets = np.frombuffer(f.read(), dtype=np.int64).copy()
+        assert len(self.offsets) == self.n + 1, "idx/offsets mismatch"
+        self._mm = np.memmap(self.bin_path, dtype=np.uint8, mode="r")
+
+    def __len__(self) -> int:
+        return self.n
+
+    def __getitem__(self, i: int) -> KDTPRecord:
+        if i < 0:
+            i += self.n
+        if not 0 <= i < self.n:
+            raise IndexError(i)
+        start = int(self.offsets[i])
+        end = int(self.offsets[i + 1])
+        buf = bytes(self._mm[start:end])
+        magic, q_len, r_len, K = struct.unpack(
+            KDTP_HEADER_FMT, buf[:KDTP_HEADER_SIZE]
+        )
+        assert magic == KDTP_MAGIC, f"bad KDTP magic at record {i}: {magic:#x}"
+        p = KDTP_HEADER_SIZE
+        question = buf[p:p + q_len]; p += q_len
+        response = buf[p:p + r_len]; p += r_len
+        mp = np.frombuffer(buf[p:p + 4 * K], dtype=np.int32).copy(); p += 4 * K
+        md = np.frombuffer(buf[p:p + 256 * K],
+                            dtype=np.uint8).copy().reshape(K, 256)
+        return KDTPRecord(question, response, mp, md)
+
+
 # ---------------------------------------------------------------------------
 # Collate: pack a list of Records into right-padded torch tensors
 # ---------------------------------------------------------------------------
@@ -82,6 +138,10 @@ class Batch:
     teacher_thoughts: torch.Tensor   # (B, K_max, D)  float32 — teacher hiddens
     thought_byte_pos: torch.Tensor   # (B, K_max)  long       — student byte index for each thought (in the joined byte stream)
     thought_pad_mask: torch.Tensor   # (B, K_max)  bool
+    # KDTP-only fields (round 10). Empty (size-0 K dim) for non-KD batches.
+    kd_byte_pos:      torch.Tensor = None  # (B, K_kd_max) long
+    kd_byte_dist:     torch.Tensor = None  # (B, K_kd_max, 256) float32 (dequantized)
+    kd_pad_mask:      torch.Tensor = None  # (B, K_kd_max) bool
 
 
 def collate_records(records: list[Record],
@@ -168,6 +228,93 @@ class TeacherIterator:
         idx = self.rng.integers(0, len(self.ds), size=self.batch_size)
         recs = [self.ds[int(i)] for i in idx]
         return collate_records(recs, max_bytes=self.max_bytes)
+
+
+# ---------------------------------------------------------------------------
+# KDTP collate + iterator (round 10 — logit-projection KD)
+# ---------------------------------------------------------------------------
+def collate_kdtp_records(records: list[KDTPRecord],
+                          max_bytes: int = 512,
+                          join_sep: bytes = b"\n") -> Batch:
+    """Build a Batch with kd_* fields populated. Same byte-stream layout
+    as collate_records (question + sep + response); marks are shifted
+    into joined coords. uint8 dist is dequantized to float32 / 255."""
+    B = len(records)
+    seqs: list[np.ndarray] = []
+    prompt_lens: list[int] = []
+    pos_list: list[np.ndarray] = []
+    dist_list: list[np.ndarray] = []
+
+    for r in records:
+        q = r.question
+        joined = q + join_sep + r.response
+        if len(joined) > max_bytes:
+            joined = joined[:max_bytes]
+        seqs.append(np.frombuffer(joined, dtype=np.uint8).copy())
+        prompt_lens.append(len(q) + len(join_sep))
+        # Marks are stored relative to response coords inside the
+        # response. Shift into joined coords.
+        bp = r.mark_byte_pos.astype(np.int64) + (len(q) + len(join_sep))
+        keep = bp < len(joined)
+        pos_list.append(bp[keep])
+        dist_list.append(r.mark_byte_dist[keep])
+
+    L_max = max((len(s) for s in seqs), default=0)
+    K_max = max((len(bp) for bp in pos_list), default=0)
+    if K_max == 0:
+        K_max = 1  # placeholder shape
+
+    tokens = np.zeros((B, L_max), dtype=np.int64)
+    byte_pad = np.zeros((B, L_max), dtype=bool)
+    for i, s in enumerate(seqs):
+        tokens[i, :len(s)] = s
+        byte_pad[i, :len(s)] = True
+
+    kd_pos = np.zeros((B, K_max), dtype=np.int64)
+    kd_dist = np.zeros((B, K_max, 256), dtype=np.float32)
+    kd_pad = np.zeros((B, K_max), dtype=bool)
+    for i, (bp, dist) in enumerate(zip(pos_list, dist_list)):
+        k = len(bp)
+        if k > 0:
+            kd_pos[i, :k] = bp
+            # Dequantize uint8 → float32 in [0, 1]; renormalize each row
+            # so it sums to 1 (uint8 quantization can drift).
+            d = dist.astype(np.float32) / 255.0
+            d = d / np.clip(d.sum(axis=-1, keepdims=True), 1e-6, None)
+            kd_dist[i, :k] = d
+            kd_pad[i, :k] = True
+
+    return Batch(
+        tokens=torch.from_numpy(tokens),
+        byte_pad_mask=torch.from_numpy(byte_pad),
+        prompt_lens=torch.tensor(prompt_lens, dtype=torch.long),
+        # Empty thought fields — KDTP records don't carry thoughts.
+        teacher_thoughts=torch.zeros(B, 1, 1),
+        thought_byte_pos=torch.zeros(B, 1, dtype=torch.long),
+        thought_pad_mask=torch.zeros(B, 1, dtype=torch.bool),
+        kd_byte_pos=torch.from_numpy(kd_pos),
+        kd_byte_dist=torch.from_numpy(kd_dist),
+        kd_pad_mask=torch.from_numpy(kd_pad),
+    )
+
+
+class KDTPIterator:
+    """Infinite random batch iterator over the KDTP dataset."""
+
+    def __init__(self, ds: KDTPDataset, batch_size: int,
+                 max_bytes: int = 512, seed: int = 0):
+        self.ds = ds
+        self.batch_size = batch_size
+        self.max_bytes = max_bytes
+        self.rng = np.random.default_rng(seed)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> Batch:
+        idx = self.rng.integers(0, len(self.ds), size=self.batch_size)
+        recs = [self.ds[int(i)] for i in idx]
+        return collate_kdtp_records(recs, max_bytes=self.max_bytes)
 
 
 class BilingualByteIterator:
