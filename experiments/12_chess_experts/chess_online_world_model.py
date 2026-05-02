@@ -21,7 +21,8 @@ from chess_full_game_trace_arena import teacher_score
 HERE = Path(__file__).resolve().parent
 ARTIFACT = HERE / "artifacts" / "chess_online_world_model_result.json"
 MOVE_DIM = 128
-FEATURE_DIM = 12 * 64 + 5 + MOVE_DIM + 4
+TACTICAL_DIM = 4
+FEATURE_DIM = 12 * 64 + 5 + MOVE_DIM + 4 + TACTICAL_DIM
 PIECE_VALUES = {
     chess.PAWN: 1.0,
     chess.KNIGHT: 3.0,
@@ -81,17 +82,71 @@ def capture_value(board: chess.Board, move: chess.Move) -> float:
     return PIECE_VALUES.get(victim.piece_type, 0.0) if victim else 0.0
 
 
+def capture_victim(board: chess.Board, move: chess.Move) -> chess.Piece | None:
+    victim = board.piece_at(move.to_square)
+    if victim is None and board.is_en_passant(move):
+        return chess.Piece(chess.PAWN, not board.turn)
+    return victim
+
+
+def tactical_audit(board: chess.Board, move: chess.Move) -> dict:
+    mover = board.turn
+    after = board.copy(stack=False)
+    before_material = material_for_turn(board, mover)
+    after.push(move)
+    if after.is_checkmate():
+        return {
+            "opponent_best_capture": 0.0,
+            "opponent_best_reply_delta": 0.0,
+            "queen_hang": False,
+            "major_piece_hang": False,
+            "tactical_blunder": False,
+        }
+
+    best_capture = 0.0
+    best_reply_delta = 0.0
+    queen_hang = False
+    major_piece_hang = False
+    for reply in after.legal_moves:
+        reply_after = after.copy(stack=False)
+        victim = capture_victim(after, reply)
+        reply_after.push(reply)
+        reply_delta = material_for_turn(reply_after, mover) - before_material
+        best_reply_delta = min(best_reply_delta, reply_delta)
+        if victim is None or victim.color != mover:
+            continue
+        value = PIECE_VALUES.get(victim.piece_type, 0.0)
+        best_capture = max(best_capture, value)
+        queen_hang = queen_hang or victim.piece_type == chess.QUEEN
+        major_piece_hang = major_piece_hang or victim.piece_type in {chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT}
+
+    compensation = material_for_turn(after, mover) - before_material
+    tactical_blunder = (queen_hang or best_capture >= 5.0 or best_reply_delta <= -5.0) and compensation < 4.0
+    return {
+        "opponent_best_capture": round(best_capture, 3),
+        "opponent_best_reply_delta": round(best_reply_delta, 3),
+        "queen_hang": queen_hang,
+        "major_piece_hang": major_piece_hang,
+        "tactical_blunder": tactical_blunder,
+    }
+
+
 def feature(board: chess.Board, move: chess.Move, heuristic: float) -> torch.Tensor:
     after = board.copy(stack=False)
     before_material = material_for_turn(board, board.turn)
     after.push(move)
     after_material = material_for_turn(after, board.turn)
+    audit = tactical_audit(board, move)
     scalars = torch.tensor(
         [
             max(-1.0, min(1.0, heuristic / 12.0)),
             max(-1.0, min(1.0, (after_material - before_material) / 9.0)),
             1.0 if board.gives_check(move) else 0.0,
             max(0.0, min(1.0, capture_value(board, move) / 9.0)),
+            max(0.0, min(1.0, audit["opponent_best_capture"] / 9.0)),
+            max(-1.0, min(1.0, audit["opponent_best_reply_delta"] / 9.0)),
+            1.0 if audit["queen_hang"] else 0.0,
+            1.0 if audit["tactical_blunder"] else 0.0,
         ],
         dtype=torch.float32,
     )
@@ -213,9 +268,10 @@ def play_match_game(
             move, info = choose_static(board, seen, args.top_k)
             policy = "static_alpha_lite"
         san = board.san(move)
+        audit = tactical_audit(board, move)
         board.push(move)
         seen[position_key(board)] = seen.get(position_key(board), 0) + 1
-        moves.append({"san": san, "uci": move.uci(), "policy": policy, **info})
+        moves.append({"san": san, "uci": move.uci(), "policy": policy, **info, "audit": audit})
         trace.append((fen, move.uci(), mover, material_for_turn(board, mover)))
 
     samples = [
@@ -240,6 +296,7 @@ def play_match_game(
         "final_material_for_adaptive": round(material_for_turn(board, adaptive_color), 2),
         "final_fen": board.fen(),
         "moves_san": [row["san"] for row in moves],
+        "audit_summary": summarize_move_audit(moves),
         "move_details": moves[: args.sample_ply_details],
     }, samples
 
@@ -258,7 +315,13 @@ def train_online(model: OnlineValueModel, opt: torch.optim.Optimizer, replay: li
             board = chess.Board(sample.fen)
             move = chess.Move.from_uci(sample.move_uci)
             h = teacher_score(board, move, {})
+            audit = tactical_audit(board, move)
+            blunder_penalty = 0.0
+            blunder_penalty += args.blunder_penalty if audit["tactical_blunder"] else 0.0
+            blunder_penalty += args.queen_hang_penalty if audit["queen_hang"] else 0.0
             target = 0.72 * sample.final_value + 0.28 * max(-1.0, min(1.0, sample.material_after / 10.0))
+            target -= blunder_penalty
+            target = max(-1.0, min(1.0, target))
             xs.append(feature(board, move, h))
             ys.append(target)
         x = torch.stack(xs).to(dev)
@@ -278,6 +341,7 @@ def summarize(games: list[dict]) -> dict:
     losses = sum(1 for game in games if game["winner"] == "static_alpha_lite")
     draws = len(games) - wins - losses
     values = [game["adaptive_value"] for game in games]
+    audit = summarize_tactical_audit(games)
     return {
         "games": len(games),
         "adaptive_wins": wins,
@@ -286,7 +350,66 @@ def summarize(games: list[dict]) -> dict:
         "adaptive_score_rate": round((wins + 0.5 * draws) / max(len(games), 1), 4),
         "avg_adaptive_value": round(sum(values) / max(len(values), 1), 4),
         "avg_plies": round(sum(game["plies"] for game in games) / max(len(games), 1), 2),
+        "tactical_audit": audit,
     }
+
+
+def empty_audit_totals() -> dict:
+    return {"moves": 0, "queen_hangs": 0, "major_piece_hangs": 0, "tactical_blunders": 0, "best_capture_sum": 0.0}
+
+
+def summarize_move_audit(moves: list[dict]) -> dict:
+    totals = {
+        "adaptive_world_model": empty_audit_totals(),
+        "static_alpha_lite": empty_audit_totals(),
+    }
+    for move in moves:
+        policy = move.get("policy")
+        if policy not in totals:
+            continue
+        audit = move.get("audit") or {}
+        totals[policy]["moves"] += 1
+        totals[policy]["queen_hangs"] += int(bool(audit.get("queen_hang")))
+        totals[policy]["major_piece_hangs"] += int(bool(audit.get("major_piece_hang")))
+        totals[policy]["tactical_blunders"] += int(bool(audit.get("tactical_blunder")))
+        totals[policy]["best_capture_sum"] += float(audit.get("opponent_best_capture") or 0.0)
+    return finish_audit_totals(totals)
+
+
+def summarize_tactical_audit(games: list[dict]) -> dict:
+    totals = {
+        "adaptive_world_model": empty_audit_totals(),
+        "static_alpha_lite": empty_audit_totals(),
+    }
+    for game in games:
+        summary = game.get("audit_summary") or {}
+        for policy, stats in summary.items():
+            if policy not in totals:
+                continue
+            totals[policy]["moves"] += stats.get("moves", 0)
+            totals[policy]["queen_hangs"] += stats.get("queen_hangs", 0)
+            totals[policy]["major_piece_hangs"] += stats.get("major_piece_hangs", 0)
+            totals[policy]["tactical_blunders"] += stats.get("tactical_blunders", 0)
+            totals[policy]["best_capture_sum"] += stats.get("best_capture_sum", 0.0)
+    return finish_audit_totals(totals)
+
+
+def finish_audit_totals(totals: dict) -> dict:
+    out = {}
+    for policy, stats in totals.items():
+        n = max(stats["moves"], 1)
+        out[policy] = {
+            "moves": stats["moves"],
+            "queen_hangs": stats["queen_hangs"],
+            "major_piece_hangs": stats["major_piece_hangs"],
+            "tactical_blunders": stats["tactical_blunders"],
+            "best_capture_sum": round(stats["best_capture_sum"], 4),
+            "queen_hang_rate": round(stats["queen_hangs"] / n, 4),
+            "major_piece_hang_rate": round(stats["major_piece_hangs"] / n, 4),
+            "tactical_blunder_rate": round(stats["tactical_blunders"] / n, 4),
+            "avg_opponent_best_capture": round(stats["best_capture_sum"] / n, 4),
+        }
+    return out
 
 
 def evaluate_fixed(model: OnlineValueModel, iteration: int, args, dev: str, value_weight: float) -> dict:
@@ -357,6 +480,8 @@ def main() -> None:
     parser.add_argument("--decision-mode", choices=("blend", "veto"), default="blend")
     parser.add_argument("--max-heuristic-drop", type=float, default=3.0)
     parser.add_argument("--value-margin", type=float, default=0.12)
+    parser.add_argument("--blunder-penalty", type=float, default=0.35)
+    parser.add_argument("--queen-hang-penalty", type=float, default=0.25)
     parser.add_argument("--exploration", type=float, default=0.25)
     parser.add_argument("--exploration-decay", type=float, default=0.72)
     parser.add_argument("--min-exploration", type=float, default=0.03)
@@ -381,7 +506,7 @@ def main() -> None:
         "elapsed_s": round(time.time() - t0, 3),
         "config": vars(args),
         "model": {
-            "type": "small MLP value model over board, candidate move, heuristic score, and tactical scalars",
+            "type": "small MLP value model over board, candidate move, heuristic score, material scalars, and explicit tactical-blunder audit features",
             "parameters": sum(p.numel() for p in model.parameters()),
             "feature_dim": FEATURE_DIM,
         },

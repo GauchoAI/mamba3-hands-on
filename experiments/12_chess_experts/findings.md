@@ -1133,3 +1133,71 @@ a chess engine, and it is still learning from a crude terminal/material target.
 But the result now clears the practical bar: under a fixed short budget, a small
 online model trained from its own games improves the alpha-lite player on both
 fresh self-play and held-out starts.
+
+Third pass: add the missing tactical audit. This was necessary because a score
+improvement alone could be hiding obvious chess mistakes. The model now sees and
+is trained against explicit safety features:
+
+```text
+opponent best immediate capture
+opponent best one-ply material reply
+queen hang
+major-piece hang
+tactical blunder
+```
+
+The training target also subtracts penalties for tactical blunders and queen
+hangs. This changes the value model from “learn only final outcome” to “learn
+final outcome plus immediate tactical safety.”
+
+Audited bounded run:
+
+```text
+decision_mode: blend
+value_weight: 0.35
+elapsed: 60.990s
+iterations: 8
+self-play games per iteration: 8
+held-out games per iteration: 12
+parameters: 172,161
+feature_dim: 909
+```
+
+Final online iteration:
+
+```text
+self-play: 3 adaptive wins, 2 static wins, 3 draws, score rate 0.562
+held-out:  7 adaptive wins, 2 static wins, 3 draws, score rate 0.708
+```
+
+Held-out score path:
+
+```text
+0: 0.625
+1: 0.708
+2: 0.750
+3: 0.625
+4: 0.667
+5: 0.583
+6: 0.625
+7: 0.708
+```
+
+Final held-out tactical audit:
+
+```text
+adaptive queen hang rate:        0.0235
+static queen hang rate:          0.0284
+adaptive major-piece hang rate:  0.1549
+static major-piece hang rate:    0.1820
+adaptive tactical blunder rate:  0.0634
+static tactical blunder rate:    0.0780
+adaptive avg best capture:       0.8357
+static avg best capture:         0.9929
+```
+
+This answers the concern that the benchmark might be rewarding nonsense. The
+adaptive model is not merely winning more often on the held-out starts; it is
+also leaving fewer immediate tactical liabilities by the audit we added. The
+self-play score is lower than the unaudited best run, but the result is more
+credible because it now reports the safety mechanism that chess actually needs.
