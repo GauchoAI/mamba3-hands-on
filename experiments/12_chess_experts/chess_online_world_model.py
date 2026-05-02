@@ -21,6 +21,7 @@ from chess_full_game_trace_arena import teacher_score
 
 HERE = Path(__file__).resolve().parent
 ARTIFACT = HERE / "artifacts" / "chess_online_world_model_result.json"
+CHECKPOINT_DIR = HERE / "checkpoints" / "chess_online_world_model"
 MOVE_DIM = 128
 TACTICAL_DIM = 4
 FEATURE_DIM = 12 * 64 + 5 + MOVE_DIM + 4 + TACTICAL_DIM
@@ -583,6 +584,19 @@ def audit_score(summary: dict) -> float:
     )
 
 
+def checkpoint_kpi(heldout_vs_safety: dict | None) -> dict:
+    summary = (heldout_vs_safety or {}).get("summary") or {}
+    value = float(summary.get("adaptive_score_rate") or 0.0)
+    return {
+        "namespace": "12_chess_experts/chess_online_world_model",
+        "name": "heldout_vs_static_safety_alpha_score",
+        "value": round(max(0.0, min(1.0, value)), 6),
+        "range": [0.0, 1.0],
+        "higher_is_better": True,
+        "source": "champion.heldout_vs_safety.summary.adaptive_score_rate",
+    }
+
+
 def promote_candidate(candidate_eval: dict, champion_eval: dict | None, args) -> tuple[bool, str]:
     if champion_eval is None:
         return True, "first_candidate"
@@ -688,6 +702,21 @@ def main() -> None:
             iteration["rejected_candidate_state_restored"] = True
         iterations.append(iteration)
     model.load_state_dict(champion_state)
+    CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
+    champion_checkpoint = {
+        "format": "chess_online_world_model_champion/v1",
+        "state_dict": champion_state,
+        "config": vars(args),
+        "kpi": checkpoint_kpi(champion_eval),
+        "feature_dim": FEATURE_DIM,
+        "model_width": args.width,
+        "champion_iteration": champion_iteration,
+        "champion_promotions": champion_promotions,
+        "heldout_vs_safety": champion_eval or {},
+        "heldout_vs_alpha": champion_alpha_eval or {},
+    }
+    champion_path = CHECKPOINT_DIR / "online_champion_value.pt"
+    torch.save(champion_checkpoint, champion_path)
     best_after_update = best_iteration_by(iterations, "heldout_after_update")
     best_vs_alpha = best_iteration_by(iterations, "heldout_vs_alpha")
     best_vs_safety = best_iteration_by(iterations, "heldout_vs_safety")
@@ -707,6 +736,8 @@ def main() -> None:
             "promotion_mode": args.promotion_mode,
             "iteration": champion_iteration,
             "promotions": champion_promotions,
+            "kpi": checkpoint_kpi(champion_eval),
+            "checkpoint": str(champion_path.relative_to(HERE)),
             "heldout_vs_safety": champion_eval or {},
             "heldout_vs_alpha": champion_alpha_eval or {},
         },

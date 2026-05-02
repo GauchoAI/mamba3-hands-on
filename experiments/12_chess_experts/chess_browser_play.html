@@ -128,10 +128,7 @@
       <h1>Browser Chess Expert</h1>
       <p class="muted">Static ONNX Runtime Web inference. The model runs in your browser, preferably through WebGPU.</p>
       <div class="toolbar">
-        <select id="model">
-          <option value="motif_full_trace">Motif full trace</option>
-          <option value="jepa_full_trace">JEPA full trace</option>
-        </select>
+        <select id="model"></select>
         <select id="side">
           <option value="white">Play white</option>
           <option value="black">Play black</option>
@@ -169,24 +166,36 @@
   <script type="module">
     import { Chess } from "https://cdn.jsdelivr.net/npm/chess.js@1.0.0/+esm";
 
-    const HF = "https://huggingface.co/miguelemosreverte/mamba3-chess-experts/resolve/main/chess_full_game_trace_arena";
-    const MODELS = {
+    const ASSET_BASE = "https://huggingface.co/miguelemosreverte/mamba3-chess-experts/resolve/main/chess_playable_assets";
+    const LEGACY_BASE = "https://huggingface.co/miguelemosreverte/mamba3-chess-experts/resolve/main/chess_full_game_trace_arena";
+    const MANIFEST_URL = `${ASSET_BASE}/playable_manifest.json`;
+    let MODELS = {
       motif_full_trace: {
-        url: `${HF}/motif_full_trace.onnx`,
+        label: "Motif full trace",
+        kind: "legacy_onnx_policy",
+        url: `${LEGACY_BASE}/motif_full_trace.onnx`,
         dim: 773,
+        input: "board_features",
+        output: "logits",
         feature: motifFeatures
       },
       jepa_full_trace: {
-        url: `${HF}/jepa_full_trace.onnx`,
+        label: "JEPA full trace",
+        kind: "legacy_onnx_policy",
+        url: `${LEGACY_BASE}/jepa_full_trace.onnx`,
         dim: 783,
+        input: "board_features",
+        output: "logits",
         feature: jepaFeatures
       }
     };
+    let defaultModel = "motif_full_trace";
     const pieceGlyph = {
       p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
       P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔"
     };
     const piecePlane = { p: 0, n: 1, b: 2, r: 3, q: 4, k: 5 };
+    const pieceValue = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
     const files = "abcdefgh";
     const $ = id => document.getElementById(id);
     const state = {
@@ -204,6 +213,8 @@
     function squareIndex(square) {
       return files.indexOf(square[0]) + 8 * (Number(square[1]) - 1);
     }
+    function squareFile(square) { return files.indexOf(square[0]); }
+    function squareRank(square) { return Number(square[1]) - 1; }
     function castlingFlags(chess) {
       const rights = chess.fen().split(" ")[2] || "-";
       return [
@@ -248,6 +259,146 @@
       x[base + 14] = Math.min(Number(parts[5] || 1), 120) / 120;
       return x;
     }
+    function materialScore(chess) {
+      let score = 0;
+      for (let rank = 1; rank <= 8; rank++) {
+        for (const file of files) {
+          const piece = chess.get(`${file}${rank}`);
+          if (!piece) continue;
+          score += (piece.color === "w" ? 1 : -1) * pieceValue[piece.type];
+        }
+      }
+      return score;
+    }
+    function materialForTurn(chess, color = chess.turn()) {
+      const score = materialScore(chess);
+      return color === "w" ? score : -score;
+    }
+    function positionKey(chess) {
+      return chess.fen().split(" ").slice(0, 4).join(" ");
+    }
+    function mobility(chess) {
+      return chess.moves({ verbose: true }).length;
+    }
+    function kingSafety(chess, color) {
+      const board = chess.board();
+      let king = "";
+      for (let r = 0; r < 8; r++) {
+        for (let f = 0; f < 8; f++) {
+          const piece = board[r][f];
+          if (piece?.type === "k" && piece.color === color) king = `${files[f]}${8 - r}`;
+        }
+      }
+      if (!king) return -8;
+      const attackers = chess.attackers ? chess.attackers(king, color === "w" ? "b" : "w").length : 0;
+      let score = -1.5 * attackers;
+      const file = squareFile(king);
+      const rank = squareRank(king);
+      const homeRank = color === "w" ? 0 : 7;
+      if (rank === homeRank && [0, 1, 2, 6, 7].includes(file)) score += 0.4;
+      return score;
+    }
+    function moved(chess, move) {
+      const next = new Chess(chess.fen());
+      next.move({ from: move.from, to: move.to, promotion: move.promotion || "q" });
+      return next;
+    }
+    function captureVictim(chess, move) {
+      const target = chess.get(move.to);
+      if (target) return target;
+      if (move.flags?.includes("e")) return { type: "p", color: chess.turn() === "w" ? "b" : "w" };
+      return null;
+    }
+    function captureValue(chess, move) {
+      const victim = captureVictim(chess, move);
+      return victim ? pieceValue[victim.type] : 0;
+    }
+    function teacherScore(chess, move, seen = {}) {
+      const beforeMaterial = materialScore(chess);
+      const beforeMobility = mobility(chess);
+      const mover = chess.turn();
+      const after = moved(chess, move);
+      if (after.isCheckmate()) return 1000;
+      const drawPenalty = after.isStalemate() || after.isDraw() ? -1.2 : 0;
+      let materialDelta = materialScore(after) - beforeMaterial;
+      if (mover === "b") materialDelta = -materialDelta;
+      let mobilityDelta = mobility(after) - beforeMobility;
+      if (mover === "b") mobilityDelta = -mobilityDelta;
+      let score = 2.0 * materialDelta;
+      score += 0.05 * mobilityDelta;
+      score += after.isCheck() ? 0.8 : 0.0;
+      score += move.flags?.includes("k") || move.flags?.includes("q") ? 0.7 : 0.0;
+      score += move.promotion ? 0.8 : 0.0;
+      score += 0.12 * (3.5 - Math.abs(squareFile(move.to) - 3.5));
+      score += 0.12 * (3.5 - Math.abs(squareRank(move.to) - 3.5));
+      score += kingSafety(after, mover) - kingSafety(chess, mover);
+      score -= 1.5 * (seen[positionKey(after)] || 0);
+      return score + drawPenalty;
+    }
+    function tacticalAudit(chess, move) {
+      const mover = chess.turn();
+      const beforeMaterial = materialForTurn(chess, mover);
+      const after = moved(chess, move);
+      if (after.isCheckmate()) {
+        return { opponent_best_capture: 0, opponent_best_reply_delta: 0, queen_hang: false, major_piece_hang: false, tactical_blunder: false };
+      }
+      let bestCapture = 0;
+      let bestReplyDelta = 0;
+      let queenHang = false;
+      let majorHang = false;
+      for (const reply of after.moves({ verbose: true })) {
+        const victim = captureVictim(after, reply);
+        const replyAfter = moved(after, reply);
+        const replyDelta = materialForTurn(replyAfter, mover) - beforeMaterial;
+        bestReplyDelta = Math.min(bestReplyDelta, replyDelta);
+        if (!victim || victim.color !== mover) continue;
+        const value = pieceValue[victim.type] || 0;
+        bestCapture = Math.max(bestCapture, value);
+        queenHang ||= victim.type === "q";
+        majorHang ||= ["q", "r", "b", "n"].includes(victim.type);
+      }
+      const compensation = materialForTurn(after, mover) - beforeMaterial;
+      const tacticalBlunder = (queenHang || bestCapture >= 5 || bestReplyDelta <= -5) && compensation < 4;
+      return {
+        opponent_best_capture: bestCapture,
+        opponent_best_reply_delta: bestReplyDelta,
+        queen_hang: queenHang,
+        major_piece_hang: majorHang,
+        tactical_blunder: tacticalBlunder
+      };
+    }
+    function safetyPenalty(audit) {
+      let penalty = 0;
+      penalty += audit.tactical_blunder ? 6.0 : 0.0;
+      penalty += audit.queen_hang ? 8.0 : 0.0;
+      penalty += audit.major_piece_hang ? 1.2 : 0.0;
+      penalty += 0.35 * audit.opponent_best_capture;
+      penalty += 0.25 * Math.max(0, -audit.opponent_best_reply_delta);
+      return penalty;
+    }
+    function encodeMove(move, x, base) {
+      x[base + squareIndex(move.from)] = 1;
+      x[base + 64 + squareIndex(move.to)] = 1;
+    }
+    function onlineCandidateFeatures(chess, move, heuristic) {
+      const x = new Float32Array(909);
+      x.set(motifFeatures(chess), 0);
+      encodeMove(move, x, 773);
+      const after = moved(chess, move);
+      const beforeMaterial = materialForTurn(chess, chess.turn());
+      const afterMaterial = materialForTurn(after, chess.turn());
+      const audit = tacticalAudit(chess, move);
+      const base = 773 + 128;
+      x[base] = Math.max(-1, Math.min(1, heuristic / 12));
+      x[base + 1] = Math.max(-1, Math.min(1, (afterMaterial - beforeMaterial) / 9));
+      x[base + 2] = after.isCheck() ? 1 : 0;
+      x[base + 3] = Math.max(0, Math.min(1, captureValue(chess, move) / 9));
+      x[base + 4] = Math.max(0, Math.min(1, audit.opponent_best_capture / 9));
+      x[base + 5] = Math.max(-1, Math.min(1, audit.opponent_best_reply_delta / 9));
+      x[base + 6] = audit.queen_hang ? 1 : 0;
+      x[base + 7] = audit.tactical_blunder ? 1 : 0;
+      return x;
+    }
     function classIndex(move) {
       return squareIndex(move.from) * 64 + squareIndex(move.to);
     }
@@ -276,15 +427,68 @@
       state.provider = providers[0];
       return session;
     }
+    async function loadManifest() {
+      try {
+        const response = await fetch(MANIFEST_URL, { cache: "no-store" });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const manifest = await response.json();
+        const next = {};
+        for (const policy of manifest.policies || []) {
+          const existing = MODELS[policy.id] || {};
+          next[policy.id] = {
+            ...existing,
+            label: policy.label,
+            kind: policy.kind,
+            url: `${ASSET_BASE}/${policy.model.file}`,
+            dim: policy.input_dim,
+            input: policy.input,
+            output: policy.output,
+            topK: policy.top_k || existing.topK,
+            valueWeight: policy.value_weight || existing.valueWeight,
+            kpi: policy.kpi
+          };
+        }
+        MODELS = Object.keys(next).length ? next : MODELS;
+        defaultModel = manifest.default_policy || defaultModel;
+      } catch (err) {
+        $("status").textContent = `Manifest unavailable, using built-in model list. ${err.message}`;
+      }
+      $("model").innerHTML = Object.entries(MODELS)
+        .sort((a, b) => (b[1].kpi?.value || 0) - (a[1].kpi?.value || 0))
+        .map(([id, spec]) => `<option value="${id}">${spec.label || id}${spec.kpi ? ` (${Math.round(spec.kpi.value * 100)}%)` : ""}</option>`)
+        .join("");
+      $("model").value = MODELS[defaultModel] ? defaultModel : Object.keys(MODELS)[0];
+    }
     async function expertMove() {
       const name = $("model").value;
       const spec = MODELS[name];
       const session = await loadSession(name);
-      const x = spec.feature(state.chess);
-      const feeds = { board_features: new ort.Tensor("float32", x, [1, spec.dim]) };
-      const outputs = await session.run(feeds);
-      const logits = outputs.logits.data;
       const legal = state.chess.moves({ verbose: true });
+      if (spec.kind === "safety_candidate_reranker_value_head") {
+        const scored = legal.map(move => {
+          const raw = teacherScore(state.chess, move, {});
+          const audit = tacticalAudit(state.chess, move);
+          return { move, raw, adjusted: raw - safetyPenalty(audit) };
+        }).sort((a, b) => b.adjusted - a.adjusted).slice(0, spec.topK || 8);
+        const batch = new Float32Array(scored.length * spec.dim);
+        scored.forEach((row, i) => batch.set(spec.feature(state.chess, row.move, row.raw), i * spec.dim));
+        const feeds = { [spec.input]: new ort.Tensor("float32", batch, [scored.length, spec.dim]) };
+        const outputs = await session.run(feeds);
+        const values = outputs[spec.output].data;
+        scored.forEach((row, i) => {
+          const h = Math.tanh((row.adjusted - scored[0].adjusted) / 6.0);
+          row.mixed = h + (spec.valueWeight || 0.12) * values[i];
+        });
+        scored.sort((a, b) => b.mixed - a.mixed);
+        const move = scored[0].move;
+        state.chess.move({ from: move.from, to: move.to, promotion: move.promotion || "q" });
+        state.last = [move.from, move.to];
+        return move;
+      }
+      const x = spec.feature(state.chess);
+      const feeds = { [spec.input]: new ort.Tensor("float32", x, [1, spec.dim]) };
+      const outputs = await session.run(feeds);
+      const logits = outputs[spec.output].data;
       legal.sort((a, b) => logits[classIndex(b)] - logits[classIndex(a)]);
       const move = legal[0];
       state.chess.move({ from: move.from, to: move.to, promotion: move.promotion || "q" });
@@ -384,7 +588,7 @@
       $("status").textContent = "Model will change on the next expert move.";
     });
 
-    newGame().catch(err => $("status").textContent = err.message);
+    loadManifest().then(() => newGame()).catch(err => $("status").textContent = err.message);
   </script>
 </body>
 </html>

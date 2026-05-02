@@ -2,7 +2,7 @@
   "status": "online_world_model_self_play",
   "scope": "static alpha-lite heuristic versus the same heuristic augmented by an online value/world model trained from completed self-play games",
   "device": "mps",
-  "elapsed_s": 275.872,
+  "elapsed_s": 273.803,
   "config": {
     "seed": 701,
     "iterations": 10,
@@ -89,6 +89,18 @@
     "promotion_mode": "champion",
     "iteration": 3,
     "promotions": 2,
+    "kpi": {
+      "namespace": "12_chess_experts/chess_online_world_model",
+      "name": "heldout_vs_static_safety_alpha_score",
+      "value": 0.8125,
+      "range": [
+        0.0,
+        1.0
+      ],
+      "higher_is_better": true,
+      "source": "champion.heldout_vs_safety.summary.adaptive_score_rate"
+    },
+    "checkpoint": "checkpoints/chess_online_world_model/online_champion_value.pt",
     "heldout_vs_safety": {
       "value_weight": 0.12,
       "opponent_policy": "static_safety_alpha",

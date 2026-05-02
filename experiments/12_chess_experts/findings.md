@@ -1382,3 +1382,65 @@ This is the answer to the online-drift problem. We still let candidates keep
 training and failing, but the published policy is monotonic under the held-out
 promotion gate. Longer training now has a protected meaning: it creates more
 chances to discover a better candidate without forcing us to keep a worse one.
+
+Seventh pass: make playable checkpoint publishing metadata-driven.
+
+The checkpoint now carries an obligatory bounded KPI:
+
+```text
+namespace: 12_chess_experts/chess_online_world_model
+name: heldout_vs_static_safety_alpha_score
+value: 0.8125
+range: [0.0, 1.0]
+higher_is_better: true
+source: champion.heldout_vs_safety.summary.adaptive_score_rate
+```
+
+The playable publisher stages one asset per strategy, not one asset per
+transient checkpoint:
+
+```text
+online_champion   KPI 0.8125  default
+motif_full_trace  KPI 0.5625  legacy selectable
+jepa_full_trace   KPI 0.4375  legacy selectable
+```
+
+The generated manifest is:
+
+```text
+experiments/12_chess_experts/checkpoints/chess_playable_assets/playable_manifest.json
+```
+
+It declares:
+
+```text
+format: mamba3_chess_playable_manifest/v1
+default_policy: online_champion
+kpi_policy.required: true
+default_selection: highest kpi.value, then lowest publish_rank
+```
+
+The browser chess page now loads that manifest. If the remote manifest is
+available, it selects the best KPI policy by default. If the manifest is not
+yet uploaded, it falls back to the already-published legacy ONNX models so the
+existing page remains usable.
+
+Upload status in this environment:
+
+```text
+not uploaded
+reason: HF_TOKEN_missing
+```
+
+The publisher is ready:
+
+```bash
+.venv/bin/python experiments/12_chess_experts/chess_publish_playable_assets.py
+```
+
+With `HF_TOKEN` set, that command uploads the staged strategy assets and
+manifest to:
+
+```text
+https://huggingface.co/miguelemosreverte/mamba3-chess-experts/resolve/main/chess_playable_assets/playable_manifest.json
+```
