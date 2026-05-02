@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 import time
@@ -21,6 +22,7 @@ from chess_policy_arena import JepaPolicy
 
 HERE = Path(__file__).resolve().parent
 ARTIFACT = HERE / "artifacts" / "chess_full_game_trace_arena_result.json"
+DEFAULT_CHECKPOINT_DIR = HERE / "checkpoints" / "chess_full_game_trace_arena"
 
 
 @dataclass(frozen=True)
@@ -310,6 +312,112 @@ def game_summary(games: list[dict]) -> dict:
     }
 
 
+def file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def parameter_count(model: torch.nn.Module) -> int:
+    return sum(param.numel() for param in model.parameters())
+
+
+def public_config(args) -> dict:
+    config = vars(args).copy()
+    checkpoint_dir = Path(config.get("checkpoint_dir", ""))
+    try:
+        config["checkpoint_dir"] = str(checkpoint_dir.resolve().relative_to(HERE.parents[1]))
+    except ValueError:
+        config["checkpoint_dir"] = str(checkpoint_dir)
+    return config
+
+
+def save_checkpoint_bundle(
+    checkpoint_dir: Path,
+    args,
+    direct: Player,
+    jepa_player: Player,
+    payload: dict,
+) -> dict:
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    models = [
+        {
+            "name": "motif_full_trace",
+            "kind": "direct_board_policy",
+            "architecture": "chess_motif_generalization.MateMLP",
+            "input_dim": 12 * 64 + 5,
+            "output_dim": motif.N_MOVE_CLASSES,
+            "width": args.policy_width,
+            "module": direct.model,
+            "path": checkpoint_dir / "motif_full_trace.pt",
+        },
+        {
+            "name": "jepa_full_trace",
+            "kind": "frozen_jepa_encoder_policy",
+            "architecture": "chess_policy_arena.JepaPolicy",
+            "input_dim": jepa.BOARD_DIM,
+            "output_dim": motif.N_MOVE_CLASSES,
+            "latent_dim": args.latent_dim,
+            "width": args.policy_width,
+            "encoder_width": args.jepa_width,
+            "module": jepa_player.model,
+            "path": checkpoint_dir / "jepa_full_trace.pt",
+        },
+    ]
+
+    manifest_models = []
+    for item in models:
+        model = item["module"]
+        path = item["path"]
+        torch.save(
+            {
+                "format": "torch_state_dict_bundle/v1",
+                "name": item["name"],
+                "kind": item["kind"],
+                "architecture": item["architecture"],
+                "config": public_config(args),
+                "state_dict": model.state_dict(),
+                "metrics": payload.get("metrics", {}),
+                "summary": payload.get("summary", {}),
+            },
+            path,
+        )
+        manifest_models.append({
+            key: value
+            for key, value in item.items()
+            if key not in {"module", "path"}
+        } | {
+            "file": path.name,
+            "bytes": path.stat().st_size,
+            "sha256": file_sha256(path),
+            "parameters": parameter_count(model),
+            "fp32_mib": round(parameter_count(model) * 4 / 1024 / 1024, 3),
+            "fp16_mib": round(parameter_count(model) * 2 / 1024 / 1024, 3),
+        })
+
+    result_path = checkpoint_dir / ARTIFACT.name
+    result_path.write_text(json.dumps(payload, indent=2) + "\n")
+    manifest = {
+        "format": "chess_expert_checkpoint_manifest/v1",
+        "experiment": "12_chess_experts",
+        "run": "chess_full_game_trace_arena",
+        "status": payload.get("status"),
+        "created_at": time.time(),
+        "config": public_config(args),
+        "result_artifact": {
+            "file": result_path.name,
+            "bytes": result_path.stat().st_size,
+            "sha256": file_sha256(result_path),
+        },
+        "models": manifest_models,
+    }
+    manifest_path = checkpoint_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
 @torch.no_grad()
 def legal_policy_move(player: Player, board: chess.Board, dev: str) -> chess.Move:
     if player.kind == "motif":
@@ -470,6 +578,8 @@ def main() -> None:
     parser.add_argument("--blend", type=float, default=0.86)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--anti-repetition", type=float, default=2.5)
+    parser.add_argument("--checkpoint-dir", default=str(DEFAULT_CHECKPOINT_DIR))
+    parser.add_argument("--no-save-checkpoints", action="store_true")
     args = parser.parse_args()
 
     t0 = time.time()
@@ -508,7 +618,7 @@ def main() -> None:
         "scope": "full legal games after training both policies on generated full-game state/action traces",
         "device": dev,
         "elapsed_s": round(time.time() - t0, 3),
-        "config": vars(args),
+        "config": public_config(args),
         "trace_summary": training_trace_summary,
         "metrics": {
             "heldout_trace_imitation": evaluate_trace_imitation(players, val_traces, dev),
@@ -523,6 +633,14 @@ def main() -> None:
         "summary": game_summary(games),
         "games": games,
     }
+    if not args.no_save_checkpoints:
+        payload["checkpoint_manifest"] = save_checkpoint_bundle(
+            Path(args.checkpoint_dir),
+            args,
+            direct,
+            jepa_player,
+            payload,
+        )
     ARTIFACT.parent.mkdir(exist_ok=True)
     ARTIFACT.write_text(json.dumps(payload, indent=2) + "\n")
     print(json.dumps(payload, indent=2))

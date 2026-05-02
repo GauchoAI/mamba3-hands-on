@@ -973,3 +973,31 @@ chess_lab.html?artifact=artifacts/chess_full_game_trace_arena_result.json&game=0
 Browser verification used the mixed-curriculum artifact and confirmed that the
 JSON loads, the charts render, and the replay board reconstructs a selected SAN
 position.
+
+## Checkpoint Archive
+
+The mixed-curriculum trace arena now saves the two playable chess policies as a
+checkpoint bundle:
+
+```text
+motif_full_trace.pt: 12,252,589 bytes, 3,061,120 parameters
+jepa_full_trace.pt:  14,861,859 bytes, 3,713,248 parameters
+bundle total:        27,178,850 bytes including manifest and result JSON
+```
+
+The bundle was synced to Hugging Face Buckets:
+
+```text
+hf://buckets/miguelemosreverte/GauchoAI/chess_experts/chess_full_game_trace_arena
+```
+
+Firebase metadata was written under:
+
+```text
+/experiments/chess_experts-2026-05-01/runs/chess_full_game_trace_arena
+/streams_meta/chess_experts-2026-05-01/chess_full_game_trace_arena/checkpoints
+```
+
+This is the missing discipline: the result JSON is still useful for the static
+book, but the actual policies are now portable artifacts with SHA-256 hashes
+and direct HF bucket pointers.
