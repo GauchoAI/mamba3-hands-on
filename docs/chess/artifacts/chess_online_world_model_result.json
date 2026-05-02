@@ -2,10 +2,10 @@
   "status": "online_world_model_self_play",
   "scope": "static alpha-lite heuristic versus the same heuristic augmented by an online value/world model trained from completed self-play games",
   "device": "mps",
-  "elapsed_s": 145.823,
+  "elapsed_s": 283.625,
   "config": {
     "seed": 701,
-    "iterations": 5,
+    "iterations": 10,
     "games_per_iteration": 6,
     "eval_games": 8,
     "max_plies": 60,
@@ -47,38 +47,38 @@
   },
   "final_summary": {
     "games": 6,
-    "adaptive_wins": 2,
-    "static_wins": 3,
-    "opponent_wins": 3,
+    "adaptive_wins": 1,
+    "static_wins": 5,
+    "opponent_wins": 5,
     "opponent_winners": {
-      "static_safety_alpha": 3
+      "static_safety_alpha": 5
     },
-    "draws": 1,
-    "adaptive_score_rate": 0.4167,
-    "avg_adaptive_value": -0.1583,
-    "avg_plies": 42.0,
+    "draws": 0,
+    "adaptive_score_rate": 0.1667,
+    "avg_adaptive_value": -0.6167,
+    "avg_plies": 47.17,
     "tactical_audit": {
       "adaptive_world_model": {
-        "moves": 126,
-        "queen_hangs": 4,
-        "major_piece_hangs": 21,
-        "tactical_blunders": 5,
-        "best_capture_sum": 132.0,
-        "queen_hang_rate": 0.0317,
-        "major_piece_hang_rate": 0.1667,
-        "tactical_blunder_rate": 0.0397,
-        "avg_opponent_best_capture": 1.0476
+        "moves": 141,
+        "queen_hangs": 2,
+        "major_piece_hangs": 41,
+        "tactical_blunders": 8,
+        "best_capture_sum": 187.0,
+        "queen_hang_rate": 0.0142,
+        "major_piece_hang_rate": 0.2908,
+        "tactical_blunder_rate": 0.0567,
+        "avg_opponent_best_capture": 1.3262
       },
       "static_safety_alpha": {
-        "moves": 126,
-        "queen_hangs": 2,
-        "major_piece_hangs": 25,
+        "moves": 142,
+        "queen_hangs": 1,
+        "major_piece_hangs": 39,
         "tactical_blunders": 5,
-        "best_capture_sum": 154.0,
-        "queen_hang_rate": 0.0159,
-        "major_piece_hang_rate": 0.1984,
-        "tactical_blunder_rate": 0.0397,
-        "avg_opponent_best_capture": 1.2222
+        "best_capture_sum": 171.0,
+        "queen_hang_rate": 0.007,
+        "major_piece_hang_rate": 0.2746,
+        "tactical_blunder_rate": 0.0352,
+        "avg_opponent_best_capture": 1.2042
       }
     }
   },
@@ -6246,6 +6246,5029 @@
                 "opponent_best_reply_delta": 0.0,
                 "queen_hang": false,
                 "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "iteration": 5,
+      "exploration": 0.0484,
+      "effective_value_weight": 0.12,
+      "new_samples": 320,
+      "replay_samples": 1642,
+      "summary": {
+        "games": 6,
+        "adaptive_wins": 3,
+        "static_wins": 3,
+        "opponent_wins": 3,
+        "opponent_winners": {
+          "static_safety_alpha": 3
+        },
+        "draws": 0,
+        "adaptive_score_rate": 0.5,
+        "avg_adaptive_value": 0.125,
+        "avg_plies": 53.33,
+        "tactical_audit": {
+          "adaptive_world_model": {
+            "moves": 160,
+            "queen_hangs": 2,
+            "major_piece_hangs": 34,
+            "tactical_blunders": 3,
+            "best_capture_sum": 178.0,
+            "queen_hang_rate": 0.0125,
+            "major_piece_hang_rate": 0.2125,
+            "tactical_blunder_rate": 0.0187,
+            "avg_opponent_best_capture": 1.1125
+          },
+          "static_safety_alpha": {
+            "moves": 160,
+            "queen_hangs": 3,
+            "major_piece_hangs": 29,
+            "tactical_blunders": 5,
+            "best_capture_sum": 173.0,
+            "queen_hang_rate": 0.0187,
+            "major_piece_hang_rate": 0.1812,
+            "tactical_blunder_rate": 0.0312,
+            "avg_opponent_best_capture": 1.0813
+          }
+        }
+      },
+      "online_update": {
+        "updates": 6,
+        "loss": 0.0808
+      },
+      "heldout_after_update": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_safety_alpha",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 5,
+          "static_wins": 2,
+          "opponent_wins": 2,
+          "opponent_winners": {
+            "static_safety_alpha": 2
+          },
+          "draws": 1,
+          "adaptive_score_rate": 0.6875,
+          "avg_adaptive_value": 0.3563,
+          "avg_plies": 40.38,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 162,
+              "queen_hangs": 1,
+              "major_piece_hangs": 41,
+              "tactical_blunders": 8,
+              "best_capture_sum": 197.0,
+              "queen_hang_rate": 0.0062,
+              "major_piece_hang_rate": 0.2531,
+              "tactical_blunder_rate": 0.0494,
+              "avg_opponent_best_capture": 1.216
+            },
+            "static_safety_alpha": {
+              "moves": 161,
+              "queen_hangs": 1,
+              "major_piece_hangs": 54,
+              "tactical_blunders": 10,
+              "best_capture_sum": 228.0,
+              "queen_hang_rate": 0.0062,
+              "major_piece_hang_rate": 0.3354,
+              "tactical_blunder_rate": 0.0621,
+              "avg_opponent_best_capture": 1.4161
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_safety_alpha",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 52,
+            "winner": "static_safety_alpha",
+            "adaptive_value": -1.0,
+            "final_material_for_adaptive": -25.0,
+            "final_fen": "r3k2r/3n1ppp/p3p3/2p5/2Kp3P/6P1/PPq5/8 w kq - 2 30",
+            "moves_san": [
+              "Nf4",
+              "d4",
+              "Nd3",
+              "Qd5",
+              "e4",
+              "Qxe4+",
+              "Be2",
+              "Qxh1+",
+              "Bf1",
+              "Qe4+",
+              "Be2",
+              "Bf5",
+              "Ne5",
+              "Nxe5",
+              "c4",
+              "Nxc4",
+              "Qa4+",
+              "b5",
+              "Qb4",
+              "Qh1+",
+              "Bf1",
+              "Bxb1",
+              "Rxb1",
+              "Qe4+",
+              "Be2",
+              "Qxb1",
+              "Bxc4",
+              "Qxc1+",
+              "Ke2",
+              "bxc4",
+              "d3",
+              "cxd3+",
+              "Kxd3",
+              "Qd1+",
+              "Ke4",
+              "Nf6+",
+              "Ke5",
+              "Nd7+",
+              "Ke4",
+              "Qg4+",
+              "Kd5",
+              "e6+",
+              "Kc4",
+              "Bxb4",
+              "Kxb4",
+              "c5+",
+              "Kc4",
+              "Qe2+",
+              "Kb3",
+              "Qxf2",
+              "Kc4",
+              "Qc2#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 26,
+                "queen_hangs": 1,
+                "major_piece_hangs": 12,
+                "tactical_blunders": 3,
+                "best_capture_sum": 54.0,
+                "queen_hang_rate": 0.0385,
+                "major_piece_hang_rate": 0.4615,
+                "tactical_blunder_rate": 0.1154,
+                "avg_opponent_best_capture": 2.0769
+              },
+              "static_safety_alpha": {
+                "moves": 26,
+                "queen_hangs": 0,
+                "major_piece_hangs": 4,
+                "tactical_blunders": 0,
+                "best_capture_sum": 14.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.1538,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.5385
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.1246,
+                "mixed": -0.015,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "d4",
+                "uci": "d5d4",
+                "policy": "static_safety_alpha",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd3",
+                "uci": "f4d3",
+                "policy": "adaptive_world_model",
+                "heuristic": 0.75,
+                "value": -0.1364,
+                "mixed": -0.0164,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qd5",
+                "uci": "d8d5",
+                "policy": "static_safety_alpha",
+                "heuristic": 1.02,
+                "value": null,
+                "mixed": 1.02,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.77,
+                "value": -0.1493,
+                "mixed": -0.0179,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4+",
+                "uci": "d5e4",
+                "policy": "static_safety_alpha",
+                "heuristic": 5.62,
+                "value": null,
+                "mixed": 5.62,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Be2",
+                "uci": "f1e2",
+                "policy": "adaptive_world_model",
+                "heuristic": 3.98,
+                "value": -0.3331,
+                "mixed": -0.04,
+                "adaptive_safety_penalty": 10.2,
+                "audit": {
+                  "opponent_best_capture": 5.0,
+                  "opponent_best_reply_delta": -5.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              },
+              {
+                "san": "Qxh1+",
+                "uci": "e4h1",
+                "policy": "static_safety_alpha",
+                "heuristic": 12.85,
+                "value": null,
+                "mixed": 12.85,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "heldout_vs_alpha": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_alpha_lite",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 8,
+          "static_wins": 0,
+          "opponent_wins": 0,
+          "opponent_winners": {},
+          "draws": 0,
+          "adaptive_score_rate": 1.0,
+          "avg_adaptive_value": 0.9812,
+          "avg_plies": 41.88,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 169,
+              "queen_hangs": 2,
+              "major_piece_hangs": 15,
+              "tactical_blunders": 2,
+              "best_capture_sum": 83.0,
+              "queen_hang_rate": 0.0118,
+              "major_piece_hang_rate": 0.0888,
+              "tactical_blunder_rate": 0.0118,
+              "avg_opponent_best_capture": 0.4911
+            },
+            "static_alpha_lite": {
+              "moves": 166,
+              "queen_hangs": 7,
+              "major_piece_hangs": 66,
+              "tactical_blunders": 23,
+              "best_capture_sum": 324.0,
+              "queen_hang_rate": 0.0422,
+              "major_piece_hang_rate": 0.3976,
+              "tactical_blunder_rate": 0.1386,
+              "avg_opponent_best_capture": 1.9518
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_alpha_lite",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 53,
+            "winner": "adaptive_world_model",
+            "adaptive_value": 1.0,
+            "final_material_for_adaptive": 32.0,
+            "final_fen": "2k5/8/B2Q4/K7/7P/6P1/PP6/RNB4R b - - 10 30",
+            "moves_san": [
+              "Nf4",
+              "Nd4",
+              "e4",
+              "Nxc2+",
+              "Qxc2",
+              "dxe4",
+              "Qxe4",
+              "Qxd2+",
+              "Kxd2",
+              "e5",
+              "Qxe5+",
+              "Be6",
+              "Nxe6",
+              "fxe6",
+              "Qxe6+",
+              "Ne7",
+              "Qc4",
+              "O-O-O+",
+              "Ke3",
+              "Nf5+",
+              "Ke4",
+              "Nxg3+",
+              "fxg3",
+              "Rd4+",
+              "Kxd4",
+              "Bc5+",
+              "Qxc5",
+              "Rd8+",
+              "Ke4",
+              "Rd4+",
+              "Kxd4",
+              "b5",
+              "Qf5+",
+              "Kb8",
+              "Qxh7",
+              "c5+",
+              "Kxc5",
+              "b4",
+              "Kxb4",
+              "a5+",
+              "Kxa5",
+              "g6",
+              "Qxg6",
+              "Kc8",
+              "Qf5+",
+              "Kb8",
+              "Qe5+",
+              "Kc8",
+              "Qe6+",
+              "Kb8",
+              "Qd6+",
+              "Kc8",
+              "Ba6#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 27,
+                "queen_hangs": 0,
+                "major_piece_hangs": 1,
+                "tactical_blunders": 0,
+                "best_capture_sum": 7.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.037,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.2593
+              },
+              "static_alpha_lite": {
+                "moves": 26,
+                "queen_hangs": 1,
+                "major_piece_hangs": 8,
+                "tactical_blunders": 3,
+                "best_capture_sum": 44.0,
+                "queen_hang_rate": 0.0385,
+                "major_piece_hang_rate": 0.3077,
+                "tactical_blunder_rate": 0.1154,
+                "avg_opponent_best_capture": 1.6923
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.1246,
+                "mixed": -0.015,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd4",
+                "uci": "c6d4",
+                "policy": "static_alpha_lite",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.12,
+                "value": -0.1415,
+                "mixed": -0.017,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nxc2+",
+                "uci": "d4c2",
+                "policy": "static_alpha_lite",
+                "heuristic": 4.76,
+                "value": null,
+                "mixed": 4.76,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 3.0,
+                  "opponent_best_reply_delta": -2.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxc2",
+                "uci": "d1c2",
+                "policy": "adaptive_world_model",
+                "heuristic": 9.11,
+                "value": -0.1259,
+                "mixed": -0.0151,
+                "adaptive_safety_penalty": 0.35,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "dxe4",
+                "uci": "d5e4",
+                "policy": "static_alpha_lite",
+                "heuristic": 2.02,
+                "value": null,
+                "mixed": 2.02,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4",
+                "uci": "c2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 2.12,
+                "value": -0.1309,
+                "mixed": -0.0157,
+                "adaptive_safety_penalty": 0.35,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxd2+",
+                "uci": "d8d2",
+                "policy": "static_alpha_lite",
+                "heuristic": 4.58,
+                "value": null,
+                "mixed": 4.58,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 9.0,
+                  "opponent_best_reply_delta": -8.0,
+                  "queen_hang": true,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "heldout_vs_safety": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_safety_alpha",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 5,
+          "static_wins": 2,
+          "opponent_wins": 2,
+          "opponent_winners": {
+            "static_safety_alpha": 2
+          },
+          "draws": 1,
+          "adaptive_score_rate": 0.6875,
+          "avg_adaptive_value": 0.3563,
+          "avg_plies": 40.38,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 162,
+              "queen_hangs": 1,
+              "major_piece_hangs": 41,
+              "tactical_blunders": 8,
+              "best_capture_sum": 197.0,
+              "queen_hang_rate": 0.0062,
+              "major_piece_hang_rate": 0.2531,
+              "tactical_blunder_rate": 0.0494,
+              "avg_opponent_best_capture": 1.216
+            },
+            "static_safety_alpha": {
+              "moves": 161,
+              "queen_hangs": 1,
+              "major_piece_hangs": 54,
+              "tactical_blunders": 10,
+              "best_capture_sum": 228.0,
+              "queen_hang_rate": 0.0062,
+              "major_piece_hang_rate": 0.3354,
+              "tactical_blunder_rate": 0.0621,
+              "avg_opponent_best_capture": 1.4161
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_safety_alpha",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 52,
+            "winner": "static_safety_alpha",
+            "adaptive_value": -1.0,
+            "final_material_for_adaptive": -25.0,
+            "final_fen": "r3k2r/3n1ppp/p3p3/2p5/2Kp3P/6P1/PPq5/8 w kq - 2 30",
+            "moves_san": [
+              "Nf4",
+              "d4",
+              "Nd3",
+              "Qd5",
+              "e4",
+              "Qxe4+",
+              "Be2",
+              "Qxh1+",
+              "Bf1",
+              "Qe4+",
+              "Be2",
+              "Bf5",
+              "Ne5",
+              "Nxe5",
+              "c4",
+              "Nxc4",
+              "Qa4+",
+              "b5",
+              "Qb4",
+              "Qh1+",
+              "Bf1",
+              "Bxb1",
+              "Rxb1",
+              "Qe4+",
+              "Be2",
+              "Qxb1",
+              "Bxc4",
+              "Qxc1+",
+              "Ke2",
+              "bxc4",
+              "d3",
+              "cxd3+",
+              "Kxd3",
+              "Qd1+",
+              "Ke4",
+              "Nf6+",
+              "Ke5",
+              "Nd7+",
+              "Ke4",
+              "Qg4+",
+              "Kd5",
+              "e6+",
+              "Kc4",
+              "Bxb4",
+              "Kxb4",
+              "c5+",
+              "Kc4",
+              "Qe2+",
+              "Kb3",
+              "Qxf2",
+              "Kc4",
+              "Qc2#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 26,
+                "queen_hangs": 1,
+                "major_piece_hangs": 12,
+                "tactical_blunders": 3,
+                "best_capture_sum": 54.0,
+                "queen_hang_rate": 0.0385,
+                "major_piece_hang_rate": 0.4615,
+                "tactical_blunder_rate": 0.1154,
+                "avg_opponent_best_capture": 2.0769
+              },
+              "static_safety_alpha": {
+                "moves": 26,
+                "queen_hangs": 0,
+                "major_piece_hangs": 4,
+                "tactical_blunders": 0,
+                "best_capture_sum": 14.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.1538,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.5385
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.1246,
+                "mixed": -0.015,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "d4",
+                "uci": "d5d4",
+                "policy": "static_safety_alpha",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd3",
+                "uci": "f4d3",
+                "policy": "adaptive_world_model",
+                "heuristic": 0.75,
+                "value": -0.1364,
+                "mixed": -0.0164,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qd5",
+                "uci": "d8d5",
+                "policy": "static_safety_alpha",
+                "heuristic": 1.02,
+                "value": null,
+                "mixed": 1.02,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.77,
+                "value": -0.1493,
+                "mixed": -0.0179,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4+",
+                "uci": "d5e4",
+                "policy": "static_safety_alpha",
+                "heuristic": 5.62,
+                "value": null,
+                "mixed": 5.62,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Be2",
+                "uci": "f1e2",
+                "policy": "adaptive_world_model",
+                "heuristic": 3.98,
+                "value": -0.3331,
+                "mixed": -0.04,
+                "adaptive_safety_penalty": 10.2,
+                "audit": {
+                  "opponent_best_capture": 5.0,
+                  "opponent_best_reply_delta": -5.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              },
+              {
+                "san": "Qxh1+",
+                "uci": "e4h1",
+                "policy": "static_safety_alpha",
+                "heuristic": 12.85,
+                "value": null,
+                "mixed": 12.85,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "sample_games": [
+        {
+          "adaptive_color": "white",
+          "opponent_policy": "static_safety_alpha",
+          "start_fen": "rnbqkbnr/pp1pp2p/6p1/2p2p1Q/4P3/7P/PPPP1PP1/RNB1KBNR w KQkq - 0 4",
+          "plies": 60,
+          "winner": "static_safety_alpha",
+          "adaptive_value": -0.4,
+          "final_material_for_adaptive": -4.0,
+          "final_fen": "rn4nr/pp3k2/6p1/8/3q1PQP/8/PP1K2P1/R6R w - - 10 34",
+          "moves_san": [
+            "Qe2",
+            "fxe4",
+            "Qxe4",
+            "c4",
+            "Qxc4",
+            "d5",
+            "Qb5+",
+            "Kf7",
+            "h4",
+            "e5",
+            "Qd3",
+            "e4",
+            "Qe3",
+            "d4",
+            "Qxe4",
+            "d3",
+            "cxd3",
+            "Bd6",
+            "Qd4",
+            "Qe7+",
+            "Kd1",
+            "Bg4+",
+            "Qxg4",
+            "Qe5",
+            "d4",
+            "Qd5",
+            "Bd3",
+            "Bb4",
+            "f4",
+            "Qxd4",
+            "Bxg6+",
+            "hxg6",
+            "Ne2",
+            "Qe4",
+            "Nd4",
+            "Qxd4",
+            "d3",
+            "Qxd3+",
+            "Nd2",
+            "Bxd2",
+            "Bxd2",
+            "Qd5",
+            "Kc1",
+            "Qc5+",
+            "Kb1",
+            "Qd5",
+            "Be3",
+            "Qe4+",
+            "Kc1",
+            "Qxe3+",
+            "Kb1",
+            "Qe4+",
+            "Kc1",
+            "Qc4+",
+            "Kb1",
+            "Qd3+",
+            "Kc1",
+            "Qc4+",
+            "Kd2",
+            "Qd4+"
+          ],
+          "audit_summary": {
+            "adaptive_world_model": {
+              "moves": 30,
+              "queen_hangs": 0,
+              "major_piece_hangs": 6,
+              "tactical_blunders": 0,
+              "best_capture_sum": 38.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.2,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 1.2667
+            },
+            "static_safety_alpha": {
+              "moves": 30,
+              "queen_hangs": 0,
+              "major_piece_hangs": 3,
+              "tactical_blunders": 0,
+              "best_capture_sum": 26.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.1,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 0.8667
+            }
+          },
+          "move_details": [
+            {
+              "san": "Qe2",
+              "uci": "h5e2",
+              "policy": "adaptive_world_model",
+              "heuristic": -0.17,
+              "value": -0.0685,
+              "mixed": -0.0082,
+              "adaptive_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "fxe4",
+              "uci": "f5e4",
+              "policy": "static_safety_alpha",
+              "heuristic": 2.52,
+              "value": null,
+              "mixed": 2.17,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.35,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Qxe4",
+              "uci": "e2e4",
+              "policy": "adaptive_world_model",
+              "heuristic": 2.42,
+              "value": 0.0048,
+              "mixed": 0.0006,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "c4",
+              "uci": "c5c4",
+              "policy": "static_safety_alpha",
+              "heuristic": -0.25,
+              "value": null,
+              "mixed": -0.85,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Qxc4",
+              "uci": "e4c4",
+              "policy": "adaptive_world_model",
+              "heuristic": 1.65,
+              "value": 0.0251,
+              "mixed": 0.003,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "d5",
+              "uci": "d7d5",
+              "policy": "static_safety_alpha",
+              "heuristic": -0.23,
+              "value": null,
+              "mixed": -3.23,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 3.0,
+              "audit": {
+                "opponent_best_capture": 3.0,
+                "opponent_best_reply_delta": -3.0,
+                "queen_hang": false,
+                "major_piece_hang": true,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Qb5+",
+              "uci": "c4b5",
+              "policy": "adaptive_world_model",
+              "heuristic": -0.42,
+              "value": 0.0774,
+              "mixed": 0.0093,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Kf7",
+              "uci": "e8f7",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.21,
+              "value": null,
+              "mixed": -0.39,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "iteration": 6,
+      "exploration": 0.0348,
+      "effective_value_weight": 0.12,
+      "new_samples": 228,
+      "replay_samples": 1870,
+      "summary": {
+        "games": 6,
+        "adaptive_wins": 1,
+        "static_wins": 4,
+        "opponent_wins": 4,
+        "opponent_winners": {
+          "static_safety_alpha": 4
+        },
+        "draws": 1,
+        "adaptive_score_rate": 0.25,
+        "avg_adaptive_value": -0.475,
+        "avg_plies": 38.0,
+        "tactical_audit": {
+          "adaptive_world_model": {
+            "moves": 113,
+            "queen_hangs": 1,
+            "major_piece_hangs": 13,
+            "tactical_blunders": 4,
+            "best_capture_sum": 98.0,
+            "queen_hang_rate": 0.0088,
+            "major_piece_hang_rate": 0.115,
+            "tactical_blunder_rate": 0.0354,
+            "avg_opponent_best_capture": 0.8673
+          },
+          "static_safety_alpha": {
+            "moves": 115,
+            "queen_hangs": 0,
+            "major_piece_hangs": 30,
+            "tactical_blunders": 2,
+            "best_capture_sum": 134.0,
+            "queen_hang_rate": 0.0,
+            "major_piece_hang_rate": 0.2609,
+            "tactical_blunder_rate": 0.0174,
+            "avg_opponent_best_capture": 1.1652
+          }
+        }
+      },
+      "online_update": {
+        "updates": 6,
+        "loss": 0.07641
+      },
+      "heldout_after_update": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_safety_alpha",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 5,
+          "static_wins": 2,
+          "opponent_wins": 2,
+          "opponent_winners": {
+            "static_safety_alpha": 2
+          },
+          "draws": 1,
+          "adaptive_score_rate": 0.6875,
+          "avg_adaptive_value": 0.3563,
+          "avg_plies": 31.0,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 125,
+              "queen_hangs": 0,
+              "major_piece_hangs": 22,
+              "tactical_blunders": 3,
+              "best_capture_sum": 113.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.176,
+              "tactical_blunder_rate": 0.024,
+              "avg_opponent_best_capture": 0.904
+            },
+            "static_safety_alpha": {
+              "moves": 123,
+              "queen_hangs": 0,
+              "major_piece_hangs": 44,
+              "tactical_blunders": 8,
+              "best_capture_sum": 183.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.3577,
+              "tactical_blunder_rate": 0.065,
+              "avg_opponent_best_capture": 1.4878
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_safety_alpha",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 20,
+            "winner": "static_safety_alpha",
+            "adaptive_value": -1.0,
+            "final_material_for_adaptive": -12.0,
+            "final_fen": "r3kbnr/1pp1pppp/p1n5/8/5P1P/2Pb2P1/P2P4/RNBQKq2 w Qkq - 0 14",
+            "moves_san": [
+              "Nf4",
+              "d4",
+              "Nd3",
+              "Qd5",
+              "e4",
+              "Qxe4+",
+              "Be2",
+              "Qxh1+",
+              "Bf1",
+              "Qe4+",
+              "Be2",
+              "Bf5",
+              "c4",
+              "dxc3",
+              "bxc3",
+              "Qh1+",
+              "Bf1",
+              "Bxd3",
+              "f4",
+              "Qxf1#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 7,
+                "tactical_blunders": 1,
+                "best_capture_sum": 24.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.7,
+                "tactical_blunder_rate": 0.1,
+                "avg_opponent_best_capture": 2.4
+              },
+              "static_safety_alpha": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 0,
+                "tactical_blunders": 0,
+                "best_capture_sum": 1.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.0,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.1
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.0903,
+                "mixed": -0.0108,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "d4",
+                "uci": "d5d4",
+                "policy": "static_safety_alpha",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd3",
+                "uci": "f4d3",
+                "policy": "adaptive_world_model",
+                "heuristic": 0.75,
+                "value": -0.1077,
+                "mixed": -0.0129,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qd5",
+                "uci": "d8d5",
+                "policy": "static_safety_alpha",
+                "heuristic": 1.02,
+                "value": null,
+                "mixed": 1.02,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.77,
+                "value": -0.1165,
+                "mixed": -0.014,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4+",
+                "uci": "d5e4",
+                "policy": "static_safety_alpha",
+                "heuristic": 5.62,
+                "value": null,
+                "mixed": 5.62,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Be2",
+                "uci": "f1e2",
+                "policy": "adaptive_world_model",
+                "heuristic": 3.98,
+                "value": -0.3727,
+                "mixed": -0.0447,
+                "adaptive_safety_penalty": 10.2,
+                "audit": {
+                  "opponent_best_capture": 5.0,
+                  "opponent_best_reply_delta": -5.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              },
+              {
+                "san": "Qxh1+",
+                "uci": "e4h1",
+                "policy": "static_safety_alpha",
+                "heuristic": 12.85,
+                "value": null,
+                "mixed": 12.85,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "heldout_vs_alpha": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_alpha_lite",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 8,
+          "static_wins": 0,
+          "opponent_wins": 0,
+          "opponent_winners": {},
+          "draws": 0,
+          "adaptive_score_rate": 1.0,
+          "avg_adaptive_value": 0.9437,
+          "avg_plies": 44.0,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 177,
+              "queen_hangs": 3,
+              "major_piece_hangs": 10,
+              "tactical_blunders": 0,
+              "best_capture_sum": 73.0,
+              "queen_hang_rate": 0.0169,
+              "major_piece_hang_rate": 0.0565,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 0.4124
+            },
+            "static_alpha_lite": {
+              "moves": 175,
+              "queen_hangs": 7,
+              "major_piece_hangs": 47,
+              "tactical_blunders": 16,
+              "best_capture_sum": 258.0,
+              "queen_hang_rate": 0.04,
+              "major_piece_hang_rate": 0.2686,
+              "tactical_blunder_rate": 0.0914,
+              "avg_opponent_best_capture": 1.4743
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_alpha_lite",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 53,
+            "winner": "adaptive_world_model",
+            "adaptive_value": 1.0,
+            "final_material_for_adaptive": 32.0,
+            "final_fen": "2k5/8/B2Q4/K7/7P/6P1/PP6/RNB4R b - - 10 30",
+            "moves_san": [
+              "Nf4",
+              "Nd4",
+              "e4",
+              "Nxc2+",
+              "Qxc2",
+              "dxe4",
+              "Qxe4",
+              "Qxd2+",
+              "Kxd2",
+              "e5",
+              "Qxe5+",
+              "Be6",
+              "Nxe6",
+              "fxe6",
+              "Qxe6+",
+              "Ne7",
+              "Qc4",
+              "O-O-O+",
+              "Ke3",
+              "Nf5+",
+              "Ke4",
+              "Nxg3+",
+              "fxg3",
+              "Rd4+",
+              "Kxd4",
+              "Bc5+",
+              "Qxc5",
+              "Rd8+",
+              "Ke4",
+              "Rd4+",
+              "Kxd4",
+              "b5",
+              "Qf5+",
+              "Kb8",
+              "Qxh7",
+              "c5+",
+              "Kxc5",
+              "b4",
+              "Kxb4",
+              "a5+",
+              "Kxa5",
+              "g6",
+              "Qxg6",
+              "Kc8",
+              "Qf5+",
+              "Kb8",
+              "Qe5+",
+              "Kc8",
+              "Qe6+",
+              "Kb8",
+              "Qd6+",
+              "Kc8",
+              "Ba6#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 27,
+                "queen_hangs": 0,
+                "major_piece_hangs": 1,
+                "tactical_blunders": 0,
+                "best_capture_sum": 7.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.037,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.2593
+              },
+              "static_alpha_lite": {
+                "moves": 26,
+                "queen_hangs": 1,
+                "major_piece_hangs": 8,
+                "tactical_blunders": 3,
+                "best_capture_sum": 44.0,
+                "queen_hang_rate": 0.0385,
+                "major_piece_hang_rate": 0.3077,
+                "tactical_blunder_rate": 0.1154,
+                "avg_opponent_best_capture": 1.6923
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.0903,
+                "mixed": -0.0108,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd4",
+                "uci": "c6d4",
+                "policy": "static_alpha_lite",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.12,
+                "value": -0.1174,
+                "mixed": -0.0141,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nxc2+",
+                "uci": "d4c2",
+                "policy": "static_alpha_lite",
+                "heuristic": 4.76,
+                "value": null,
+                "mixed": 4.76,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 3.0,
+                  "opponent_best_reply_delta": -2.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxc2",
+                "uci": "d1c2",
+                "policy": "adaptive_world_model",
+                "heuristic": 9.11,
+                "value": -0.0947,
+                "mixed": -0.0114,
+                "adaptive_safety_penalty": 0.35,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "dxe4",
+                "uci": "d5e4",
+                "policy": "static_alpha_lite",
+                "heuristic": 2.02,
+                "value": null,
+                "mixed": 2.02,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4",
+                "uci": "c2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 2.12,
+                "value": -0.0966,
+                "mixed": -0.0116,
+                "adaptive_safety_penalty": 0.35,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxd2+",
+                "uci": "d8d2",
+                "policy": "static_alpha_lite",
+                "heuristic": 4.58,
+                "value": null,
+                "mixed": 4.58,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 9.0,
+                  "opponent_best_reply_delta": -8.0,
+                  "queen_hang": true,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "heldout_vs_safety": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_safety_alpha",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 5,
+          "static_wins": 2,
+          "opponent_wins": 2,
+          "opponent_winners": {
+            "static_safety_alpha": 2
+          },
+          "draws": 1,
+          "adaptive_score_rate": 0.6875,
+          "avg_adaptive_value": 0.3563,
+          "avg_plies": 31.0,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 125,
+              "queen_hangs": 0,
+              "major_piece_hangs": 22,
+              "tactical_blunders": 3,
+              "best_capture_sum": 113.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.176,
+              "tactical_blunder_rate": 0.024,
+              "avg_opponent_best_capture": 0.904
+            },
+            "static_safety_alpha": {
+              "moves": 123,
+              "queen_hangs": 0,
+              "major_piece_hangs": 44,
+              "tactical_blunders": 8,
+              "best_capture_sum": 183.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.3577,
+              "tactical_blunder_rate": 0.065,
+              "avg_opponent_best_capture": 1.4878
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_safety_alpha",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 20,
+            "winner": "static_safety_alpha",
+            "adaptive_value": -1.0,
+            "final_material_for_adaptive": -12.0,
+            "final_fen": "r3kbnr/1pp1pppp/p1n5/8/5P1P/2Pb2P1/P2P4/RNBQKq2 w Qkq - 0 14",
+            "moves_san": [
+              "Nf4",
+              "d4",
+              "Nd3",
+              "Qd5",
+              "e4",
+              "Qxe4+",
+              "Be2",
+              "Qxh1+",
+              "Bf1",
+              "Qe4+",
+              "Be2",
+              "Bf5",
+              "c4",
+              "dxc3",
+              "bxc3",
+              "Qh1+",
+              "Bf1",
+              "Bxd3",
+              "f4",
+              "Qxf1#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 7,
+                "tactical_blunders": 1,
+                "best_capture_sum": 24.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.7,
+                "tactical_blunder_rate": 0.1,
+                "avg_opponent_best_capture": 2.4
+              },
+              "static_safety_alpha": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 0,
+                "tactical_blunders": 0,
+                "best_capture_sum": 1.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.0,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.1
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.0903,
+                "mixed": -0.0108,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "d4",
+                "uci": "d5d4",
+                "policy": "static_safety_alpha",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd3",
+                "uci": "f4d3",
+                "policy": "adaptive_world_model",
+                "heuristic": 0.75,
+                "value": -0.1077,
+                "mixed": -0.0129,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qd5",
+                "uci": "d8d5",
+                "policy": "static_safety_alpha",
+                "heuristic": 1.02,
+                "value": null,
+                "mixed": 1.02,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.77,
+                "value": -0.1165,
+                "mixed": -0.014,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4+",
+                "uci": "d5e4",
+                "policy": "static_safety_alpha",
+                "heuristic": 5.62,
+                "value": null,
+                "mixed": 5.62,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Be2",
+                "uci": "f1e2",
+                "policy": "adaptive_world_model",
+                "heuristic": 3.98,
+                "value": -0.3727,
+                "mixed": -0.0447,
+                "adaptive_safety_penalty": 10.2,
+                "audit": {
+                  "opponent_best_capture": 5.0,
+                  "opponent_best_reply_delta": -5.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              },
+              {
+                "san": "Qxh1+",
+                "uci": "e4h1",
+                "policy": "static_safety_alpha",
+                "heuristic": 12.85,
+                "value": null,
+                "mixed": 12.85,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "sample_games": [
+        {
+          "adaptive_color": "white",
+          "opponent_policy": "static_safety_alpha",
+          "start_fen": "rnbqkbnr/p1pppp2/p6p/6p1/4P3/2N5/PPPP1PPP/R1BQK1NR w KQkq - 0 4",
+          "plies": 60,
+          "winner": "static_safety_alpha",
+          "adaptive_value": -0.85,
+          "final_material_for_adaptive": -23.0,
+          "final_fen": "rnk3nr/p7/p1p4p/6q1/5K2/2P1R3/8/8 w - - 4 34",
+          "moves_san": [
+            "d4",
+            "e5",
+            "dxe5",
+            "Bb4",
+            "Bxg5",
+            "Bxc3+",
+            "bxc3",
+            "Qxg5",
+            "e6",
+            "dxe6",
+            "Qd4",
+            "e5",
+            "Qc4",
+            "Qxg2",
+            "Qa4+",
+            "c6",
+            "O-O-O",
+            "Qxh1",
+            "Rd5",
+            "Qxg1+",
+            "Kd2",
+            "Qxf2+",
+            "Kc1",
+            "Qf4+",
+            "Kb1",
+            "Qf1+",
+            "Kb2",
+            "Be6",
+            "Rxe5",
+            "f5",
+            "Rxe6+",
+            "Kd7",
+            "exf5",
+            "Qxf5",
+            "Re3",
+            "Qd5",
+            "Kc1",
+            "Qh1+",
+            "Kd2",
+            "Qxh2+",
+            "Kd3",
+            "Qd6+",
+            "Ke4",
+            "Qd5+",
+            "Kf4",
+            "Qg5+",
+            "Ke4",
+            "Qg4+",
+            "Ke5",
+            "Qxa4",
+            "Rd3+",
+            "Kc8",
+            "Re3",
+            "Qxc2",
+            "Kd4",
+            "Qxa2",
+            "Ke4",
+            "Qd5+",
+            "Kf4",
+            "Qg5+"
+          ],
+          "audit_summary": {
+            "adaptive_world_model": {
+              "moves": 30,
+              "queen_hangs": 1,
+              "major_piece_hangs": 6,
+              "tactical_blunders": 3,
+              "best_capture_sum": 42.0,
+              "queen_hang_rate": 0.0333,
+              "major_piece_hang_rate": 0.2,
+              "tactical_blunder_rate": 0.1,
+              "avg_opponent_best_capture": 1.4
+            },
+            "static_safety_alpha": {
+              "moves": 30,
+              "queen_hangs": 0,
+              "major_piece_hangs": 2,
+              "tactical_blunders": 0,
+              "best_capture_sum": 17.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.0667,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 0.5667
+            }
+          },
+          "move_details": [
+            {
+              "san": "d4",
+              "uci": "d2d4",
+              "policy": "adaptive_world_model",
+              "heuristic": 0.12,
+              "value": -0.1587,
+              "mixed": -0.019,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "e5",
+              "uci": "e7e5",
+              "policy": "static_safety_alpha",
+              "heuristic": -0.18,
+              "value": null,
+              "mixed": -0.78,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "dxe5",
+              "uci": "d4e5",
+              "policy": "adaptive_world_model",
+              "heuristic": 2.17,
+              "value": -0.0799,
+              "mixed": -0.0096,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Bb4",
+              "uci": "f8b4",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.08,
+              "value": null,
+              "mixed": -0.52,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Bxg5",
+              "uci": "c1g5",
+              "policy": "adaptive_world_model",
+              "heuristic": 2.18,
+              "value": -0.1709,
+              "mixed": -0.0205,
+              "adaptive_safety_penalty": 2.75,
+              "audit": {
+                "opponent_best_capture": 3.0,
+                "opponent_best_reply_delta": -2.0,
+                "queen_hang": false,
+                "major_piece_hang": true,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Bxc3+",
+              "uci": "b4c3",
+              "policy": "static_safety_alpha",
+              "heuristic": 8.28,
+              "value": null,
+              "mixed": 6.03,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 2.25,
+              "audit": {
+                "opponent_best_capture": 3.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": true,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "bxc3",
+              "uci": "b2c3",
+              "policy": "adaptive_world_model",
+              "heuristic": 8.63,
+              "value": -0.1225,
+              "mixed": -0.0147,
+              "adaptive_safety_penalty": 2.25,
+              "audit": {
+                "opponent_best_capture": 3.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": true,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Qxg5",
+              "uci": "d8g5",
+              "policy": "static_safety_alpha",
+              "heuristic": 5.93,
+              "value": null,
+              "mixed": 5.58,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.35,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "iteration": 7,
+      "exploration": 0.03,
+      "effective_value_weight": 0.12,
+      "new_samples": 223,
+      "replay_samples": 2093,
+      "summary": {
+        "games": 6,
+        "adaptive_wins": 4,
+        "static_wins": 2,
+        "opponent_wins": 2,
+        "opponent_winners": {
+          "static_safety_alpha": 2
+        },
+        "draws": 0,
+        "adaptive_score_rate": 0.6667,
+        "avg_adaptive_value": 0.3333,
+        "avg_plies": 37.17,
+        "tactical_audit": {
+          "adaptive_world_model": {
+            "moves": 112,
+            "queen_hangs": 0,
+            "major_piece_hangs": 17,
+            "tactical_blunders": 2,
+            "best_capture_sum": 95.0,
+            "queen_hang_rate": 0.0,
+            "major_piece_hang_rate": 0.1518,
+            "tactical_blunder_rate": 0.0179,
+            "avg_opponent_best_capture": 0.8482
+          },
+          "static_safety_alpha": {
+            "moves": 111,
+            "queen_hangs": 2,
+            "major_piece_hangs": 16,
+            "tactical_blunders": 4,
+            "best_capture_sum": 102.0,
+            "queen_hang_rate": 0.018,
+            "major_piece_hang_rate": 0.1441,
+            "tactical_blunder_rate": 0.036,
+            "avg_opponent_best_capture": 0.9189
+          }
+        }
+      },
+      "online_update": {
+        "updates": 6,
+        "loss": 0.07738
+      },
+      "heldout_after_update": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_safety_alpha",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 4,
+          "static_wins": 4,
+          "opponent_wins": 4,
+          "opponent_winners": {
+            "static_safety_alpha": 4
+          },
+          "draws": 0,
+          "adaptive_score_rate": 0.5,
+          "avg_adaptive_value": -0.0562,
+          "avg_plies": 35.38,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 142,
+              "queen_hangs": 0,
+              "major_piece_hangs": 33,
+              "tactical_blunders": 4,
+              "best_capture_sum": 156.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.2324,
+              "tactical_blunder_rate": 0.0282,
+              "avg_opponent_best_capture": 1.0986
+            },
+            "static_safety_alpha": {
+              "moves": 141,
+              "queen_hangs": 0,
+              "major_piece_hangs": 52,
+              "tactical_blunders": 8,
+              "best_capture_sum": 213.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.3688,
+              "tactical_blunder_rate": 0.0567,
+              "avg_opponent_best_capture": 1.5106
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_safety_alpha",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 20,
+            "winner": "static_safety_alpha",
+            "adaptive_value": -1.0,
+            "final_material_for_adaptive": -12.0,
+            "final_fen": "r3kbnr/1pp1pppp/p1n5/8/5P1P/2Pb2P1/P2P4/RNBQKq2 w Qkq - 0 14",
+            "moves_san": [
+              "Nf4",
+              "d4",
+              "Nd3",
+              "Qd5",
+              "e4",
+              "Qxe4+",
+              "Be2",
+              "Qxh1+",
+              "Bf1",
+              "Qe4+",
+              "Be2",
+              "Bf5",
+              "c4",
+              "dxc3",
+              "bxc3",
+              "Qh1+",
+              "Bf1",
+              "Bxd3",
+              "f4",
+              "Qxf1#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 7,
+                "tactical_blunders": 1,
+                "best_capture_sum": 24.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.7,
+                "tactical_blunder_rate": 0.1,
+                "avg_opponent_best_capture": 2.4
+              },
+              "static_safety_alpha": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 0,
+                "tactical_blunders": 0,
+                "best_capture_sum": 1.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.0,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.1
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.0012,
+                "mixed": -0.0001,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "d4",
+                "uci": "d5d4",
+                "policy": "static_safety_alpha",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd3",
+                "uci": "f4d3",
+                "policy": "adaptive_world_model",
+                "heuristic": 0.75,
+                "value": -0.0181,
+                "mixed": -0.0022,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qd5",
+                "uci": "d8d5",
+                "policy": "static_safety_alpha",
+                "heuristic": 1.02,
+                "value": null,
+                "mixed": 1.02,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.77,
+                "value": -0.0178,
+                "mixed": -0.0021,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4+",
+                "uci": "d5e4",
+                "policy": "static_safety_alpha",
+                "heuristic": 5.62,
+                "value": null,
+                "mixed": 5.62,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Be2",
+                "uci": "f1e2",
+                "policy": "adaptive_world_model",
+                "heuristic": 3.98,
+                "value": -0.3761,
+                "mixed": -0.0451,
+                "adaptive_safety_penalty": 10.2,
+                "audit": {
+                  "opponent_best_capture": 5.0,
+                  "opponent_best_reply_delta": -5.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              },
+              {
+                "san": "Qxh1+",
+                "uci": "e4h1",
+                "policy": "static_safety_alpha",
+                "heuristic": 12.85,
+                "value": null,
+                "mixed": 12.85,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "heldout_vs_alpha": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_alpha_lite",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 8,
+          "static_wins": 0,
+          "opponent_wins": 0,
+          "opponent_winners": {},
+          "draws": 0,
+          "adaptive_score_rate": 1.0,
+          "avg_adaptive_value": 0.925,
+          "avg_plies": 46.62,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 187,
+              "queen_hangs": 3,
+              "major_piece_hangs": 10,
+              "tactical_blunders": 0,
+              "best_capture_sum": 73.0,
+              "queen_hang_rate": 0.016,
+              "major_piece_hang_rate": 0.0535,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 0.3904
+            },
+            "static_alpha_lite": {
+              "moves": 186,
+              "queen_hangs": 7,
+              "major_piece_hangs": 47,
+              "tactical_blunders": 16,
+              "best_capture_sum": 262.0,
+              "queen_hang_rate": 0.0376,
+              "major_piece_hang_rate": 0.2527,
+              "tactical_blunder_rate": 0.086,
+              "avg_opponent_best_capture": 1.4086
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_alpha_lite",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 53,
+            "winner": "adaptive_world_model",
+            "adaptive_value": 1.0,
+            "final_material_for_adaptive": 32.0,
+            "final_fen": "2k5/8/B2Q4/K7/7P/6P1/PP6/RNB4R b - - 10 30",
+            "moves_san": [
+              "Nf4",
+              "Nd4",
+              "e4",
+              "Nxc2+",
+              "Qxc2",
+              "dxe4",
+              "Qxe4",
+              "Qxd2+",
+              "Kxd2",
+              "e5",
+              "Qxe5+",
+              "Be6",
+              "Nxe6",
+              "fxe6",
+              "Qxe6+",
+              "Ne7",
+              "Qc4",
+              "O-O-O+",
+              "Ke3",
+              "Nf5+",
+              "Ke4",
+              "Nxg3+",
+              "fxg3",
+              "Rd4+",
+              "Kxd4",
+              "Bc5+",
+              "Qxc5",
+              "Rd8+",
+              "Ke4",
+              "Rd4+",
+              "Kxd4",
+              "b5",
+              "Qf5+",
+              "Kb8",
+              "Qxh7",
+              "c5+",
+              "Kxc5",
+              "b4",
+              "Kxb4",
+              "a5+",
+              "Kxa5",
+              "g6",
+              "Qxg6",
+              "Kc8",
+              "Qf5+",
+              "Kb8",
+              "Qe5+",
+              "Kc8",
+              "Qe6+",
+              "Kb8",
+              "Qd6+",
+              "Kc8",
+              "Ba6#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 27,
+                "queen_hangs": 0,
+                "major_piece_hangs": 1,
+                "tactical_blunders": 0,
+                "best_capture_sum": 7.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.037,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.2593
+              },
+              "static_alpha_lite": {
+                "moves": 26,
+                "queen_hangs": 1,
+                "major_piece_hangs": 8,
+                "tactical_blunders": 3,
+                "best_capture_sum": 44.0,
+                "queen_hang_rate": 0.0385,
+                "major_piece_hang_rate": 0.3077,
+                "tactical_blunder_rate": 0.1154,
+                "avg_opponent_best_capture": 1.6923
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.0012,
+                "mixed": -0.0001,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd4",
+                "uci": "c6d4",
+                "policy": "static_alpha_lite",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.12,
+                "value": -0.0321,
+                "mixed": -0.0039,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nxc2+",
+                "uci": "d4c2",
+                "policy": "static_alpha_lite",
+                "heuristic": 4.76,
+                "value": null,
+                "mixed": 4.76,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 3.0,
+                  "opponent_best_reply_delta": -2.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxc2",
+                "uci": "d1c2",
+                "policy": "adaptive_world_model",
+                "heuristic": 9.11,
+                "value": 0.0019,
+                "mixed": 0.0002,
+                "adaptive_safety_penalty": 0.35,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "dxe4",
+                "uci": "d5e4",
+                "policy": "static_alpha_lite",
+                "heuristic": 2.02,
+                "value": null,
+                "mixed": 2.02,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4",
+                "uci": "c2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 2.12,
+                "value": 0.0065,
+                "mixed": 0.0008,
+                "adaptive_safety_penalty": 0.35,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxd2+",
+                "uci": "d8d2",
+                "policy": "static_alpha_lite",
+                "heuristic": 4.58,
+                "value": null,
+                "mixed": 4.58,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 9.0,
+                  "opponent_best_reply_delta": -8.0,
+                  "queen_hang": true,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "heldout_vs_safety": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_safety_alpha",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 4,
+          "static_wins": 4,
+          "opponent_wins": 4,
+          "opponent_winners": {
+            "static_safety_alpha": 4
+          },
+          "draws": 0,
+          "adaptive_score_rate": 0.5,
+          "avg_adaptive_value": -0.0562,
+          "avg_plies": 35.38,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 142,
+              "queen_hangs": 0,
+              "major_piece_hangs": 33,
+              "tactical_blunders": 4,
+              "best_capture_sum": 156.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.2324,
+              "tactical_blunder_rate": 0.0282,
+              "avg_opponent_best_capture": 1.0986
+            },
+            "static_safety_alpha": {
+              "moves": 141,
+              "queen_hangs": 0,
+              "major_piece_hangs": 52,
+              "tactical_blunders": 8,
+              "best_capture_sum": 213.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.3688,
+              "tactical_blunder_rate": 0.0567,
+              "avg_opponent_best_capture": 1.5106
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_safety_alpha",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 20,
+            "winner": "static_safety_alpha",
+            "adaptive_value": -1.0,
+            "final_material_for_adaptive": -12.0,
+            "final_fen": "r3kbnr/1pp1pppp/p1n5/8/5P1P/2Pb2P1/P2P4/RNBQKq2 w Qkq - 0 14",
+            "moves_san": [
+              "Nf4",
+              "d4",
+              "Nd3",
+              "Qd5",
+              "e4",
+              "Qxe4+",
+              "Be2",
+              "Qxh1+",
+              "Bf1",
+              "Qe4+",
+              "Be2",
+              "Bf5",
+              "c4",
+              "dxc3",
+              "bxc3",
+              "Qh1+",
+              "Bf1",
+              "Bxd3",
+              "f4",
+              "Qxf1#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 7,
+                "tactical_blunders": 1,
+                "best_capture_sum": 24.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.7,
+                "tactical_blunder_rate": 0.1,
+                "avg_opponent_best_capture": 2.4
+              },
+              "static_safety_alpha": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 0,
+                "tactical_blunders": 0,
+                "best_capture_sum": 1.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.0,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.1
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.0012,
+                "mixed": -0.0001,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "d4",
+                "uci": "d5d4",
+                "policy": "static_safety_alpha",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd3",
+                "uci": "f4d3",
+                "policy": "adaptive_world_model",
+                "heuristic": 0.75,
+                "value": -0.0181,
+                "mixed": -0.0022,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qd5",
+                "uci": "d8d5",
+                "policy": "static_safety_alpha",
+                "heuristic": 1.02,
+                "value": null,
+                "mixed": 1.02,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.77,
+                "value": -0.0178,
+                "mixed": -0.0021,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4+",
+                "uci": "d5e4",
+                "policy": "static_safety_alpha",
+                "heuristic": 5.62,
+                "value": null,
+                "mixed": 5.62,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Be2",
+                "uci": "f1e2",
+                "policy": "adaptive_world_model",
+                "heuristic": 3.98,
+                "value": -0.3761,
+                "mixed": -0.0451,
+                "adaptive_safety_penalty": 10.2,
+                "audit": {
+                  "opponent_best_capture": 5.0,
+                  "opponent_best_reply_delta": -5.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              },
+              {
+                "san": "Qxh1+",
+                "uci": "e4h1",
+                "policy": "static_safety_alpha",
+                "heuristic": 12.85,
+                "value": null,
+                "mixed": 12.85,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "sample_games": [
+        {
+          "adaptive_color": "white",
+          "opponent_policy": "static_safety_alpha",
+          "start_fen": "rnbqkbnr/pp1ppp1p/8/2p3N1/1P6/8/P1PPPPPP/RNBQKB1R w KQkq - 0 4",
+          "plies": 12,
+          "winner": "static_safety_alpha",
+          "adaptive_value": -1.0,
+          "final_material_for_adaptive": 1.0,
+          "final_fen": "rnb1k1nr/pp1p3p/8/2b1pp2/4P3/2N2PP1/P1PP1q1P/RNBQKB1R w KQkq - 1 10",
+          "moves_san": [
+            "bxc5",
+            "e5",
+            "Ne4",
+            "f5",
+            "Nec3",
+            "Bxc5",
+            "f3",
+            "Qh4+",
+            "g3",
+            "Qd4",
+            "e4",
+            "Qf2#"
+          ],
+          "audit_summary": {
+            "adaptive_world_model": {
+              "moves": 6,
+              "queen_hangs": 0,
+              "major_piece_hangs": 1,
+              "tactical_blunders": 0,
+              "best_capture_sum": 6.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.1667,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 1.0
+            },
+            "static_safety_alpha": {
+              "moves": 6,
+              "queen_hangs": 0,
+              "major_piece_hangs": 0,
+              "tactical_blunders": 0,
+              "best_capture_sum": 1.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.0,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 0.1667
+            }
+          },
+          "move_details": [
+            {
+              "san": "bxc5",
+              "uci": "b4c5",
+              "policy": "adaptive_world_model",
+              "heuristic": 2.3,
+              "value": -0.037,
+              "mixed": -0.0044,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "e5",
+              "uci": "e7e5",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.47,
+              "value": null,
+              "mixed": -0.13,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Ne4",
+              "uci": "g5e4",
+              "policy": "adaptive_world_model",
+              "heuristic": 0.82,
+              "value": -0.0661,
+              "mixed": -0.0079,
+              "adaptive_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "f5",
+              "uci": "f7f5",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.8,
+              "value": null,
+              "mixed": 0.8,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Nec3",
+              "uci": "e4c3",
+              "policy": "adaptive_world_model",
+              "heuristic": 0.73,
+              "value": -0.1112,
+              "mixed": -0.0133,
+              "adaptive_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Bxc5",
+              "uci": "f8c5",
+              "policy": "static_safety_alpha",
+              "heuristic": 3.05,
+              "value": null,
+              "mixed": 3.05,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "f3",
+              "uci": "f2f3",
+              "policy": "adaptive_world_model",
+              "heuristic": 1.23,
+              "value": -0.1589,
+              "mixed": -0.0191,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Qh4+",
+              "uci": "d8h4",
+              "policy": "static_safety_alpha",
+              "heuristic": 2.86,
+              "value": null,
+              "mixed": 2.86,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "iteration": 8,
+      "exploration": 0.03,
+      "effective_value_weight": 0.12,
+      "new_samples": 132,
+      "replay_samples": 2225,
+      "summary": {
+        "games": 6,
+        "adaptive_wins": 3,
+        "static_wins": 3,
+        "opponent_wins": 3,
+        "opponent_winners": {
+          "static_safety_alpha": 3
+        },
+        "draws": 0,
+        "adaptive_score_rate": 0.5,
+        "avg_adaptive_value": 0.0,
+        "avg_plies": 22.0,
+        "tactical_audit": {
+          "adaptive_world_model": {
+            "moves": 66,
+            "queen_hangs": 1,
+            "major_piece_hangs": 13,
+            "tactical_blunders": 3,
+            "best_capture_sum": 72.0,
+            "queen_hang_rate": 0.0152,
+            "major_piece_hang_rate": 0.197,
+            "tactical_blunder_rate": 0.0455,
+            "avg_opponent_best_capture": 1.0909
+          },
+          "static_safety_alpha": {
+            "moves": 66,
+            "queen_hangs": 0,
+            "major_piece_hangs": 4,
+            "tactical_blunders": 0,
+            "best_capture_sum": 41.0,
+            "queen_hang_rate": 0.0,
+            "major_piece_hang_rate": 0.0606,
+            "tactical_blunder_rate": 0.0,
+            "avg_opponent_best_capture": 0.6212
+          }
+        }
+      },
+      "online_update": {
+        "updates": 6,
+        "loss": 0.07918
+      },
+      "heldout_after_update": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_safety_alpha",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 4,
+          "static_wins": 3,
+          "opponent_wins": 3,
+          "opponent_winners": {
+            "static_safety_alpha": 3
+          },
+          "draws": 1,
+          "adaptive_score_rate": 0.5625,
+          "avg_adaptive_value": 0.05,
+          "avg_plies": 33.75,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 135,
+              "queen_hangs": 0,
+              "major_piece_hangs": 27,
+              "tactical_blunders": 3,
+              "best_capture_sum": 131.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.2,
+              "tactical_blunder_rate": 0.0222,
+              "avg_opponent_best_capture": 0.9704
+            },
+            "static_safety_alpha": {
+              "moves": 135,
+              "queen_hangs": 0,
+              "major_piece_hangs": 56,
+              "tactical_blunders": 5,
+              "best_capture_sum": 206.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.4148,
+              "tactical_blunder_rate": 0.037,
+              "avg_opponent_best_capture": 1.5259
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_safety_alpha",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 20,
+            "winner": "static_safety_alpha",
+            "adaptive_value": -1.0,
+            "final_material_for_adaptive": -12.0,
+            "final_fen": "r3kbnr/1pp1pppp/p1n5/8/5P1P/2Pb2P1/P2P4/RNBQKq2 w Qkq - 0 14",
+            "moves_san": [
+              "Nf4",
+              "d4",
+              "Nd3",
+              "Qd5",
+              "e4",
+              "Qxe4+",
+              "Be2",
+              "Qxh1+",
+              "Bf1",
+              "Qe4+",
+              "Be2",
+              "Bf5",
+              "c4",
+              "dxc3",
+              "bxc3",
+              "Qh1+",
+              "Bf1",
+              "Bxd3",
+              "f4",
+              "Qxf1#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 7,
+                "tactical_blunders": 1,
+                "best_capture_sum": 24.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.7,
+                "tactical_blunder_rate": 0.1,
+                "avg_opponent_best_capture": 2.4
+              },
+              "static_safety_alpha": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 0,
+                "tactical_blunders": 0,
+                "best_capture_sum": 1.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.0,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.1
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.1277,
+                "mixed": -0.0153,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "d4",
+                "uci": "d5d4",
+                "policy": "static_safety_alpha",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd3",
+                "uci": "f4d3",
+                "policy": "adaptive_world_model",
+                "heuristic": 0.75,
+                "value": -0.1209,
+                "mixed": -0.0145,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qd5",
+                "uci": "d8d5",
+                "policy": "static_safety_alpha",
+                "heuristic": 1.02,
+                "value": null,
+                "mixed": 1.02,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.77,
+                "value": -0.1382,
+                "mixed": -0.0166,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4+",
+                "uci": "d5e4",
+                "policy": "static_safety_alpha",
+                "heuristic": 5.62,
+                "value": null,
+                "mixed": 5.62,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Be2",
+                "uci": "f1e2",
+                "policy": "adaptive_world_model",
+                "heuristic": 3.98,
+                "value": -0.5459,
+                "mixed": -0.0655,
+                "adaptive_safety_penalty": 10.2,
+                "audit": {
+                  "opponent_best_capture": 5.0,
+                  "opponent_best_reply_delta": -5.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              },
+              {
+                "san": "Qxh1+",
+                "uci": "e4h1",
+                "policy": "static_safety_alpha",
+                "heuristic": 12.85,
+                "value": null,
+                "mixed": 12.85,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "heldout_vs_alpha": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_alpha_lite",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 7,
+          "static_wins": 0,
+          "opponent_wins": 0,
+          "opponent_winners": {},
+          "draws": 1,
+          "adaptive_score_rate": 0.9375,
+          "avg_adaptive_value": 0.8187,
+          "avg_plies": 44.25,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 178,
+              "queen_hangs": 3,
+              "major_piece_hangs": 13,
+              "tactical_blunders": 0,
+              "best_capture_sum": 82.0,
+              "queen_hang_rate": 0.0169,
+              "major_piece_hang_rate": 0.073,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 0.4607
+            },
+            "static_alpha_lite": {
+              "moves": 176,
+              "queen_hangs": 7,
+              "major_piece_hangs": 49,
+              "tactical_blunders": 17,
+              "best_capture_sum": 264.0,
+              "queen_hang_rate": 0.0398,
+              "major_piece_hang_rate": 0.2784,
+              "tactical_blunder_rate": 0.0966,
+              "avg_opponent_best_capture": 1.5
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_alpha_lite",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 37,
+            "winner": "adaptive_world_model",
+            "adaptive_value": 1.0,
+            "final_material_for_adaptive": 28.0,
+            "final_fen": "4k3/1p6/p2Q2B1/8/7P/6P1/PP3P2/RN1K3R b - - 0 22",
+            "moves_san": [
+              "Nf4",
+              "Nd4",
+              "e4",
+              "Nxc2+",
+              "Qxc2",
+              "dxe4",
+              "Qxe4",
+              "Qxd2+",
+              "Bxd2",
+              "e5",
+              "Qxe5+",
+              "Be6",
+              "Nxe6",
+              "fxe6",
+              "Qxe6+",
+              "Ne7",
+              "Qc4",
+              "O-O-O",
+              "Bf4",
+              "Rd1+",
+              "Kxd1",
+              "Nd5",
+              "Qxd5",
+              "Bd6",
+              "Bxd6",
+              "cxd6",
+              "Qxd6",
+              "Rd8",
+              "Bh3+",
+              "Rd7",
+              "Bxd7+",
+              "Kd8",
+              "Bf5+",
+              "Ke8",
+              "Bxh7",
+              "g6",
+              "Bxg6#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 19,
+                "queen_hangs": 0,
+                "major_piece_hangs": 2,
+                "tactical_blunders": 0,
+                "best_capture_sum": 9.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.1053,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.4737
+              },
+              "static_alpha_lite": {
+                "moves": 18,
+                "queen_hangs": 1,
+                "major_piece_hangs": 9,
+                "tactical_blunders": 4,
+                "best_capture_sum": 48.0,
+                "queen_hang_rate": 0.0556,
+                "major_piece_hang_rate": 0.5,
+                "tactical_blunder_rate": 0.2222,
+                "avg_opponent_best_capture": 2.6667
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.1277,
+                "mixed": -0.0153,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd4",
+                "uci": "c6d4",
+                "policy": "static_alpha_lite",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.12,
+                "value": -0.1303,
+                "mixed": -0.0156,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nxc2+",
+                "uci": "d4c2",
+                "policy": "static_alpha_lite",
+                "heuristic": 4.76,
+                "value": null,
+                "mixed": 4.76,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 3.0,
+                  "opponent_best_reply_delta": -2.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxc2",
+                "uci": "d1c2",
+                "policy": "adaptive_world_model",
+                "heuristic": 9.11,
+                "value": -0.0868,
+                "mixed": -0.0104,
+                "adaptive_safety_penalty": 0.35,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "dxe4",
+                "uci": "d5e4",
+                "policy": "static_alpha_lite",
+                "heuristic": 2.02,
+                "value": null,
+                "mixed": 2.02,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4",
+                "uci": "c2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 2.12,
+                "value": -0.0799,
+                "mixed": -0.0096,
+                "adaptive_safety_penalty": 0.35,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxd2+",
+                "uci": "d8d2",
+                "policy": "static_alpha_lite",
+                "heuristic": 4.58,
+                "value": null,
+                "mixed": 4.58,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 9.0,
+                  "opponent_best_reply_delta": -8.0,
+                  "queen_hang": true,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "heldout_vs_safety": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_safety_alpha",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 4,
+          "static_wins": 3,
+          "opponent_wins": 3,
+          "opponent_winners": {
+            "static_safety_alpha": 3
+          },
+          "draws": 1,
+          "adaptive_score_rate": 0.5625,
+          "avg_adaptive_value": 0.05,
+          "avg_plies": 33.75,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 135,
+              "queen_hangs": 0,
+              "major_piece_hangs": 27,
+              "tactical_blunders": 3,
+              "best_capture_sum": 131.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.2,
+              "tactical_blunder_rate": 0.0222,
+              "avg_opponent_best_capture": 0.9704
+            },
+            "static_safety_alpha": {
+              "moves": 135,
+              "queen_hangs": 0,
+              "major_piece_hangs": 56,
+              "tactical_blunders": 5,
+              "best_capture_sum": 206.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.4148,
+              "tactical_blunder_rate": 0.037,
+              "avg_opponent_best_capture": 1.5259
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_safety_alpha",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 20,
+            "winner": "static_safety_alpha",
+            "adaptive_value": -1.0,
+            "final_material_for_adaptive": -12.0,
+            "final_fen": "r3kbnr/1pp1pppp/p1n5/8/5P1P/2Pb2P1/P2P4/RNBQKq2 w Qkq - 0 14",
+            "moves_san": [
+              "Nf4",
+              "d4",
+              "Nd3",
+              "Qd5",
+              "e4",
+              "Qxe4+",
+              "Be2",
+              "Qxh1+",
+              "Bf1",
+              "Qe4+",
+              "Be2",
+              "Bf5",
+              "c4",
+              "dxc3",
+              "bxc3",
+              "Qh1+",
+              "Bf1",
+              "Bxd3",
+              "f4",
+              "Qxf1#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 7,
+                "tactical_blunders": 1,
+                "best_capture_sum": 24.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.7,
+                "tactical_blunder_rate": 0.1,
+                "avg_opponent_best_capture": 2.4
+              },
+              "static_safety_alpha": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 0,
+                "tactical_blunders": 0,
+                "best_capture_sum": 1.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.0,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.1
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.1277,
+                "mixed": -0.0153,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "d4",
+                "uci": "d5d4",
+                "policy": "static_safety_alpha",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd3",
+                "uci": "f4d3",
+                "policy": "adaptive_world_model",
+                "heuristic": 0.75,
+                "value": -0.1209,
+                "mixed": -0.0145,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qd5",
+                "uci": "d8d5",
+                "policy": "static_safety_alpha",
+                "heuristic": 1.02,
+                "value": null,
+                "mixed": 1.02,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.77,
+                "value": -0.1382,
+                "mixed": -0.0166,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4+",
+                "uci": "d5e4",
+                "policy": "static_safety_alpha",
+                "heuristic": 5.62,
+                "value": null,
+                "mixed": 5.62,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Be2",
+                "uci": "f1e2",
+                "policy": "adaptive_world_model",
+                "heuristic": 3.98,
+                "value": -0.5459,
+                "mixed": -0.0655,
+                "adaptive_safety_penalty": 10.2,
+                "audit": {
+                  "opponent_best_capture": 5.0,
+                  "opponent_best_reply_delta": -5.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              },
+              {
+                "san": "Qxh1+",
+                "uci": "e4h1",
+                "policy": "static_safety_alpha",
+                "heuristic": 12.85,
+                "value": null,
+                "mixed": 12.85,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "sample_games": [
+        {
+          "adaptive_color": "white",
+          "opponent_policy": "static_safety_alpha",
+          "start_fen": "rnb1k1nr/pppp1ppp/4p3/6q1/8/N6N/1PPPPPPP/R1BQKB1R w KQkq - 1 4",
+          "plies": 49,
+          "winner": "adaptive_world_model",
+          "adaptive_value": 1.0,
+          "final_material_for_adaptive": 14.0,
+          "final_fen": "rn5r/p5p1/1B5p/4k3/2BQ1nP1/N7/1PP2P1P/R4RK1 b - - 2 28",
+          "moves_san": [
+            "Nxg5",
+            "e5",
+            "Ne4",
+            "d5",
+            "Nc5",
+            "b6",
+            "Nd3",
+            "e4",
+            "Ne5",
+            "f5",
+            "e3",
+            "Be6",
+            "Bb5+",
+            "Ke7",
+            "O-O",
+            "Kd6",
+            "d4",
+            "exd3",
+            "Nxd3",
+            "Ne7",
+            "Nf4",
+            "Bf7",
+            "Bc4",
+            "Ke5",
+            "Bd3",
+            "d4",
+            "exd4+",
+            "Kxd4",
+            "Bxf5+",
+            "Ke5",
+            "Bd3",
+            "h6",
+            "Be3",
+            "c5",
+            "Ne2",
+            "Bd5",
+            "g4",
+            "c4",
+            "Bd4+",
+            "Ke6",
+            "Nf4+",
+            "Kd6",
+            "Nxd5",
+            "Nxd5",
+            "Bxc4",
+            "Nf4",
+            "Bxb6+",
+            "Ke5",
+            "Qd4#"
+          ],
+          "audit_summary": {
+            "adaptive_world_model": {
+              "moves": 25,
+              "queen_hangs": 0,
+              "major_piece_hangs": 1,
+              "tactical_blunders": 0,
+              "best_capture_sum": 5.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.04,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 0.2
+            },
+            "static_safety_alpha": {
+              "moves": 24,
+              "queen_hangs": 0,
+              "major_piece_hangs": 1,
+              "tactical_blunders": 0,
+              "best_capture_sum": 17.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.0417,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 0.7083
+            }
+          },
+          "move_details": [
+            {
+              "san": "Nxg5",
+              "uci": "h3g5",
+              "policy": "adaptive_world_model",
+              "heuristic": 18.53,
+              "value": 0.2651,
+              "mixed": 0.0318,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "e5",
+              "uci": "e6e5",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.52,
+              "value": null,
+              "mixed": -0.08,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Ne4",
+              "uci": "g5e4",
+              "policy": "adaptive_world_model",
+              "heuristic": 0.52,
+              "value": 0.0673,
+              "mixed": 0.0081,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "d5",
+              "uci": "d7d5",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.57,
+              "value": null,
+              "mixed": 0.57,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Nc5",
+              "uci": "e4c5",
+              "policy": "adaptive_world_model",
+              "heuristic": 0.7,
+              "value": 0.0465,
+              "mixed": 0.0056,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "b6",
+              "uci": "b7b6",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.31,
+              "value": null,
+              "mixed": 0.31,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Nd3",
+              "uci": "c5d3",
+              "policy": "adaptive_world_model",
+              "heuristic": 0.7,
+              "value": 0.0322,
+              "mixed": 0.0039,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "e4",
+              "uci": "e5e4",
+              "policy": "static_safety_alpha",
+              "heuristic": 1.17,
+              "value": null,
+              "mixed": 1.17,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "iteration": 9,
+      "exploration": 0.03,
+      "effective_value_weight": 0.12,
+      "new_samples": 283,
+      "replay_samples": 2508,
+      "summary": {
+        "games": 6,
+        "adaptive_wins": 1,
+        "static_wins": 5,
+        "opponent_wins": 5,
+        "opponent_winners": {
+          "static_safety_alpha": 5
+        },
+        "draws": 0,
+        "adaptive_score_rate": 0.1667,
+        "avg_adaptive_value": -0.6167,
+        "avg_plies": 47.17,
+        "tactical_audit": {
+          "adaptive_world_model": {
+            "moves": 141,
+            "queen_hangs": 2,
+            "major_piece_hangs": 41,
+            "tactical_blunders": 8,
+            "best_capture_sum": 187.0,
+            "queen_hang_rate": 0.0142,
+            "major_piece_hang_rate": 0.2908,
+            "tactical_blunder_rate": 0.0567,
+            "avg_opponent_best_capture": 1.3262
+          },
+          "static_safety_alpha": {
+            "moves": 142,
+            "queen_hangs": 1,
+            "major_piece_hangs": 39,
+            "tactical_blunders": 5,
+            "best_capture_sum": 171.0,
+            "queen_hang_rate": 0.007,
+            "major_piece_hang_rate": 0.2746,
+            "tactical_blunder_rate": 0.0352,
+            "avg_opponent_best_capture": 1.2042
+          }
+        }
+      },
+      "online_update": {
+        "updates": 6,
+        "loss": 0.07472
+      },
+      "heldout_after_update": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_safety_alpha",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 4,
+          "static_wins": 3,
+          "opponent_wins": 3,
+          "opponent_winners": {
+            "static_safety_alpha": 3
+          },
+          "draws": 1,
+          "adaptive_score_rate": 0.5625,
+          "avg_adaptive_value": 0.125,
+          "avg_plies": 33.5,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 134,
+              "queen_hangs": 0,
+              "major_piece_hangs": 27,
+              "tactical_blunders": 3,
+              "best_capture_sum": 131.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.2015,
+              "tactical_blunder_rate": 0.0224,
+              "avg_opponent_best_capture": 0.9776
+            },
+            "static_safety_alpha": {
+              "moves": 134,
+              "queen_hangs": 0,
+              "major_piece_hangs": 49,
+              "tactical_blunders": 6,
+              "best_capture_sum": 194.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.3657,
+              "tactical_blunder_rate": 0.0448,
+              "avg_opponent_best_capture": 1.4478
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_safety_alpha",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 20,
+            "winner": "static_safety_alpha",
+            "adaptive_value": -1.0,
+            "final_material_for_adaptive": -12.0,
+            "final_fen": "r3kbnr/1pp1pppp/p1n5/8/5P1P/2Pb2P1/P2P4/RNBQKq2 w Qkq - 0 14",
+            "moves_san": [
+              "Nf4",
+              "d4",
+              "Nd3",
+              "Qd5",
+              "e4",
+              "Qxe4+",
+              "Be2",
+              "Qxh1+",
+              "Bf1",
+              "Qe4+",
+              "Be2",
+              "Bf5",
+              "c4",
+              "dxc3",
+              "bxc3",
+              "Qh1+",
+              "Bf1",
+              "Bxd3",
+              "f4",
+              "Qxf1#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 7,
+                "tactical_blunders": 1,
+                "best_capture_sum": 24.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.7,
+                "tactical_blunder_rate": 0.1,
+                "avg_opponent_best_capture": 2.4
+              },
+              "static_safety_alpha": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 0,
+                "tactical_blunders": 0,
+                "best_capture_sum": 1.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.0,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.1
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.1203,
+                "mixed": -0.0144,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "d4",
+                "uci": "d5d4",
+                "policy": "static_safety_alpha",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd3",
+                "uci": "f4d3",
+                "policy": "adaptive_world_model",
+                "heuristic": 0.75,
+                "value": -0.1188,
+                "mixed": -0.0143,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qd5",
+                "uci": "d8d5",
+                "policy": "static_safety_alpha",
+                "heuristic": 1.02,
+                "value": null,
+                "mixed": 1.02,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.77,
+                "value": -0.1654,
+                "mixed": -0.0199,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4+",
+                "uci": "d5e4",
+                "policy": "static_safety_alpha",
+                "heuristic": 5.62,
+                "value": null,
+                "mixed": 5.62,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Be2",
+                "uci": "f1e2",
+                "policy": "adaptive_world_model",
+                "heuristic": 3.98,
+                "value": -0.6071,
+                "mixed": -0.0729,
+                "adaptive_safety_penalty": 10.2,
+                "audit": {
+                  "opponent_best_capture": 5.0,
+                  "opponent_best_reply_delta": -5.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              },
+              {
+                "san": "Qxh1+",
+                "uci": "e4h1",
+                "policy": "static_safety_alpha",
+                "heuristic": 12.85,
+                "value": null,
+                "mixed": 12.85,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "heldout_vs_alpha": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_alpha_lite",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 8,
+          "static_wins": 0,
+          "opponent_wins": 0,
+          "opponent_winners": {},
+          "draws": 0,
+          "adaptive_score_rate": 1.0,
+          "avg_adaptive_value": 0.9625,
+          "avg_plies": 43.12,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 174,
+              "queen_hangs": 3,
+              "major_piece_hangs": 12,
+              "tactical_blunders": 0,
+              "best_capture_sum": 79.0,
+              "queen_hang_rate": 0.0172,
+              "major_piece_hang_rate": 0.069,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 0.454
+            },
+            "static_alpha_lite": {
+              "moves": 171,
+              "queen_hangs": 7,
+              "major_piece_hangs": 49,
+              "tactical_blunders": 18,
+              "best_capture_sum": 271.0,
+              "queen_hang_rate": 0.0409,
+              "major_piece_hang_rate": 0.2865,
+              "tactical_blunder_rate": 0.1053,
+              "avg_opponent_best_capture": 1.5848
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_alpha_lite",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 37,
+            "winner": "adaptive_world_model",
+            "adaptive_value": 1.0,
+            "final_material_for_adaptive": 28.0,
+            "final_fen": "4k3/1p6/p2Q2B1/8/7P/6P1/PP3P2/RN1K3R b - - 0 22",
+            "moves_san": [
+              "Nf4",
+              "Nd4",
+              "e4",
+              "Nxc2+",
+              "Qxc2",
+              "dxe4",
+              "Qxe4",
+              "Qxd2+",
+              "Bxd2",
+              "e5",
+              "Qxe5+",
+              "Be6",
+              "Nxe6",
+              "fxe6",
+              "Qxe6+",
+              "Ne7",
+              "Qc4",
+              "O-O-O",
+              "Bf4",
+              "Rd1+",
+              "Kxd1",
+              "Nd5",
+              "Qxd5",
+              "Bd6",
+              "Bxd6",
+              "cxd6",
+              "Qxd6",
+              "Rd8",
+              "Bh3+",
+              "Rd7",
+              "Bxd7+",
+              "Kd8",
+              "Bf5+",
+              "Ke8",
+              "Bxh7",
+              "g6",
+              "Bxg6#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 19,
+                "queen_hangs": 0,
+                "major_piece_hangs": 2,
+                "tactical_blunders": 0,
+                "best_capture_sum": 9.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.1053,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.4737
+              },
+              "static_alpha_lite": {
+                "moves": 18,
+                "queen_hangs": 1,
+                "major_piece_hangs": 9,
+                "tactical_blunders": 4,
+                "best_capture_sum": 48.0,
+                "queen_hang_rate": 0.0556,
+                "major_piece_hang_rate": 0.5,
+                "tactical_blunder_rate": 0.2222,
+                "avg_opponent_best_capture": 2.6667
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.1203,
+                "mixed": -0.0144,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd4",
+                "uci": "c6d4",
+                "policy": "static_alpha_lite",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.12,
+                "value": -0.1291,
+                "mixed": -0.0155,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nxc2+",
+                "uci": "d4c2",
+                "policy": "static_alpha_lite",
+                "heuristic": 4.76,
+                "value": null,
+                "mixed": 4.76,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 3.0,
+                  "opponent_best_reply_delta": -2.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxc2",
+                "uci": "d1c2",
+                "policy": "adaptive_world_model",
+                "heuristic": 9.11,
+                "value": -0.0589,
+                "mixed": -0.0071,
+                "adaptive_safety_penalty": 0.35,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "dxe4",
+                "uci": "d5e4",
+                "policy": "static_alpha_lite",
+                "heuristic": 2.02,
+                "value": null,
+                "mixed": 2.02,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4",
+                "uci": "c2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 2.12,
+                "value": -0.0654,
+                "mixed": -0.0079,
+                "adaptive_safety_penalty": 0.35,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxd2+",
+                "uci": "d8d2",
+                "policy": "static_alpha_lite",
+                "heuristic": 4.58,
+                "value": null,
+                "mixed": 4.58,
+                "static_policy": "static_alpha_lite",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 9.0,
+                  "opponent_best_reply_delta": -8.0,
+                  "queen_hang": true,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "heldout_vs_safety": {
+        "value_weight": 0.12,
+        "opponent_policy": "static_safety_alpha",
+        "summary": {
+          "games": 8,
+          "adaptive_wins": 4,
+          "static_wins": 3,
+          "opponent_wins": 3,
+          "opponent_winners": {
+            "static_safety_alpha": 3
+          },
+          "draws": 1,
+          "adaptive_score_rate": 0.5625,
+          "avg_adaptive_value": 0.125,
+          "avg_plies": 33.5,
+          "tactical_audit": {
+            "adaptive_world_model": {
+              "moves": 134,
+              "queen_hangs": 0,
+              "major_piece_hangs": 27,
+              "tactical_blunders": 3,
+              "best_capture_sum": 131.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.2015,
+              "tactical_blunder_rate": 0.0224,
+              "avg_opponent_best_capture": 0.9776
+            },
+            "static_safety_alpha": {
+              "moves": 134,
+              "queen_hangs": 0,
+              "major_piece_hangs": 49,
+              "tactical_blunders": 6,
+              "best_capture_sum": 194.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.3657,
+              "tactical_blunder_rate": 0.0448,
+              "avg_opponent_best_capture": 1.4478
+            }
+          }
+        },
+        "sample_games": [
+          {
+            "adaptive_color": "white",
+            "opponent_policy": "static_safety_alpha",
+            "start_fen": "r1bqkbnr/1pp1pppp/p1n5/3p4/7P/6PN/PPPPPP2/RNBQKB1R w KQkq - 0 4",
+            "plies": 20,
+            "winner": "static_safety_alpha",
+            "adaptive_value": -1.0,
+            "final_material_for_adaptive": -12.0,
+            "final_fen": "r3kbnr/1pp1pppp/p1n5/8/5P1P/2Pb2P1/P2P4/RNBQKq2 w Qkq - 0 14",
+            "moves_san": [
+              "Nf4",
+              "d4",
+              "Nd3",
+              "Qd5",
+              "e4",
+              "Qxe4+",
+              "Be2",
+              "Qxh1+",
+              "Bf1",
+              "Qe4+",
+              "Be2",
+              "Bf5",
+              "c4",
+              "dxc3",
+              "bxc3",
+              "Qh1+",
+              "Bf1",
+              "Bxd3",
+              "f4",
+              "Qxf1#"
+            ],
+            "audit_summary": {
+              "adaptive_world_model": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 7,
+                "tactical_blunders": 1,
+                "best_capture_sum": 24.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.7,
+                "tactical_blunder_rate": 0.1,
+                "avg_opponent_best_capture": 2.4
+              },
+              "static_safety_alpha": {
+                "moves": 10,
+                "queen_hangs": 0,
+                "major_piece_hangs": 0,
+                "tactical_blunders": 0,
+                "best_capture_sum": 1.0,
+                "queen_hang_rate": 0.0,
+                "major_piece_hang_rate": 0.0,
+                "tactical_blunder_rate": 0.0,
+                "avg_opponent_best_capture": 0.1
+              }
+            },
+            "move_details": [
+              {
+                "san": "Nf4",
+                "uci": "h3f4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.0,
+                "value": -0.1203,
+                "mixed": -0.0144,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "d4",
+                "uci": "d5d4",
+                "policy": "static_safety_alpha",
+                "heuristic": 0.92,
+                "value": null,
+                "mixed": 0.92,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Nd3",
+                "uci": "f4d3",
+                "policy": "adaptive_world_model",
+                "heuristic": 0.75,
+                "value": -0.1188,
+                "mixed": -0.0143,
+                "adaptive_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qd5",
+                "uci": "d8d5",
+                "policy": "static_safety_alpha",
+                "heuristic": 1.02,
+                "value": null,
+                "mixed": 1.02,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "e4",
+                "uci": "e2e4",
+                "policy": "adaptive_world_model",
+                "heuristic": 1.77,
+                "value": -0.1654,
+                "mixed": -0.0199,
+                "adaptive_safety_penalty": 0.6,
+                "audit": {
+                  "opponent_best_capture": 1.0,
+                  "opponent_best_reply_delta": -1.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Qxe4+",
+                "uci": "d5e4",
+                "policy": "static_safety_alpha",
+                "heuristic": 5.62,
+                "value": null,
+                "mixed": 5.62,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              },
+              {
+                "san": "Be2",
+                "uci": "f1e2",
+                "policy": "adaptive_world_model",
+                "heuristic": 3.98,
+                "value": -0.6071,
+                "mixed": -0.0729,
+                "adaptive_safety_penalty": 10.2,
+                "audit": {
+                  "opponent_best_capture": 5.0,
+                  "opponent_best_reply_delta": -5.0,
+                  "queen_hang": false,
+                  "major_piece_hang": true,
+                  "tactical_blunder": true
+                }
+              },
+              {
+                "san": "Qxh1+",
+                "uci": "e4h1",
+                "policy": "static_safety_alpha",
+                "heuristic": 12.85,
+                "value": null,
+                "mixed": 12.85,
+                "static_policy": "static_safety_alpha",
+                "static_safety_penalty": 0.0,
+                "audit": {
+                  "opponent_best_capture": 0.0,
+                  "opponent_best_reply_delta": 0.0,
+                  "queen_hang": false,
+                  "major_piece_hang": false,
+                  "tactical_blunder": false
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "sample_games": [
+        {
+          "adaptive_color": "white",
+          "opponent_policy": "static_safety_alpha",
+          "start_fen": "rnbqkb1r/pppppp2/5n2/6pp/8/8/PPPPPPPP/R1BQKBNR w KQkq - 0 4",
+          "plies": 60,
+          "winner": "static_safety_alpha",
+          "adaptive_value": -0.85,
+          "final_material_for_adaptive": -22.0,
+          "final_fen": "rn4r1/pp2k3/5q2/2p2K2/6p1/4B3/P7/8 w - - 2 34",
+          "moves_san": [
+            "d4",
+            "g4",
+            "c4",
+            "Ne4",
+            "d5",
+            "d6",
+            "Qd4",
+            "e5",
+            "Qxe4",
+            "f5",
+            "Qd3",
+            "e4",
+            "Qd4",
+            "Rg8",
+            "Qe3",
+            "f4",
+            "Qxf4",
+            "Be7",
+            "Qxe4",
+            "Bf5",
+            "Qxf5",
+            "c5",
+            "Qxh5+",
+            "Kd7",
+            "e4",
+            "Qa5+",
+            "b4",
+            "Qxb4+",
+            "Ke2",
+            "Qxc4+",
+            "Ke3",
+            "Qxf1",
+            "Qf5+",
+            "Ke8",
+            "Qh5+",
+            "Kd8",
+            "e5",
+            "Qe1+",
+            "Kf4",
+            "Qxf2+",
+            "Ke4",
+            "Qxg2+",
+            "Kf5",
+            "Qxh1",
+            "exd6",
+            "Qxd5+",
+            "Kf4",
+            "Qxh5",
+            "dxe7+",
+            "Kxe7",
+            "Ke4",
+            "Qxh2",
+            "Kd5",
+            "Qxg1",
+            "Ke4",
+            "Qd4+",
+            "Kf5",
+            "Qxa1",
+            "Be3",
+            "Qf6+"
+          ],
+          "audit_summary": {
+            "adaptive_world_model": {
+              "moves": 30,
+              "queen_hangs": 1,
+              "major_piece_hangs": 10,
+              "tactical_blunders": 3,
+              "best_capture_sum": 47.0,
+              "queen_hang_rate": 0.0333,
+              "major_piece_hang_rate": 0.3333,
+              "tactical_blunder_rate": 0.1,
+              "avg_opponent_best_capture": 1.5667
+            },
+            "static_safety_alpha": {
+              "moves": 30,
+              "queen_hangs": 0,
+              "major_piece_hangs": 3,
+              "tactical_blunders": 0,
+              "best_capture_sum": 20.0,
+              "queen_hang_rate": 0.0,
+              "major_piece_hang_rate": 0.1,
+              "tactical_blunder_rate": 0.0,
+              "avg_opponent_best_capture": 0.6667
+            }
+          },
+          "move_details": [
+            {
+              "san": "d4",
+              "uci": "d2d4",
+              "policy": "adaptive_world_model",
+              "heuristic": 0.97,
+              "value": -0.1547,
+              "mixed": -0.0186,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "g4",
+              "uci": "g5g4",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.43,
+              "value": null,
+              "mixed": 0.43,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "c4",
+              "uci": "c2c4",
+              "policy": "adaptive_world_model",
+              "heuristic": 0.5,
+              "value": -0.0928,
+              "mixed": -0.0111,
+              "adaptive_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Ne4",
+              "uci": "f6e4",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.62,
+              "value": null,
+              "mixed": 0.62,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "d5",
+              "uci": "d4d5",
+              "policy": "adaptive_world_model",
+              "heuristic": 0.87,
+              "value": -0.1698,
+              "mixed": -0.0204,
+              "adaptive_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "d6",
+              "uci": "d7d6",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.75,
+              "value": null,
+              "mixed": 0.75,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 0.0,
+              "audit": {
+                "opponent_best_capture": 0.0,
+                "opponent_best_reply_delta": 0.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "Qd4",
+              "uci": "d1d4",
+              "policy": "adaptive_world_model",
+              "heuristic": 1.07,
+              "value": -0.2372,
+              "mixed": -0.0285,
+              "adaptive_safety_penalty": 0.6,
+              "audit": {
+                "opponent_best_capture": 1.0,
+                "opponent_best_reply_delta": -1.0,
+                "queen_hang": false,
+                "major_piece_hang": false,
+                "tactical_blunder": false
+              }
+            },
+            {
+              "san": "e5",
+              "uci": "e7e5",
+              "policy": "static_safety_alpha",
+              "heuristic": 0.77,
+              "value": null,
+              "mixed": -2.23,
+              "static_policy": "static_safety_alpha",
+              "static_safety_penalty": 3.0,
+              "audit": {
+                "opponent_best_capture": 3.0,
+                "opponent_best_reply_delta": -3.0,
+                "queen_hang": false,
+                "major_piece_hang": true,
                 "tactical_blunder": false
               }
             }

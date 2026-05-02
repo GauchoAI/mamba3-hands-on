@@ -1267,3 +1267,56 @@ small value preference over that safer move set. In this bounded run, that
 combination beats the raw alpha-lite heuristic decisively and beats the
 safety-alpha baseline on held-out starts, while also reporting comparable or
 better tactical-liability rates.
+
+Fifth pass: run the same configuration for 10 online iterations instead of 5.
+
+```text
+elapsed: 283.625s
+iterations: 10
+self-play games per iteration: 6
+held-out games per iteration: 8
+value_weight: 0.12
+train_candidate_top_k: 4
+opponent: static_safety_alpha
+```
+
+Held-out score path versus `static_safety_alpha`:
+
+```text
+0: 0.6875
+1: 0.5000
+2: 0.6875
+3: 0.6875
+4: 0.6875
+5: 0.6875
+6: 0.6875
+7: 0.5000
+8: 0.5625
+9: 0.5625
+```
+
+Final live self-play score degraded:
+
+```text
+adaptive wins: 1
+static_safety_alpha wins: 5
+draws: 0
+score rate: 0.1667
+```
+
+Best held-out checkpoint did not improve over the 5-iteration run:
+
+```text
+adaptive wins: 5
+static_safety_alpha wins: 2
+draws: 1
+score rate: 0.6875
+best checkpoint: iteration 0
+```
+
+Interpretation:
+
+More online training is not automatically better. The learned value head reaches
+a useful regime quickly, then later self-play updates can drift. This pushes the
+next implementation toward champion selection or early stopping: keep the best
+held-out checkpoint instead of trusting the latest online weights.
