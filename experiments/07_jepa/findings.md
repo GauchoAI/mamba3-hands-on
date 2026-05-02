@@ -988,7 +988,7 @@ attributable to the experimental lever.
 | 3 | Curriculum (4k→1M context) | Seq-len curriculum (32→64→128) | ❌ refuted | `e088469` | retention **-0.024**. Worse than baseline. Short-context phase locked in surface n-gram patterns that override prompt-conditioning when context expands. Completions show interesting Spanish-English code-switching (more diverse output, less coherent). |
 | 4 | Muon optimizer | (skipped tonight — implementation cost too high vs likely gain; queued for later) | — | — | — |
 | 5 | MHC (Sinkhorn-Knopp) | Bounded residual-norm constraint | ❌ no-op | `e088469` | retention **0.116** ≈ baseline 0.120. Zero effect. V4 MHC is for trillion-param signal explosion; at 150k params our residuals don't have norm runaway, so the constraint has nothing to constrain. |
-| 6 | Compose-many-signals | Stack of #0+#1+#2+#3+#5 | ⏳ queued | `e088469` | TBD |
+| 6 | Compose-many-signals | Stack of #0+#1+#2+#3+#5 | ❌ refuted | `e088469` | retention **-0.079**. WORSE than any single lever. Stacking 4 refuted/no-op levers + 1 winner compounds damage. The V4 compose thesis only holds when each component fixes a real problem; here 4 of 5 don't, so combining them just stacks the noise. |
 
 **Runner:** `experiments/13_mini_sprint/run_sequential.sh` (commit
 `23d6cef`) launched in tmux on mini — fires exp_01 through exp_05 in
@@ -1159,6 +1159,70 @@ stochastic constraint preventing signal explosion at 1.6T params)
 **doesn't transfer to small models** because small models don't have
 the signal-explosion problem it solves. Confirmed empirically. Don't
 add stability regularizers to a model that's already stable.
+
+### exp_05 — combined kitchen-sink (V4 compose-many-signals lesson)
+
+**Script:** `experiments/13_mini_sprint/exp_05_combined.py`
+**Hypothesis:** even if each lever from exp_01..04 individually fails,
+the V4 compose-many-signals thesis says combining them composes their
+effect. Stack: clean corpus + EMA self-distill + multi-scale + seq-len
+curriculum + residual norm constraint.
+
+**Result (commit `e088469`):**
+
+```
+                              retention   drift   diversity   byte_ce
+exp_00 (clean corpus only)    +0.120      1.37    0.42        1.79
+exp_05 (kitchen sink)         -0.079      1.53    0.29        1.93
+```
+
+**Refuted catastrophically.** Worse than baseline by -0.20 retention.
+Completions show heavy code-switching ("I was a ser a la de la de la
+de la"…) — same pathology as exp_03 (curriculum) but more pronounced.
+byte_ce regressed from 1.79 to 1.93.
+
+**The deepest generalizable lesson of the sprint:** the V4
+compose-many-signals thesis is conditional on *each* signal fixing a
+real problem. In V4, every architectural piece (CSA+HCA+window for
+memory, MHC for stability, Muon for optimization, anticipatory routing
+for noise) addresses a documented bottleneck at trillion-param scale.
+Composition is super-additive there because the bottlenecks are real.
+
+At our scale, 4 of 5 components don't fix anything (no signal
+explosion, no real curriculum benefit, no useful EMA gradient without
+augmentation, multi-scale just multiplies trivial collapse). Stacking
+them produces *destructive interference* — multiple useless gradients
+fighting each other. **Composition without first verifying each
+component is helpful is anti-engineering.** A 4-of-5 hit rate on
+component utility produces NEGATIVE compound returns.
+
+### Sprint summary table
+
+| exp | strategy | retention | verdict |
+|---|---|---|---|
+| 00 | clean within-movie corpus, byte-CE only | **+0.120** | ✅ winner |
+| 01 | EMA self-distill (BYOL anticipatory) | +0.043 | ❌ trivial collapse |
+| 02 | EMA self-distill, 3 positions | +0.038 | ❌ trivial collapse × 3 |
+| 03 | seq-len curriculum 32→64→128 | -0.024 | ❌ wrong curriculum dimension |
+| 04 | bounded residual norm (MHC light) | +0.116 | = no-op (no problem to solve) |
+| 05 | all 5 above stacked | -0.079 | ❌ destructive composition |
+
+**Only winner: corpus quality.** Clean within-movie pairs beat all 5
+DeepSeek-V4-inspired architectural levers at our scale. None of the V4
+ideas transferred — they all targeted failures that either don't exist
+at our scale (signal explosion, scale-dependent curriculum) or required
+assumptions we don't have (data augmentation for BYOL).
+
+This is itself a meaningful research result: a model 7 orders of
+magnitude smaller than V4 (150k vs 1.6T params) cannot adopt V4's
+architectural innovations because the underlying problems V4 solves
+don't manifest at small scale. The V4 paper is essentially scale-
+specific engineering.
+
+What we *did* confirm: the long-postponed real distillation
+(logit-projection KD, "round 9" on findings §5) remains the only
+unexplored architectural lever worth trying. Everything else has been
+refuted.
 
 ---
 
