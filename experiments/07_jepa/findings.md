@@ -1348,6 +1348,37 @@ rounds 4–9 + mini sprint.
 
 ---
 
+## 10. Round 10 — logit-projection KD launched (2026-05-02 15:46 UTC)
+
+**Corpus generation done.** `make_logit_kd_corpus.py` (commit
+`5ef6b23`) finished at 15:45 UTC: 100,000 records, 469 MB,
+`data/kd_logit_clean.bin`. Per-byte teacher distributions captured at
+every BPE-token boundary in the response, projected from Qwen-2.5-1.5B
+softmax over its 152k vocab onto a 256-D byte distribution via
+first-byte marginalization.
+
+**Trainer launched** as `gpu1-kd-192` on GPU 1 at 15:45 UTC. Same
+d_model=192, n_layers=4, byte-CE on clean corpus (`mix_biling 0.4`)
+plus KD branch on the projected corpus (`mix_kd 0.6, lambda_kd 1.0`).
+Same ramp gate as conv-jepa: KD gradient opens at step 2000, fully
+ramped at step 3000.
+
+**Why this round is different from rounds 5–8.** All prior auxiliary
+losses had targets that didn't strictly depend on the input — corpus-
+mean projector solutions could fit them without engaging the encoder
+(see `feedback_loss_target_input_dependence.md`). The KD target *does*
+depend on the input by construction: teacher's per-byte distribution
+is computed by forwarding Qwen on the actual prompt+response bytes, so
+shuffled inputs produce wildly different targets. The corpus-mean
+projector solution is unavailable; the encoder must engage.
+
+**Eval daemon** restarted on GPU 3 watching both round 9 (control:
+clean corpus only) and round 10 (clean corpus + KD).
+
+Result: TBD. ~16h wall-clock to step 8000 at sps≈0.1.
+
+---
+
 ## How to reproduce
 
 ```bash
