@@ -953,6 +953,61 @@ These are the precondition tasks before the actual re-launch.
 
 ---
 
+## 8. Mac Mini Sprint — DeepSeek V4 inspirations (2026-05-02 night)
+
+While the vast.ai 2×2 grid (rounds 7+8: smooth-L1 vs InfoNCE × prompt-end
+vs response-end target) cooks overnight at d_model=192, an orthogonal
+exploration runs on the M4 mini. Goal: try the DeepSeek V4 paper's ideas
+mapped onto our small-model autopilot problem. Each strategy gets a
+dedicated, self-contained script in `experiments/13_mini_sprint/` so
+commit history stays 1-to-1 with strategies, and the results table
+below names the commit that introduced each.
+
+The mini sprint is **prerequisite-blocked** on a cleaner corpus first —
+all prior runs used `data/opensubtitles.txt` which globs across movie
+boundaries; ~half of the "consecutive-line dialogue pairs" we trained
+on were actually cross-movie noise. Fixed by `extract_movie_pairs.py`
+using the `OpenSubtitles.en-es.ids` metadata: emits a blank line
+whenever the movie ID changes, so existing pair iterators (which reset
+on blank lines) only ever see within-movie pairs. Output:
+`data/movie_pairs_clean.txt` — 61,434,251 pairs across 77,652 movies,
+4.17 GB.
+
+Sprint scale: d_model=96, n_layers=2, batch=32, seq_len=128, ~2000 steps
+per experiment, ~10–15 min wall-clock on M4 MPS. Same RNG seed across
+all runs so step-0 baselines are identical and any divergence is
+attributable to the experimental lever.
+
+### Strategy table
+
+| # | DeepSeek V4 idea | Our analog | Status | Commit | Result |
+|---|---|---|---|---|---|
+| 0 | "data quality matters" | clean within-movie corpus, byte-CE only | ⏳ pending | — | TBD |
+| 1 | Anticipatory routing (EMA snapshots) | EMA self-distillation (BYOL-style) | ⏳ pending | — | TBD |
+| 2 | Hybrid attention (CSA+HCA+window) | Multi-scale residual matching | ⏳ pending | — | TBD |
+| 3 | Curriculum (4k→1M context) | Difficulty curriculum (single→multi-turn) | ⏳ pending | — | TBD |
+| 4 | Muon optimizer | Muon vs AdamW | ⏳ pending | — | TBD |
+| 5 | MHC (Sinkhorn-Knopp) | Bounded residual-norm constraint | ⏳ pending | — | TBD |
+| 6 | Compose-many-signals | Best 2-3 stacked | ⏳ pending | — | TBD |
+
+Each row is filled in as the experiment lands. Refutations are kept —
+they're the more useful data points.
+
+### exp_00 — clean corpus baseline (control)
+
+**Script:** `experiments/13_mini_sprint/exp_00_clean_corpus_baseline.py`
+**Config:** d_model=96, n_layers=2, batch=32, seq_len=128, 2000 steps,
+byte-CE only (no JEPA/conv/sigreg/contrastive), AdamW lr=3e-4 cosine
+**Hypothesis:** corpus contamination is a confounder we never separated.
+If retention crosses 0.30 here at 2000 steps, the vast.ai runs were
+partly dataset-limited.
+**Why this isn't a V4 idea:** it's the control, the baseline number that
+all V4-inspired levers in #1-6 are measured against. Cheap to run.
+
+Result: TBD (awaiting first run on M4 mini)
+
+---
+
 ## How to reproduce
 
 ```bash
