@@ -985,7 +985,7 @@ attributable to the experimental lever.
 | 0 | "data quality matters" | clean within-movie corpus, byte-CE only | ✅ done | `e1aa799` | retention **+0.120** vs vast.ai control's -0.075 — **clean corpus alone lifts retention by +0.20**, no architectural change. Doesn't cross 0.30 but moves the floor. |
 | 1 | Anticipatory routing (EMA snapshots) | EMA self-distillation (BYOL-style) | ❌ refuted | `442c247` | retention **0.043** (dropped from baseline 0.120). BYOL loss → 0.003 (predictor solved task) but pushed residuals toward *more* generic, not more prompt-specific. Trivial-collapse mode at our scale. |
 | 2 | Hybrid attention (CSA+HCA+window) | Multi-scale residual matching (3 positions) | ❌ refuted | `442c247` | retention **0.038**. Same trivial-collapse mode as exp_01: ms loss → 0.004, but residuals get *more* generic. Three positions × no augmentation = three trivial fits. Capacity composition can't fix a target that doesn't depend on the input. |
-| 3 | Curriculum (4k→1M context) | Seq-len curriculum (32→64→128) | ⏳ queued | `e088469` | TBD |
+| 3 | Curriculum (4k→1M context) | Seq-len curriculum (32→64→128) | ❌ refuted | `e088469` | retention **-0.024**. Worse than baseline. Short-context phase locked in surface n-gram patterns that override prompt-conditioning when context expands. Completions show interesting Spanish-English code-switching (more diverse output, less coherent). |
 | 4 | Muon optimizer | (skipped tonight — implementation cost too high vs likely gain; queued for later) | — | — | — |
 | 5 | MHC (Sinkhorn-Knopp) | Bounded residual-norm constraint | ⏳ queued | `e088469` | TBD |
 | 6 | Compose-many-signals | Stack of #0+#1+#2+#3+#5 | ⏳ queued | `e088469` | TBD |
@@ -1099,6 +1099,40 @@ the predictor can't dodge — and EMA-of-self isn't such a constraint
 without augmentation. The DeepSeek V4 idea works in V4 because each
 attention pathway has a *different* input compression (different
 token groupings), creating multiple inequivalent loss landscapes.
+
+### exp_03 — sequence-length curriculum (V4 4k→1M analog)
+
+**Script:** `experiments/13_mini_sprint/exp_03_curriculum.py`
+**Hypothesis:** training on short contexts first might prevent autopilot
+from settling in (model first learns local prompt-conditional structure
+on cheap short examples, then gradually extends).
+
+**Result (commit `e088469`):**
+
+```
+retention   drift   diversity   byte_ce   schedule
+-0.024      1.49    0.38        1.89      32@500, 64@1000, 128@2000
+```
+
+**Refuted — and worse than baseline.** Retention dropped from +0.120
+(exp_00 baseline) to **-0.024**. The model went from "marginally
+prompt-conditional" to "indistinguishable from autopilot."
+
+What's interesting: the completions show real bilingual *code-switching*
+("the was a ser the serde a la de la de lo ser") — the curriculum made
+the model **more diverse** but **less coherent**. The short-context
+phase let the model fit surface n-gram patterns that, when context
+expanded, dominated next-byte prediction over prompt-conditioning.
+
+**Generalizable lesson:** the V4 curriculum (4k→1M tokens) is about
+*context capacity scaling*, not about *task difficulty scaling*. They
+gradually expand the model's working memory, not the difficulty of the
+prediction task. Our seq_len curriculum is conceptually closer to
+"start with easier task" (short context = easier next-byte) which can
+*increase* autopilot risk: easy short-context targets are dominated by
+local fluency, and the model never has to learn prompt-conditional
+extension. We should NOT generalize "curriculum" as "always good" —
+the right curriculum dimension matters.
 
 ---
 
