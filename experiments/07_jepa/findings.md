@@ -982,13 +982,18 @@ attributable to the experimental lever.
 
 | # | DeepSeek V4 idea | Our analog | Status | Commit | Result |
 |---|---|---|---|---|---|
-| 0 | "data quality matters" | clean within-movie corpus, byte-CE only | ⏳ pending | — | TBD |
-| 1 | Anticipatory routing (EMA snapshots) | EMA self-distillation (BYOL-style) | ⏳ pending | — | TBD |
-| 2 | Hybrid attention (CSA+HCA+window) | Multi-scale residual matching | ⏳ pending | — | TBD |
-| 3 | Curriculum (4k→1M context) | Difficulty curriculum (single→multi-turn) | ⏳ pending | — | TBD |
-| 4 | Muon optimizer | Muon vs AdamW | ⏳ pending | — | TBD |
-| 5 | MHC (Sinkhorn-Knopp) | Bounded residual-norm constraint | ⏳ pending | — | TBD |
-| 6 | Compose-many-signals | Best 2-3 stacked | ⏳ pending | — | TBD |
+| 0 | "data quality matters" | clean within-movie corpus, byte-CE only | 🏃 running | `e1aa799` | TBD |
+| 1 | Anticipatory routing (EMA snapshots) | EMA self-distillation (BYOL-style) | ⏳ queued | `442c247` | TBD |
+| 2 | Hybrid attention (CSA+HCA+window) | Multi-scale residual matching (3 positions) | ⏳ queued | `442c247` | TBD |
+| 3 | Curriculum (4k→1M context) | Seq-len curriculum (32→64→128) | ⏳ queued | `e088469` | TBD |
+| 4 | Muon optimizer | (skipped tonight — implementation cost too high vs likely gain; queued for later) | — | — | — |
+| 5 | MHC (Sinkhorn-Knopp) | Bounded residual-norm constraint | ⏳ queued | `e088469` | TBD |
+| 6 | Compose-many-signals | Stack of #0+#1+#2+#3+#5 | ⏳ queued | `e088469` | TBD |
+
+**Runner:** `experiments/13_mini_sprint/run_sequential.sh` (commit
+`23d6cef`) launched in tmux on mini — fires exp_01 through exp_05 in
+sequence after exp_00 finishes. Recurring 15-min cron on M4 Pro picks
+up `eval.json` files as they land and folds results into this table.
 
 Each row is filled in as the experiment lands. Refutations are kept —
 they're the more useful data points.
