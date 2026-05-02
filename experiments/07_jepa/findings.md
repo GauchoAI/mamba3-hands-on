@@ -983,7 +983,7 @@ attributable to the experimental lever.
 | # | DeepSeek V4 idea | Our analog | Status | Commit | Result |
 |---|---|---|---|---|---|
 | 0 | "data quality matters" | clean within-movie corpus, byte-CE only | ✅ done | `e1aa799` | retention **+0.120** vs vast.ai control's -0.075 — **clean corpus alone lifts retention by +0.20**, no architectural change. Doesn't cross 0.30 but moves the floor. |
-| 1 | Anticipatory routing (EMA snapshots) | EMA self-distillation (BYOL-style) | ⏳ queued | `442c247` | TBD |
+| 1 | Anticipatory routing (EMA snapshots) | EMA self-distillation (BYOL-style) | ❌ refuted | `442c247` | retention **0.043** (dropped from baseline 0.120). BYOL loss → 0.003 (predictor solved task) but pushed residuals toward *more* generic, not more prompt-specific. Trivial-collapse mode at our scale. |
 | 2 | Hybrid attention (CSA+HCA+window) | Multi-scale residual matching (3 positions) | ⏳ queued | `442c247` | TBD |
 | 3 | Curriculum (4k→1M context) | Seq-len curriculum (32→64→128) | ⏳ queued | `e088469` | TBD |
 | 4 | Muon optimizer | (skipped tonight — implementation cost too high vs likely gain; queued for later) | — | — | — |
@@ -1033,6 +1033,44 @@ Probably ~half the consecutive-line "dialogue pairs" trainers were
 seeing were noise (line N from movie A followed by line N+1 from movie
 B). Just fixing the corpus closes ~25% of the gap to the healthy
 retention threshold.
+
+### exp_01 — EMA self-distillation (BYOL/anticipatory-routing analog)
+
+**Script:** `experiments/13_mini_sprint/exp_01_ema_self_distill.py`
+**Hypothesis:** the EMA's residual at end-of-prompt is forced to be a
+function of the prompt; if the live student's predictor learns to map
+its own residual onto that target, both networks pull each other toward
+more prompt-stable representations.
+
+**Result (commit `442c247`):**
+
+```
+retention   drift   diversity   byte_ce   byol_loss_final
++0.043      1.43    0.48        1.81      0.003 (≈ collapsed)
+```
+
+**Refuted.** EMA self-distill HURT retention from baseline +0.120 down
+to +0.043. The BYOL loss converged to ~0.003 — the predictor learned
+to map live residual ≈ EMA residual nearly perfectly — but that
+convergence happened because both networks drifted toward a *more
+generic* representation that's easier to predict than a
+prompt-conditional one. Classic BYOL trivial-collapse failure mode at
+our scale.
+
+Why this could fail where vision JEPA succeeds: BYOL-style methods rely
+on data augmentations creating two different views of the same input.
+Without augmentations, the predictor's job is trivially easy (live and
+EMA see *identical* inputs and produce nearly identical residuals), and
+the constraint never actually pulls representations toward anything
+useful. We could try adding augmentations (byte-flip, char-swap, span
+masking) but that's a different experiment — out of scope for tonight.
+
+**Generalizable lesson:** self-distillation without augmentations is
+decorative. The asymmetric predictor isn't enough on its own to break
+trivial collapse — you need either (a) two different *views* of the
+input, or (b) the EMA's slowness to provide a meaningful gradient signal
+during training noise. At our small scale + clean corpus, neither
+applies.
 
 ---
 
