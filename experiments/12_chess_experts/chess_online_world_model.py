@@ -120,13 +120,41 @@ def choose_adaptive(
     value_weight: float,
     rng: random.Random,
     exploration: float,
+    decision_mode: str,
+    max_heuristic_drop: float,
+    value_margin: float,
 ) -> tuple[chess.Move, dict]:
     candidates = heuristic_candidates(board, seen, top_k)
     if rng.random() < exploration and len(candidates) > 1:
         score, move = rng.choice(candidates[: min(4, len(candidates))])
         return move, {"heuristic": round(score, 4), "value": None, "mixed": round(score, 4), "explore": True}
+    if value_weight <= 0:
+        score, move = candidates[0]
+        return move, {"heuristic": round(score, 4), "value": None, "mixed": round(score, 4), "decision": "heuristic_cold_start"}
     feats = torch.stack([feature(board, move, score) for score, move in candidates]).to(dev)
     values = model(feats).detach().cpu().tolist()
+    if decision_mode == "veto":
+        best_score, best_move = candidates[0]
+        best_value = float(values[0])
+        eligible = []
+        for (score, move), value in zip(candidates, values):
+            if best_score - score <= max_heuristic_drop:
+                eligible.append((float(value), score, move))
+        eligible.sort(key=lambda item: item[0], reverse=True)
+        value, score, move = eligible[0]
+        if move != best_move and value - best_value >= value_margin:
+            return move, {
+                "heuristic": round(score, 4),
+                "value": round(value, 4),
+                "mixed": round(value, 4),
+                "decision": "value_veto",
+            }
+        return best_move, {
+            "heuristic": round(best_score, 4),
+            "value": round(best_value, 4),
+            "mixed": round(best_value, 4),
+            "decision": "heuristic_kept",
+        }
     mixed = []
     best_h = candidates[0][0]
     for (score, move), value in zip(candidates, values):
@@ -176,6 +204,9 @@ def play_match_game(
                 value_weight,
                 rng,
                 exploration,
+                args.decision_mode,
+                args.max_heuristic_drop,
+                args.value_margin,
             )
             policy = "adaptive_world_model"
         else:
@@ -322,7 +353,10 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=2e-3)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--online-epochs", type=int, default=32)
-    parser.add_argument("--value-weight", type=float, default=0.85)
+    parser.add_argument("--value-weight", type=float, default=0.35)
+    parser.add_argument("--decision-mode", choices=("blend", "veto"), default="blend")
+    parser.add_argument("--max-heuristic-drop", type=float, default=3.0)
+    parser.add_argument("--value-margin", type=float, default=0.12)
     parser.add_argument("--exploration", type=float, default=0.25)
     parser.add_argument("--exploration-decay", type=float, default=0.72)
     parser.add_argument("--min-exploration", type=float, default=0.03)

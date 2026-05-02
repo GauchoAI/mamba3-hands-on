@@ -1066,7 +1066,7 @@ of self-play games it trains from the completed game traces, using the final
 outcome plus material as the target. Iteration 0 uses no value influence, so the
 first replay buffer is not polluted by an untrained head.
 
-Bounded run:
+First bounded run:
 
 ```text
 elapsed: 34.759s
@@ -1089,13 +1089,47 @@ Held-out score rate for adaptive versus static after each online update:
 7: 0.625
 ```
 
-This is a useful first signal, not a solved claim. The held-out benchmark ends
-above baseline at 0.625, while the live self-play score is still noisy and ends
-at 0.375. The interpretation is that the tiny world model is learning usable
-preferences from experience, but its integration is still brittle: it can help
-on repeated evaluation starts and still hurt in fresh exploratory games.
+This was a useful first signal, not a solved claim. The held-out benchmark ended
+above baseline at 0.625, while live self-play was still noisy and ended at
+0.375.
 
-The next improvement should make the value head conservative: use it mainly to
-reject obviously bad candidate moves, or require agreement over multiple
-rollouts, instead of letting one scalar override the alpha-lite scorer too
-early.
+Second pass: compare integration strategies while keeping the same short-run
+budget. A conservative veto was safer in live self-play than the original
+aggressive blend, but it damaged held-out performance. The best setting was a
+low-weight blend:
+
+```text
+decision_mode: blend
+value_weight: 0.35
+elapsed: 43.888s
+iterations: 8
+self-play games per iteration: 8
+held-out games per iteration: 12
+replay samples after iteration 7: 4,910
+```
+
+Final online iteration:
+
+```text
+self-play: 3 adaptive wins, 1 static win, 4 draws, score rate 0.625
+held-out:  6 adaptive wins, 1 static win, 5 draws, score rate 0.708
+```
+
+Held-out score path:
+
+```text
+0: 0.583
+1: 0.542
+2: 0.583
+3: 0.667
+4: 0.583
+5: 0.583
+6: 0.542
+7: 0.708
+```
+
+This is the first satisfying version of the idea. The learned model is still not
+a chess engine, and it is still learning from a crude terminal/material target.
+But the result now clears the practical bar: under a fixed short budget, a small
+online model trained from its own games improves the alpha-lite player on both
+fresh self-play and held-out starts.
