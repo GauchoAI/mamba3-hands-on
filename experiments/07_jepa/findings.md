@@ -1226,6 +1226,83 @@ refuted.
 
 ---
 
+## 9. Morning grid summary — round 7+8 vast.ai (2026-05-02 morning)
+
+The vast.ai 2×2 grid (rounds 7+8: {smooth-L1 vs InfoNCE} × {prompt-end
+vs response-end target}, all at d_model=192, projector hidden=32 to
+satisfy the asymmetry rule from round 6) ran overnight. All four cells
+sit in the same noise band [-0.10, +0.03]. **The full pseudo-distillation
+× loss-formulation × target-position grid is dead at this scale.**
+
+### Final readouts at step 3800–4800
+
+```
+                                          step  retention  drift  div   byte_ce
+gpu1 prompt-distill (smooth-L1, prompt)   4800   +0.029    1.42   0.56  1.246
+gpu2 contrastive-prompt (InfoNCE, prompt) 3800   -0.083    1.52   0.18  1.253
+gpu0 contrastive-resp  (InfoNCE, resp)    3800   -0.024    1.47   0.62  1.244
+```
+
+Mean retention of last-3 evals on each:
+```
+gpu1: -0.063   gpu2: -0.041   gpu0: -0.033
+```
+
+byte_ce keeps hitting record lows (1.15–1.25) while retention asymptotes
+near zero. Same pattern as rounds 4/5/6: byte_ce, diversity, and
+retention are uncorrelated at this scale.
+
+### Final 2×2 verdict
+
+|                       | smooth-L1                                       | InfoNCE (contrastive)                                |
+|-----------------------|--------------------------------------------------|-------------------------------------------------------|
+| **target=response_end** | round 5/6 refuted                                | gpu0-contrastive-resp refuted (-0.03 mean)           |
+| **target=prompt_end**   | gpu1-prompt-distill refuted (-0.06 mean)        | gpu2-contrastive-prompt refuted (-0.04 mean)         |
+
+### What this closes
+
+The autopilot saga (rounds 4 → 8 + mini sprint exp_00–05) has now
+**eliminated**:
+
+- data-only fixes (round 4)
+- smooth-L1 distillation against any teacher hidden position (rounds 5–7)
+- contrastive distillation against any teacher hidden position (round 8)
+- BYOL self-distillation (mini exp_01)
+- multi-position residual matching (mini exp_02)
+- seq-len curriculum (mini exp_03)
+- residual-norm regularization (mini exp_04)
+- composing all of the above (mini exp_05)
+- projector capacity asymmetry as the explanation (round 6)
+
+What remains:
+
+- **logit-projection KD** (per-byte teacher distribution → KL): the
+  long-postponed real distillation. Still untested.
+- **d_model scaling on the clean corpus**: corpus quality at +0.20
+  retention is the one positive lever; combined with d_model=192 it
+  might compose super-additively. Untested.
+
+### Decision (taking the lead, 2026-05-02 morning)
+
+Two follow-ups firing now:
+
+1. **Kill the three round-7+8 trainers** — the 2×2 grid is already
+   conclusive at step 3800–4800. Continuing to step 8000 burns ~16h of
+   compute on confirmation. Free the GPUs.
+
+2. **Launch `gpu0-clean-corpus-192-bigmodel`** on the freed GPU 0:
+   d_model=192, n_layers=4, byte-CE only, clean corpus
+   (`data/movie_pairs_clean.txt` synced from mini), 8000 steps. Tests
+   whether the corpus-quality lever composes with model scale. If
+   retention crosses 0.30 here, the "small Mamba can't do it" story is
+   wrong — it was always a corpus problem.
+
+3. **In parallel, build logit-projection KD infrastructure** on M4 Pro
+   for round-10 (next round after the corpus-scale check). Round-9
+   slot reserved for the d_model=192 + clean corpus run.
+
+---
+
 ## How to reproduce
 
 ```bash
