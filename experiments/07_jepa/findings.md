@@ -984,7 +984,7 @@ attributable to the experimental lever.
 |---|---|---|---|---|---|
 | 0 | "data quality matters" | clean within-movie corpus, byte-CE only | ✅ done | `e1aa799` | retention **+0.120** vs vast.ai control's -0.075 — **clean corpus alone lifts retention by +0.20**, no architectural change. Doesn't cross 0.30 but moves the floor. |
 | 1 | Anticipatory routing (EMA snapshots) | EMA self-distillation (BYOL-style) | ❌ refuted | `442c247` | retention **0.043** (dropped from baseline 0.120). BYOL loss → 0.003 (predictor solved task) but pushed residuals toward *more* generic, not more prompt-specific. Trivial-collapse mode at our scale. |
-| 2 | Hybrid attention (CSA+HCA+window) | Multi-scale residual matching (3 positions) | ⏳ queued | `442c247` | TBD |
+| 2 | Hybrid attention (CSA+HCA+window) | Multi-scale residual matching (3 positions) | ❌ refuted | `442c247` | retention **0.038**. Same trivial-collapse mode as exp_01: ms loss → 0.004, but residuals get *more* generic. Three positions × no augmentation = three trivial fits. Capacity composition can't fix a target that doesn't depend on the input. |
 | 3 | Curriculum (4k→1M context) | Seq-len curriculum (32→64→128) | ⏳ queued | `e088469` | TBD |
 | 4 | Muon optimizer | (skipped tonight — implementation cost too high vs likely gain; queued for later) | — | — | — |
 | 5 | MHC (Sinkhorn-Knopp) | Bounded residual-norm constraint | ⏳ queued | `e088469` | TBD |
@@ -1071,6 +1071,34 @@ trivial collapse — you need either (a) two different *views* of the
 input, or (b) the EMA's slowness to provide a meaningful gradient signal
 during training noise. At our small scale + clean corpus, neither
 applies.
+
+### exp_02 — multi-scale residual matching (V4 hybrid-attention analog)
+
+**Script:** `experiments/13_mini_sprint/exp_02_multi_scale_distill.py`
+**Hypothesis:** if single-position EMA matching trivially collapses,
+maybe matching three positions simultaneously (1/4, 1/2, 3/4 of seq)
+forces position-aware encoding.
+
+**Result (commit `442c247`):**
+
+```
+retention   drift   diversity   byte_ce   ms_loss_final
++0.038      1.43    0.49        1.82      0.004 (collapsed)
+```
+
+**Refuted.** Same trivial-collapse pattern as exp_01. Multi-scale loss
+converged to ~0.004 — the predictor learned to map live residuals to
+EMA residuals at all three positions simultaneously, but did so in a
+way that bypassed the encoder. byte_ce identical to exp_01.
+
+**Generalizable lesson** (combined with exp_01): the hybrid-attention
+"compose-many-positions" V4 trick doesn't transfer when the underlying
+target is the model's own EMA. *Three trivial fits = one trivial fit.*
+Composition only adds value when each component imposes a constraint
+the predictor can't dodge — and EMA-of-self isn't such a constraint
+without augmentation. The DeepSeek V4 idea works in V4 because each
+attention pathway has a *different* input compression (different
+token groupings), creating multiple inequivalent loss landscapes.
 
 ---
 
