@@ -35,10 +35,10 @@ import torch.nn.functional as F
 
 from cortex_counting import CortexLM, CortexLMConfig
 from arch import (ThoughtHead, jepa_loss, sigreg_loss, conv_jepa_loss,
-                  contrastive_distill_loss)
+                  contrastive_distill_loss, kd_loss)
 from data_loader import (
     TeacherThoughtsDataset, TeacherIterator, BilingualByteIterator,
-    CountingByteIterator, Batch,
+    CountingByteIterator, Batch, KDTPDataset, KDTPIterator,
 )
 from checkpoint import AsyncCheckpointer, capture_rng
 
@@ -62,6 +62,7 @@ class TrainConfig:
     teacher_path:    str = "data/teacher_thoughts"
     bilingual_path:  str = "data/bilingual.txt"
     subtitle_path:   str = ""           # empty disables conv-jepa
+    kd_path:         str = ""           # empty disables logit-projection KD
     ckpt_root:       str = "checkpoints/jepa_cortex"
     runs_root:       str = "runs/jepa_cortex"
     run_name:        str = "default"
@@ -97,6 +98,7 @@ class TrainConfig:
     mix_biling:  float = 0.25
     mix_unary:   float = 0.05
     mix_conv:    float = 0.0       # if subtitle_path set, recommended ~0.5
+    mix_kd:      float = 0.0       # if kd_path set, recommended ~0.5
 
     # Loss weights
     lambda_jepa:        float = 1.0
@@ -105,6 +107,7 @@ class TrainConfig:
     lambda_conv_jepa:   float = 1.0
     lambda_contrastive: float = 0.0      # round 8 lever; 0 → off
     contrastive_temp:   float = 0.1
+    lambda_kd:          float = 0.0      # round 10 lever (logit-projection KD)
 
     # Schedule
     steps:       int = 30_000
@@ -203,6 +206,14 @@ class MixedIterator:
             self._kinds.append("conv")
             self._its["conv"] = self._conv
             weights.append(cfg.mix_conv)
+        if cfg.kd_path and cfg.mix_kd > 0:
+            kd_ds = KDTPDataset(cfg.kd_path)
+            self._kd = KDTPIterator(kd_ds, cfg.batch_size,
+                                     max_bytes=cfg.seq_len,
+                                     seed=int(rng.integers(0, 2**31)))
+            self._kinds.append("kd")
+            self._its["kd"] = self._kd
+            weights.append(cfg.mix_kd)
         self._weights = np.array(weights, dtype=np.float64)
         self._weights /= self._weights.sum()
 
@@ -403,6 +414,7 @@ def train(cfg: TrainConfig) -> None:
                 l_aux = torch.zeros((), device=device)
                 l_conv = torch.zeros((), device=device)
                 l_contrastive = torch.zeros((), device=device)
+                l_kd = torch.zeros((), device=device)
                 loss = l_byte + jw * l_jepa + cfg.lambda_sigreg * l_sig
             elif kind == "conv":
                 # Conv-JEPA: predict response-end teacher hidden from end-of-prompt
@@ -438,6 +450,25 @@ def train(cfg: TrainConfig) -> None:
                 contr_w = cfg.lambda_contrastive * ramp
                 loss = (l_byte + cw * l_conv + contr_w * l_contrastive
                         + cfg.lambda_sigreg * l_sig)
+                l_kd = torch.zeros((), device=device)
+            elif kind == "kd":
+                # Round 10: per-byte teacher distribution from
+                # make_logit_kd_corpus.py. Same byte-CE on the visible
+                # stream, plus soft-target CE at boundary positions
+                # against teacher's projected next-byte distribution.
+                logits = model(tokens)
+                l_byte = byte_ce_loss(logits, tokens, byte_pad)
+                kd_pos = batch.kd_byte_pos.to(device)
+                kd_dist = batch.kd_byte_dist.to(device).float()
+                kd_pad = batch.kd_pad_mask.to(device)
+                l_kd = kd_loss(logits.float(), kd_dist, kd_pos, kd_pad)
+                kd_w = cfg.lambda_kd * ramp
+                loss = l_byte + kd_w * l_kd
+                l_jepa = torch.zeros((), device=device)
+                l_sig = torch.zeros((), device=device)
+                l_aux = torch.zeros((), device=device)
+                l_conv = torch.zeros((), device=device)
+                l_contrastive = torch.zeros((), device=device)
             elif kind == "biling":
                 logits = model(tokens)
                 l_byte = byte_ce_loss(logits, tokens, byte_pad)
@@ -446,6 +477,7 @@ def train(cfg: TrainConfig) -> None:
                 l_aux = torch.zeros((), device=device)
                 l_conv = torch.zeros((), device=device)
                 l_contrastive = torch.zeros((), device=device)
+                l_kd = torch.zeros((), device=device)
                 loss = l_byte
             else:  # unary
                 logits, prim_out = model(tokens, return_aux=True)
@@ -455,6 +487,7 @@ def train(cfg: TrainConfig) -> None:
                 l_sig = torch.zeros((), device=device)
                 l_conv = torch.zeros((), device=device)
                 l_contrastive = torch.zeros((), device=device)
+                l_kd = torch.zeros((), device=device)
                 loss = l_byte + cfg.lambda_aux * l_aux
 
         opt.zero_grad(set_to_none=True)
@@ -477,6 +510,7 @@ def train(cfg: TrainConfig) -> None:
             "l_aux": float(l_aux.detach()),
             "l_conv": float(l_conv.detach()),
             "l_contrastive": float(l_contrastive.detach()),
+            "l_kd": float(l_kd.detach()),
         }
         if step % 50 == 0:
             dt = time.time() - t0
@@ -569,6 +603,14 @@ def main():
                          "residual and batched teacher targets. >0 enables.")
     ap.add_argument("--contrastive-temp", type=float,
                     default=TrainConfig.contrastive_temp)
+    ap.add_argument("--lambda-kd", type=float,
+                    default=TrainConfig.lambda_kd,
+                    help="Round 10 lever: per-byte CE against teacher's "
+                         "projected next-byte distribution at boundary "
+                         "positions. Enable with --kd-path + --mix-kd.")
+    ap.add_argument("--kd-path", default=TrainConfig.kd_path,
+                    help="KDTP corpus basename (.bin/.idx pair).")
+    ap.add_argument("--mix-kd", type=float, default=TrainConfig.mix_kd)
 
     ap.add_argument("--mix-teacher", type=float, default=TrainConfig.mix_teacher)
     ap.add_argument("--mix-biling", type=float, default=TrainConfig.mix_biling)
@@ -615,6 +657,9 @@ def main():
         lambda_conv_jepa=args.lambda_conv_jepa,
         lambda_contrastive=args.lambda_contrastive,
         contrastive_temp=args.contrastive_temp,
+        lambda_kd=args.lambda_kd,
+        kd_path=args.kd_path,
+        mix_kd=args.mix_kd,
         mix_teacher=args.mix_teacher,
         mix_biling=args.mix_biling,
         mix_unary=args.mix_unary,
