@@ -1,0 +1,474 @@
+{
+  "seed": 17,
+  "device": "mps",
+  "elapsed_s": 4.713,
+  "train_cases": 2048,
+  "val_cases": 128,
+  "motifs": [
+    "back_rank_rook_queen",
+    "queen_side_file",
+    "rook_side_file",
+    "knight_corner"
+  ],
+  "model": {
+    "type": "torch MLP over 12 piece planes plus side/castling bits; no Phi or LLM",
+    "width": 1536,
+    "epochs": 160,
+    "params": 7887616
+  },
+  "best_val_raw_acc": 0.9844,
+  "history": [
+    {
+      "epoch": 1,
+      "loss": 8.4814,
+      "train_raw_acc": 0.3052,
+      "val_raw_acc": 0.2578
+    },
+    {
+      "epoch": 20,
+      "loss": 0.0079,
+      "train_raw_acc": 0.9995,
+      "val_raw_acc": 0.9844
+    },
+    {
+      "epoch": 40,
+      "loss": 0.0008,
+      "train_raw_acc": 1.0,
+      "val_raw_acc": 0.9844
+    },
+    {
+      "epoch": 60,
+      "loss": 0.0004,
+      "train_raw_acc": 1.0,
+      "val_raw_acc": 0.9844
+    },
+    {
+      "epoch": 80,
+      "loss": 0.0003,
+      "train_raw_acc": 1.0,
+      "val_raw_acc": 0.9844
+    },
+    {
+      "epoch": 100,
+      "loss": 0.0002,
+      "train_raw_acc": 1.0,
+      "val_raw_acc": 0.9844
+    },
+    {
+      "epoch": 120,
+      "loss": 0.0002,
+      "train_raw_acc": 1.0,
+      "val_raw_acc": 0.9844
+    },
+    {
+      "epoch": 140,
+      "loss": 0.0002,
+      "train_raw_acc": 1.0,
+      "val_raw_acc": 0.9844
+    },
+    {
+      "epoch": 160,
+      "loss": 0.0001,
+      "train_raw_acc": 1.0,
+      "val_raw_acc": 0.9844
+    }
+  ],
+  "evaluation": {
+    "n": 128,
+    "exact_pass": 126,
+    "exact_rate": 0.9844,
+    "legal_mate_pass": 128,
+    "legal_mate_rate": 1.0,
+    "by_family": {
+      "back_rank_rook_queen": {
+        "n": 32,
+        "exact_pass": 32,
+        "exact_rate": 1.0,
+        "legal_mate_pass": 32,
+        "legal_mate_rate": 1.0
+      },
+      "queen_side_file": {
+        "n": 32,
+        "exact_pass": 32,
+        "exact_rate": 1.0,
+        "legal_mate_pass": 32,
+        "legal_mate_rate": 1.0
+      },
+      "rook_side_file": {
+        "n": 32,
+        "exact_pass": 32,
+        "exact_rate": 1.0,
+        "legal_mate_pass": 32,
+        "legal_mate_rate": 1.0
+      },
+      "knight_corner": {
+        "n": 32,
+        "exact_pass": 30,
+        "exact_rate": 0.9375,
+        "legal_mate_pass": 32,
+        "legal_mate_rate": 1.0
+      }
+    },
+    "sample_rows": [
+      {
+        "motif": "rook_side_file",
+        "fen": "8/8/1p6/kp6/1p1n4/8/2p5/2R4K w - - 0 1",
+        "expected": "c1a1",
+        "all_mates": [
+          "c1a1"
+        ],
+        "prediction": "c1a1",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "knight_corner",
+        "fen": "K7/8/8/8/4N3/8/3B2pp/6nk w - - 0 1",
+        "expected": "e4f2",
+        "all_mates": [
+          "e4f2",
+          "e4g3"
+        ],
+        "prediction": "e4g3",
+        "exact": false,
+        "legal_mate": true
+      },
+      {
+        "motif": "back_rank_rook_queen",
+        "fen": "3k4/2ppp3/8/P5n1/3B1R2/8/8/7K w - - 0 1",
+        "expected": "f4f8",
+        "all_mates": [
+          "f4f8"
+        ],
+        "prediction": "f4f8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "back_rank_rook_queen",
+        "fen": "6k1/5ppp/3B4/8/7N/4R3/8/7K w - - 0 1",
+        "expected": "e3e8",
+        "all_mates": [
+          "e3e8"
+        ],
+        "prediction": "e3e8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "queen_side_file",
+        "fen": "8/8/6p1/6pk/3n2p1/8/8/K5Q1 w - - 0 1",
+        "expected": "g1h1",
+        "all_mates": [
+          "g1h1",
+          "g1h2"
+        ],
+        "prediction": "g1h1",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "rook_side_file",
+        "fen": "3R4/p7/8/6p1/6pk/6p1/8/K7 w - - 0 1",
+        "expected": "d8h8",
+        "all_mates": [
+          "d8h8"
+        ],
+        "prediction": "d8h8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "queen_side_file",
+        "fen": "1Q6/6N1/8/1p6/kp4p1/1p4b1/n7/7K w - - 0 1",
+        "expected": "b8a8",
+        "all_mates": [
+          "b8a7",
+          "b8a8"
+        ],
+        "prediction": "b8a8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "rook_side_file",
+        "fen": "8/1p2p3/kp6/1p5b/8/1N6/1P6/6RK w - - 0 1",
+        "expected": "g1a1",
+        "all_mates": [
+          "g1a1"
+        ],
+        "prediction": "g1a1",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "knight_corner",
+        "fen": "7K/8/8/NbP5/8/8/pp6/kn6 w - - 0 1",
+        "expected": "a5b3",
+        "all_mates": [
+          "a5b3"
+        ],
+        "prediction": "a5b3",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "back_rank_rook_queen",
+        "fen": "5k2/4ppp1/8/2b5/3Q4/8/8/7K w - - 0 1",
+        "expected": "d4d8",
+        "all_mates": [
+          "d4d8"
+        ],
+        "prediction": "d4d8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "rook_side_file",
+        "fen": "8/1p6/kp4Pb/1p6/8/4p3/8/4R2K w - - 0 1",
+        "expected": "e1a1",
+        "all_mates": [
+          "e1a1"
+        ],
+        "prediction": "e1a1",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "knight_corner",
+        "fen": "6nk/6pp/B7/6N1/7P/8/8/K7 w - - 0 1",
+        "expected": "g5f7",
+        "all_mates": [
+          "g5f7"
+        ],
+        "prediction": "g5f7",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "knight_corner",
+        "fen": "K7/2p5/8/8/8/5P2/4N1pp/6nk w - - 0 1",
+        "expected": "e2g3",
+        "all_mates": [
+          "e2g3"
+        ],
+        "prediction": "e2g3",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "rook_side_file",
+        "fen": "1R6/8/8/2p3p1/6pk/b5p1/4n3/K7 w - - 0 1",
+        "expected": "b8h8",
+        "all_mates": [
+          "b8h8"
+        ],
+        "prediction": "b8h8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "back_rank_rook_queen",
+        "fen": "2k5/1ppp3B/8/R7/4n3/8/8/7K w - - 0 1",
+        "expected": "a5a8",
+        "all_mates": [
+          "a5a8"
+        ],
+        "prediction": "a5a8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "rook_side_file",
+        "fen": "R7/Bp6/8/8/6p1/5Npk/2P3p1/K7 w - - 0 1",
+        "expected": "a8h8",
+        "all_mates": [
+          "a8h8"
+        ],
+        "prediction": "a8h8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "queen_side_file",
+        "fen": "2Q5/8/8/1p6/kp5p/1p6/8/7K w - - 0 1",
+        "expected": "c8a8",
+        "all_mates": [
+          "c8a6",
+          "c8a8"
+        ],
+        "prediction": "c8a8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "knight_corner",
+        "fen": "K7/6b1/8/8/6N1/8/6pp/6nk w - - 0 1",
+        "expected": "g4f2",
+        "all_mates": [
+          "g4f2"
+        ],
+        "prediction": "g4f2",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "knight_corner",
+        "fen": "6nk/4p1pp/7B/4N3/8/8/8/K7 w - - 0 1",
+        "expected": "e5f7",
+        "all_mates": [
+          "e5f7"
+        ],
+        "prediction": "e5f7",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "back_rank_rook_queen",
+        "fen": "2k5/1ppp1B2/2P5/6b1/Q7/8/8/7K w - - 0 1",
+        "expected": "a4a8",
+        "all_mates": [
+          "a4a8"
+        ],
+        "prediction": "a4a8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "queen_side_file",
+        "fen": "8/2p1N1p1/6pk/6p1/3n4/8/8/K3Q3 w - - 0 1",
+        "expected": "e1h1",
+        "all_mates": [
+          "e1h1"
+        ],
+        "prediction": "e1h1",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "queen_side_file",
+        "fen": "8/1p6/kp6/1p6/4N3/8/8/5Q1K w - - 0 1",
+        "expected": "f1a1",
+        "all_mates": [
+          "f1a1"
+        ],
+        "prediction": "f1a1",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "knight_corner",
+        "fen": "kn6/pp6/5p2/3N4/8/8/1b6/7K w - - 0 1",
+        "expected": "d5c7",
+        "all_mates": [
+          "d5c7"
+        ],
+        "prediction": "d5c7",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "queen_side_file",
+        "fen": "6Q1/8/8/8/6p1/6pk/6pP/K7 w - - 0 1",
+        "expected": "g8h8",
+        "all_mates": [
+          "g8h7",
+          "g8h8"
+        ],
+        "prediction": "g8h8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "back_rank_rook_queen",
+        "fen": "6k1/5ppp/8/1P6/bB6/8/4R3/7K w - - 0 1",
+        "expected": "e2e8",
+        "all_mates": [
+          "e2e8"
+        ],
+        "prediction": "e2e8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "rook_side_file",
+        "fen": "2R5/4B3/8/6p1/3N1ppk/4n1p1/8/K7 w - - 0 1",
+        "expected": "c8h8",
+        "all_mates": [
+          "c8h8"
+        ],
+        "prediction": "c8h8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "knight_corner",
+        "fen": "K7/8/8/8/p3N3/8/6pp/6nk w - - 0 1",
+        "expected": "e4g3",
+        "all_mates": [
+          "e4f2",
+          "e4g3"
+        ],
+        "prediction": "e4g3",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "queen_side_file",
+        "fen": "8/1p6/kp6/1p6/3p4/8/8/5Q1K w - - 0 1",
+        "expected": "f1a1",
+        "all_mates": [
+          "f1a1"
+        ],
+        "prediction": "f1a1",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "rook_side_file",
+        "fen": "8/6p1/6pk/P5p1/8/8/8/K2R4 w - - 0 1",
+        "expected": "d1h1",
+        "all_mates": [
+          "d1h1"
+        ],
+        "prediction": "d1h1",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "back_rank_rook_queen",
+        "fen": "5k2/4ppp1/8/8/8/8/3Q4/7K w - - 0 1",
+        "expected": "d2d8",
+        "all_mates": [
+          "d2d8"
+        ],
+        "prediction": "d2d8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "back_rank_rook_queen",
+        "fen": "2k5/1ppp1p2/8/8/8/2N1R3/8/7K w - - 0 1",
+        "expected": "e3e8",
+        "all_mates": [
+          "e3e8"
+        ],
+        "prediction": "e3e8",
+        "exact": true,
+        "legal_mate": true
+      },
+      {
+        "motif": "knight_corner",
+        "fen": "6nk/6pp/7N/8/4P3/8/p7/K7 w - - 0 1",
+        "expected": "h6f7",
+        "all_mates": [
+          "h6f7"
+        ],
+        "prediction": "h6f7",
+        "exact": true,
+        "legal_mate": true
+      }
+    ]
+  },
+  "total_elapsed_s": 5.701
+}

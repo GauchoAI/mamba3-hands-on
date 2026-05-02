@@ -1,0 +1,147 @@
+{
+  "status": "diagnostic_arena_not_full_game",
+  "reason": "motif model is a move policy for mate-in-one; JEPA is a transition model, not a value/policy model",
+  "device": "mps",
+  "elapsed_s": 4.977,
+  "positions": 64,
+  "motif_policy": {
+    "legal_mate_pass": 63,
+    "legal_mate_rate": 0.9844,
+    "by_family": {
+      "knight_corner": {
+        "n": 16,
+        "legal_mate_pass": 16,
+        "legal_mate_rate": 1.0
+      },
+      "rook_side_file": {
+        "n": 16,
+        "legal_mate_pass": 16,
+        "legal_mate_rate": 1.0
+      },
+      "back_rank_rook_queen": {
+        "n": 16,
+        "legal_mate_pass": 15,
+        "legal_mate_rate": 0.9375
+      },
+      "queen_side_file": {
+        "n": 16,
+        "legal_mate_pass": 16,
+        "legal_mate_rate": 1.0
+      }
+    }
+  },
+  "jepa_world_model_on_motif_moves": {
+    "mean_cosine": 0.977445,
+    "mean_normalized_mse": 0.00070485
+  },
+  "sample_rows": [
+    {
+      "motif": "knight_corner",
+      "fen": "K7/8/8/3P1p2/8/8/4N1pp/6nk w - - 0 1",
+      "expected": "e2g3",
+      "motif_prediction": "e2g3",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.985503,
+      "jepa_transition_mse_on_motif_move": 0.00045304
+    },
+    {
+      "motif": "rook_side_file",
+      "fen": "1R6/8/2P5/1p6/kp4b1/pp4B1/8/7K w - - 0 1",
+      "expected": "b8a8",
+      "motif_prediction": "b8a8",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.974104,
+      "jepa_transition_mse_on_motif_move": 0.00080925
+    },
+    {
+      "motif": "rook_side_file",
+      "fen": "1R6/8/8/8/1p6/kp6/1p6/7K w - - 0 1",
+      "expected": "b8a8",
+      "motif_prediction": "b8a8",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.955774,
+      "jepa_transition_mse_on_motif_move": 0.00138207
+    },
+    {
+      "motif": "rook_side_file",
+      "fen": "8/7P/6p1/3n2pk/6p1/5B2/4N3/KR6 w - - 0 1",
+      "expected": "b1h1",
+      "motif_prediction": "b1h1",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.986863,
+      "jepa_transition_mse_on_motif_move": 0.00041053
+    },
+    {
+      "motif": "back_rank_rook_queen",
+      "fen": "2k5/1ppp4/8/Q7/8/8/8/7K w - - 0 1",
+      "expected": "a5a8",
+      "motif_prediction": "a5a8",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.993649,
+      "jepa_transition_mse_on_motif_move": 0.00019846
+    },
+    {
+      "motif": "knight_corner",
+      "fen": "7K/8/8/5b2/6P1/8/pp1N4/kn6 w - - 0 1",
+      "expected": "d2b3",
+      "motif_prediction": "d2b3",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.943828,
+      "jepa_transition_mse_on_motif_move": 0.00175538
+    },
+    {
+      "motif": "back_rank_rook_queen",
+      "fen": "1k6/ppp5/8/8/8/3R4/8/7K w - - 0 1",
+      "expected": "d3d8",
+      "motif_prediction": "d3d8",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.985744,
+      "jepa_transition_mse_on_motif_move": 0.00044552
+    },
+    {
+      "motif": "knight_corner",
+      "fen": "K7/8/8/8/4N2B/8/3P2pp/6nk w - - 0 1",
+      "expected": "e4f2",
+      "motif_prediction": "e4f2",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.981927,
+      "jepa_transition_mse_on_motif_move": 0.0005648
+    },
+    {
+      "motif": "queen_side_file",
+      "fen": "7Q/8/8/1p6/kp6/1p6/8/7K w - - 0 1",
+      "expected": "h8a8",
+      "motif_prediction": "h8a8",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.979211,
+      "jepa_transition_mse_on_motif_move": 0.00064966
+    },
+    {
+      "motif": "back_rank_rook_queen",
+      "fen": "4k3/3ppp2/8/8/6R1/b3N3/5B2/7K w - - 0 1",
+      "expected": "g4g8",
+      "motif_prediction": "g4g8",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.995091,
+      "jepa_transition_mse_on_motif_move": 0.00015342
+    },
+    {
+      "motif": "knight_corner",
+      "fen": "K7/8/8/8/8/1p6/6pp/5Nnk w - - 0 1",
+      "expected": "f1g3",
+      "motif_prediction": "f1g3",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.970919,
+      "jepa_transition_mse_on_motif_move": 0.00090877
+    },
+    {
+      "motif": "knight_corner",
+      "fen": "6nk/6pp/3N4/8/8/B7/8/K7 w - - 0 1",
+      "expected": "d6f7",
+      "motif_prediction": "d6f7",
+      "motif_prediction_legal_mate": true,
+      "jepa_transition_cosine_on_motif_move": 0.99371,
+      "jepa_transition_mse_on_motif_move": 0.00019655
+    }
+  ]
+}
