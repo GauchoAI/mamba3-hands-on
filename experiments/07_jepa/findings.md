@@ -601,6 +601,255 @@ turns conv-jepa from "should we try it" into "no other lever left."
 
 ---
 
+## 5. Round 5 — conv-jepa-as-built refuted (2026-05-01)
+
+### Setup
+
+`gpu0-conv-jepa-192` ran past full ramp:
+- `conv_jepa_loss` (smooth-L1 between projected student-residual at
+  end-of-prompt and teacher's last-layer hidden at end-of-response,
+  captured offline by `make_subtitle_thoughts.py` over 130k OpenSubtitles
+  pair records, 400 MB)
+- shared ramp with `jepa_loss`: gradient gated to 0 until step 2000,
+  ramps linearly to full λ=1.0 by step 3000
+- everything else identical to `gpu2-fresh-256` control
+
+### Result
+
+```
+                  step   retention   drift   diversity   byte_ce   conv_loss
+pre-ramp baseline 2000   -0.072      1.51    0.43        1.29      1.32
+ramp 0.2          2200   +0.153      1.21    0.56        1.35      0.61  ← noise
+ramp 0.4          2400   -0.152      1.56    0.48        1.32      ~0.5
+ramp 0.6          2600   -0.035      1.46    0.41        1.30      ~0.5
+ramp 0.8          2800   -0.157      1.56    0.68        1.24      ~0.5
+ramp 1.0          3000   -0.071      1.49    0.48        1.27      ~0.5
+post-ramp +200    3200   -0.059      1.48    0.59        1.20
+post-ramp +400    3400   -0.075      1.50    0.64        1.19
+post-ramp +3800   6800   -0.143      1.55    0.66        1.10
+```
+
+Mean retention across 9 readings post-ramp-start = **-0.07**. Range
+[-0.30, +0.15]. Statistically indistinguishable from the gpu2-fresh-256
+control's noise band (-0.10 to +0.16) over the same step range. The
+conv-jepa loss itself fits — drops from 1.32 baseline to ~0.5 — so the
+projector is learning a valid mapping. byte_ce keeps descending (1.29 →
+1.10) and diversity climbs (0.43 → 0.66), so training is healthy.
+**Retention is the only metric that doesn't move.**
+
+The single +0.15 reading at step 2200 (which I initially flagged as
+"first sign of conv-jepa working") was measurement noise; subsequent
+readings reverted to baseline. Eight canary prompts isn't enough for
+single-checkpoint readings to be conclusive — need rolling means across
+5+ checkpoints.
+
+### Why conv-jepa-as-built didn't move retention
+
+**Capacity inversion.** The thought-head projector is 1.33M parameters
+(192 → 768 → 1536, 2-layer GELU MLP). The Mamba-3 encoder is 1.02M.
+*The projector is bigger than the encoder.*
+
+In this configuration:
+
+```
+residual_at_end_of_prompt → [projector 1.33M] → projected_pred
+target = teacher_response_hidden (fixed, from offline corpus)
+loss = smooth_l1(projected_pred, target)
+```
+
+The projector has enough capacity to fit a passable "average response
+hidden" mapping from whatever locally-available signal is in the
+residual — a short-term encoding of the prompt's last few bytes is
+enough. It doesn't *need* the residual to carry prompt-conditional
+response info; it absorbs the smooth-L1 burden by itself. Gradient
+flowing back to the SSM is therefore weak, the SSM stays prompt-blind,
+and retention doesn't move.
+
+Vision JEPA gets this right: predictor is a small MLP, encoder is a
+ViT. The asymmetry forces representation work into the encoder. We
+inverted that asymmetry; the result is what should have been expected.
+
+### Concurrent refutation: gpu2-fresh-256 (control) finished at step 10000
+
+```
+                  step   retention   drift   diversity   byte_ce
+control final     10000   -0.075      1.52    0.39        1.04
+```
+
+byte_ce 1.04 — record low for the project, beats round-3 winner's 1.10.
+Retention -0.075, indistinguishable from autopilot baseline. Confirms
+fully: data-fix-alone (corpus + retention live) does not crack
+autopilot. Run is `[done]`, ready to be pinned.
+
+### Summary — two clean refutations
+
+1. **Data fix alone**: subtitles + retention live + 10k steps →
+   retention asymptotes near zero. Mode is stable.
+2. **Conv-jepa-as-built**: projected smooth-L1 with projector > encoder
+   → projector absorbs the loss, residual untouched. Mode is also stable.
+
+byte_ce, diversity, and retention are **uncorrelated at this scale**. A
+1M-param byte-Mamba-3 hits byte_ce 1.04 and diversity 0.4 with
+retention ~0. Improving fluency does not improve coherence on its own.
+
+### Round 6 — proposed levers, ranked by directness
+
+The architectural lever must affect either (a) what gradient reaches
+the SSM, or (b) what the SSM has to do to satisfy the loss.
+
+| # | lever | one-line change | hypothesis |
+|---|---|---|---|
+| 1 | **shrink projector** | `ThoughtHead(d_model, d_teacher, hidden=32)` → ~110k params, 1/10th of encoder | If the projector can't fit the smooth-L1 alone, it must extract prompt-conditional info from the residual. Restore the JEPA capacity asymmetry. **Cheapest test.** |
+| 2 | **target end-of-prompt hidden, not end-of-response** | swap `make_subtitle_thoughts.py` to capture teacher hidden at end-of-prompt; same loss | Plain hidden-state distillation: student residual mimics teacher residual at the same byte position. Known to work. Loses cross-segment commitment but is a reliable baseline. |
+| 3 | **VICreg on residual + conv-jepa** | force per-dim variance of `residual_at_end_of_prompt = 1` across batch | Anti-collapse on the residual itself. Forces the SSM to produce informative residuals; the conv-jepa target then has something to learn from. Closest to "complete the conv-jepa idea." |
+| 4 | **logit-projection KD** | per-byte teacher distribution → student byte distribution → KL | Highest signal density. Big lift: ~250 GB offline corpus or streaming Qwen-1.5B in trainer. The actual real-distillation upgrade. |
+
+**Recommendation: launch #1 immediately on the freed GPU 2 as
+`gpu2-conv-jepa-tiny-proj-192`.** Single number change; if retention
+moves, the asymmetry hypothesis is confirmed and we know how to scale
+conv-jepa properly. If it still doesn't, we're out of cheap moves and
+#3 / #4 become unavoidable.
+
+---
+
+## 6. Round 6 — capacity-asymmetry refuted (2026-05-01)
+
+### Setup
+
+`gpu2-conv-jepa-tinyproj-192`: identical to round-5 conv-jepa except
+`--thought-head-hidden 32` → projector is now 56,864 params (1/18th of
+the 1.02M encoder). Same corpus, same loss, same ramp schedule.
+
+### Result — head-to-head with round-5 conv-jepa-original
+
+```
+                step    tinyproj          original
+                2000    -0.07 / 1.51      -0.07 / 1.51   (identical pre-ramp; same seed)
+                2200    -0.20 / 1.59      +0.15 / 1.21   (first ramp checkpoint)
+                2400    -0.21 / 1.60      -0.15 / 1.56
+```
+
+Conv loss IS dropping on tinyproj (1.27 at step 2050 → 0.67 at step
+2400). So the 56k projector still has enough capacity to absorb the
+smooth-L1 burden. **Asymmetry is not the bug.**
+
+byte_ce identical between the two runs (~1.32). Drift slightly higher on
+tinyproj. Retention plateaus at -0.21 — same noise band as
+conv-jepa-original. Neither projector size moves the retention metric.
+
+### What this rules out
+
+The bottleneck is **not projector capacity.** Even when the projector
+is 1/18th the encoder size — well below the JEPA recommendation — the
+loss still fits. The encoder is not being forced to do anything new.
+
+Implication: the loss target itself doesn't pull the encoder toward
+encoding prompt-conditional info. The teacher's last-layer hidden at
+end-of-response is dominated by *response content*, not by prompt
+encoding. A predictor of any size, given any prompt-side input, can fit
+"average response hidden over the corpus" without needing the prompt.
+Smooth-L1 against a target that's largely independent of the input
+doesn't shape the input.
+
+### Two-round refutation summary
+
+The retention metric has now resisted **three** different
+configurations:
+1. Round 4: data-only fix (subtitles + retention live).
+2. Round 5: conv-jepa with 1.3M projector (>encoder).
+3. Round 6: conv-jepa with 56k projector (<<encoder).
+
+byte_ce keeps descending across all three. Diversity bounces. Retention
+asymptotes near zero in every configuration. The conv-jepa loss
+formulation — "predict teacher response-end hidden from student
+prompt-end residual" — is refuted as a lever for retention,
+independent of projector size.
+
+### Round 7 — pivot to plain hidden-state distillation
+
+Since cross-segment commitment via projection-to-response-hidden doesn't
+work, drop the cross-segment piece and do plain distillation:
+
+> **Match teacher's end-of-prompt hidden, not end-of-response.**
+
+Both teacher and student look at the same byte stream (the prompt).
+Loss: smooth-L1 between projector(student residual at end-of-prompt) and
+teacher's hidden at end-of-prompt. The student is asked to mimic the
+teacher's representation of the prompt — known-to-work knowledge
+distillation. We lose the "predict the response from the prompt"
+ambition, but we gain a target that's *forced* to be a function of the
+prompt the student is reading.
+
+The hypothesis: a student trained to mimic Qwen-2.5-1.5B's end-of-prompt
+representation will produce coherent responses, because the student's
+LM head will then be reading a Qwen-shaped representation. Coherence
+gets transferred from teacher to student through the residual.
+
+**Implementation:** `make_subtitle_thoughts.py` already captures
+positions; switching the target to end-of-prompt is a one-flag change.
+The trainer's `conv_jepa_loss` already takes `prompt_end_pos` as the
+source position — we just need the target hidden to also come from that
+position. Five-line edit + corpus regenerate + launch.
+
+If retention still doesn't move after round 7, we go to logit-projection
+KD (round 8) — the long-postponed real distillation.
+
+---
+
+## 7. Round 8 — contrastive distillation (built but not yet launched)
+
+After re-reading DeepSeek V4's paper (their compose-many-complementary-
+signals philosophy), it became clear: our prior losses share a flaw.
+
+`smooth_L1(projector(residual), teacher_target)` is minimized when the
+projector outputs ≈ target. The corpus mean of teacher targets is a
+passable solution. The encoder gets weak gradient because reducing the
+loss doesn't *require* prompt-specific predictions.
+
+**InfoNCE-style contrastive distillation** doesn't have this hole.
+Logits are cosine similarities between `projector(residual_at_end_of_prompt[i])`
+and *all* teacher targets in the batch; loss is cross-entropy with
+labels=arange(B). The corpus mean is *terrible* at this — equal
+similarity to every target → uniform softmax → loss = log(B). To drive
+the loss low, the projection must be **prompt-specific**, which forces
+the encoder to encode prompt-specific info into the residual.
+
+This is the strongest test of the input-dependence problem documented
+in `feedback_loss_target_input_dependence.md`. If contrastive doesn't
+move retention, the small Mamba-3 SSM at this scale genuinely cannot
+be made prompt-conditional under any pseudo-distillation flavor, and
+the round-8+ pivot would be to logit-projection KD (per-byte teacher
+distribution → KL — the only loss with byte-level prompt-conditional
+pressure built in by construction).
+
+### Implementation landed (not yet launched)
+
+`arch.py`: `contrastive_distill_loss(student_thoughts, teacher_target,
+prompt_end_pos, temperature=0.1)`. Symmetric InfoNCE (s→t and t→s
+averaged), L2-normalized, cosine similarity. ~25 lines.
+
+`train.py`: new `--lambda-contrastive` and `--contrastive-temp` flags.
+Wired into the `kind == "conv"` branch as a parallel loss, on the same
+ramp schedule as `conv_jepa_loss`. Same corpus works (response-end
+or prompt-end target — InfoNCE forces specificity either way).
+
+Launch when ready (round 7 still pre-ramp on GPU 1):
+
+```bash
+python jepa/train.py --run-name gpu2-contrastive-distill-192 \
+  --d-model 192 --use-counter false --thought-head-hidden 32 \
+  --steps 8000 --batch-size 64 --seq-len 256 \
+  --subtitle-path data/subtitle_thoughts_prompt \
+  --mix-conv 0.6 --mix-biling 0.4 \
+  --lambda-conv-jepa 0.0 --lambda-contrastive 1.0 \
+  --contrastive-temp 0.1 --lambda-jepa 0.0 --lambda-sigreg 0.1
+```
+
+Note: `--lambda-conv-jepa 0.0` so contrastive is the only conv-side
+loss. Clean ablation.
+
+---
+
 ## 4a. Round 3 — knob sweep around the gpu1-no-cortex winner (2026-04-30 PM)
 
 After the round-2 headline result landed (gpu1-no-cortex wins on the

@@ -121,6 +121,53 @@ def conv_jepa_loss(student_thoughts: torch.Tensor,         # (B, L, D_teacher)
 
 
 # ---------------------------------------------------------------------------
+# Contrastive distillation — InfoNCE over the batch.
+# ---------------------------------------------------------------------------
+def contrastive_distill_loss(student_thoughts: torch.Tensor,    # (B, L, D_teacher)
+                             teacher_target: torch.Tensor,      # (B, D_teacher)
+                             prompt_end_pos: torch.Tensor,      # (B,) long
+                             temperature: float = 0.1
+                             ) -> torch.Tensor:
+    """InfoNCE between projected student residual at end-of-prompt and the
+    batched teacher targets.
+
+    Why stronger than `conv_jepa_loss` smooth-L1:
+
+      smooth_L1 is minimized when projector output ≈ target. The corpus
+      mean of teacher targets is a passable solution: it minimizes
+      expected squared distance regardless of input. The encoder gets
+      weak gradient because reducing the loss doesn't require encoder
+      cooperation — see feedback_loss_target_input_dependence.md.
+
+      InfoNCE is minimized when, per example, the projector output is
+      closer to its own target than to all other targets in the batch.
+      The corpus mean is terrible at this: equal similarity to every
+      target, uniform softmax, cross-entropy = log(B). To drive the
+      loss low, the projector MUST produce prompt-specific outputs,
+      which forces the encoder to encode prompt-specific info into the
+      residual.
+
+    Cosine (not dot product): teacher hidden norms vary across the
+    batch; dot product would let the model exploit norm structure.
+
+    Returns symmetric InfoNCE (student→teacher and teacher→student
+    averaged) — stronger gradient than the one-sided variant.
+    """
+    B, L, D = student_thoughts.shape
+    src = prompt_end_pos.clamp(0, L - 1)
+    idx = src.view(B, 1, 1).expand(-1, 1, D)
+    pred = student_thoughts.gather(1, idx).squeeze(1)        # (B, D)
+
+    pred = F.normalize(pred, dim=-1)
+    targ = F.normalize(teacher_target, dim=-1)
+    logits = (pred @ targ.t()) / temperature                  # (B, B)
+    labels = torch.arange(B, device=pred.device)
+    loss_s2t = F.cross_entropy(logits, labels)
+    loss_t2s = F.cross_entropy(logits.t(), labels)
+    return 0.5 * (loss_s2t + loss_t2s)
+
+
+# ---------------------------------------------------------------------------
 # SIGreg — Cramér-Wold isotropy regularizer
 # ---------------------------------------------------------------------------
 def sigreg_loss(intent: torch.Tensor, n_directions: int = 1024) -> torch.Tensor:

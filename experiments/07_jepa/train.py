@@ -34,7 +34,8 @@ import torch
 import torch.nn.functional as F
 
 from cortex_counting import CortexLM, CortexLMConfig
-from arch import ThoughtHead, jepa_loss, sigreg_loss, conv_jepa_loss
+from arch import (ThoughtHead, jepa_loss, sigreg_loss, conv_jepa_loss,
+                  contrastive_distill_loss)
 from data_loader import (
     TeacherThoughtsDataset, TeacherIterator, BilingualByteIterator,
     CountingByteIterator, Batch,
@@ -85,6 +86,12 @@ class TrainConfig:
     d_teacher: int = 0
     stride_bytes: int = 16     # must match what make_teacher_thoughts.py used
 
+    # Projector capacity. Default 0 → ThoughtHead picks 4×d_model (matches the
+    # round-1..5 setup, ~1.3M for d_model=192). Round-6 lever: set this small
+    # (e.g. 32) so the projector can't fit the conv-jepa loss alone and the
+    # SSM is forced to encode prompt-conditional info into the residual.
+    thought_head_hidden: int = 0
+
     # Mixing
     mix_teacher: float = 0.70
     mix_biling:  float = 0.25
@@ -92,10 +99,12 @@ class TrainConfig:
     mix_conv:    float = 0.0       # if subtitle_path set, recommended ~0.5
 
     # Loss weights
-    lambda_jepa:      float = 1.0
-    lambda_sigreg:    float = 0.1
-    lambda_aux:       float = 0.5
-    lambda_conv_jepa: float = 1.0
+    lambda_jepa:        float = 1.0
+    lambda_sigreg:      float = 0.1
+    lambda_aux:         float = 0.5
+    lambda_conv_jepa:   float = 1.0
+    lambda_contrastive: float = 0.0      # round 8 lever; 0 → off
+    contrastive_temp:   float = 0.1
 
     # Schedule
     steps:       int = 30_000
@@ -301,7 +310,10 @@ def train(cfg: TrainConfig) -> None:
         counter_injection_scale=cfg.counter_injection_scale,
     )
     model = CortexLM(model_cfg).to(device)
-    thought_head = ThoughtHead(cfg.d_model, cfg.d_teacher).to(device)
+    thought_head = ThoughtHead(
+        cfg.d_model, cfg.d_teacher,
+        hidden=(cfg.thought_head_hidden or None),
+    ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     n_th_params = sum(p.numel() for p in thought_head.parameters())
     print(f"[init] cortex={n_params:,} thought_head={n_th_params:,}",
@@ -390,6 +402,7 @@ def train(cfg: TrainConfig) -> None:
                 # format; primitive aux only fires on unary batches.
                 l_aux = torch.zeros((), device=device)
                 l_conv = torch.zeros((), device=device)
+                l_contrastive = torch.zeros((), device=device)
                 loss = l_byte + jw * l_jepa + cfg.lambda_sigreg * l_sig
             elif kind == "conv":
                 # Conv-JEPA: predict response-end teacher hidden from end-of-prompt
@@ -401,16 +414,30 @@ def train(cfg: TrainConfig) -> None:
                 )
                 student_thoughts = thought_head(residual)
                 l_byte = byte_ce_loss(logits, tokens, byte_pad)
-                # Single response-end thought per record sits at index 0.
+                # Single thought per record sits at index 0; for round-7
+                # corpora it's the teacher's end-of-prompt hidden, for
+                # round-5/6 it's end-of-response. Both work as targets here.
                 resp_h = batch.teacher_thoughts.to(device).float()[:, 0, :]
                 pad = batch.thought_pad_mask.to(device)[:, 0]
                 prompt_end = (plens - 1).clamp_min(0)
                 l_conv = conv_jepa_loss(student_thoughts.float(),
                                          resp_h, prompt_end, pad)
+                # Contrastive (round 8): InfoNCE over the batch. Same target
+                # tensor — the difference is the loss formulation forces
+                # prompt-specific predictions instead of corpus-mean fits.
+                if cfg.lambda_contrastive > 0:
+                    l_contrastive = contrastive_distill_loss(
+                        student_thoughts.float(), resp_h, prompt_end,
+                        temperature=cfg.contrastive_temp,
+                    )
+                else:
+                    l_contrastive = torch.zeros((), device=device)
                 l_sig = sigreg_loss(intent.float())
                 l_jepa = torch.zeros((), device=device)
                 l_aux = torch.zeros((), device=device)
-                loss = l_byte + cw * l_conv + cfg.lambda_sigreg * l_sig
+                contr_w = cfg.lambda_contrastive * ramp
+                loss = (l_byte + cw * l_conv + contr_w * l_contrastive
+                        + cfg.lambda_sigreg * l_sig)
             elif kind == "biling":
                 logits = model(tokens)
                 l_byte = byte_ce_loss(logits, tokens, byte_pad)
@@ -418,6 +445,7 @@ def train(cfg: TrainConfig) -> None:
                 l_sig = torch.zeros((), device=device)
                 l_aux = torch.zeros((), device=device)
                 l_conv = torch.zeros((), device=device)
+                l_contrastive = torch.zeros((), device=device)
                 loss = l_byte
             else:  # unary
                 logits, prim_out = model(tokens, return_aux=True)
@@ -426,6 +454,7 @@ def train(cfg: TrainConfig) -> None:
                 l_jepa = torch.zeros((), device=device)
                 l_sig = torch.zeros((), device=device)
                 l_conv = torch.zeros((), device=device)
+                l_contrastive = torch.zeros((), device=device)
                 loss = l_byte + cfg.lambda_aux * l_aux
 
         opt.zero_grad(set_to_none=True)
@@ -447,6 +476,7 @@ def train(cfg: TrainConfig) -> None:
             "l_sig": float(l_sig.detach()),
             "l_aux": float(l_aux.detach()),
             "l_conv": float(l_conv.detach()),
+            "l_contrastive": float(l_contrastive.detach()),
         }
         if step % 50 == 0:
             dt = time.time() - t0
@@ -533,6 +563,12 @@ def main():
     ap.add_argument("--lambda-aux", type=float, default=TrainConfig.lambda_aux)
     ap.add_argument("--lambda-conv-jepa", type=float,
                     default=TrainConfig.lambda_conv_jepa)
+    ap.add_argument("--lambda-contrastive", type=float,
+                    default=TrainConfig.lambda_contrastive,
+                    help="Round 8 lever: InfoNCE between projected student "
+                         "residual and batched teacher targets. >0 enables.")
+    ap.add_argument("--contrastive-temp", type=float,
+                    default=TrainConfig.contrastive_temp)
 
     ap.add_argument("--mix-teacher", type=float, default=TrainConfig.mix_teacher)
     ap.add_argument("--mix-biling", type=float, default=TrainConfig.mix_biling)
@@ -549,6 +585,11 @@ def main():
 
     ap.add_argument("--d-model", type=int, default=TrainConfig.d_model)
     ap.add_argument("--n-layers", type=int, default=TrainConfig.n_layers)
+    ap.add_argument("--thought-head-hidden", type=int,
+                    default=TrainConfig.thought_head_hidden,
+                    help="Projector hidden width. 0 → 4×d_model (default). "
+                         "Round-6 lever: set small (e.g. 32) to force the "
+                         "encoder to do the conv-jepa work.")
 
     ap.add_argument("--use-counter", type=str, default="true",
                     choices=["true", "false"],
@@ -572,6 +613,8 @@ def main():
         lambda_sigreg=args.lambda_sigreg,
         lambda_aux=args.lambda_aux,
         lambda_conv_jepa=args.lambda_conv_jepa,
+        lambda_contrastive=args.lambda_contrastive,
+        contrastive_temp=args.contrastive_temp,
         mix_teacher=args.mix_teacher,
         mix_biling=args.mix_biling,
         mix_unary=args.mix_unary,
@@ -583,6 +626,7 @@ def main():
         runs_root=args.runs_root,
         d_model=args.d_model,
         n_layers=args.n_layers,
+        thought_head_hidden=args.thought_head_hidden,
         use_counter=(args.use_counter == "true"),
         stride_bytes=args.override_stride_bytes,
         device=args.device,

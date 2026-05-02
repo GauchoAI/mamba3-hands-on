@@ -64,18 +64,16 @@ def iter_subtitle_pairs(path: Path, min_len: int, max_len: int):
                 prev = line
 
 
-def find_response_end_token(tokenizer, prompt_text: str, joined_text: str,
-                             input_ids: list[int]) -> int:
-    """Return token index whose decoded prefix first reaches joined_text length.
+def find_token_at_byte(tokenizer, input_ids: list[int],
+                        target_bytes: int) -> int:
+    """Return token index whose decoded prefix first reaches `target_bytes`.
 
     Two-pointer walk: decode incremental prefixes until the byte length of
-    the decoded text covers the joined-text byte length. Same shape as the
-    `thought_positions` helper in make_teacher_thoughts but we only want
-    the single end-of-response mark."""
-    target = len(joined_text.encode("utf-8"))
+    the decoded text covers the target. Used for both end-of-prompt and
+    end-of-response marks."""
     for i in range(len(input_ids)):
         prefix = tokenizer.decode(input_ids[: i + 1], skip_special_tokens=True)
-        if len(prefix.encode("utf-8")) >= target:
+        if len(prefix.encode("utf-8")) >= target_bytes:
             return i
     return len(input_ids) - 1
 
@@ -89,6 +87,12 @@ def main():
                     help="Or stop once .bin reaches this size in MB")
     ap.add_argument("--corpus", default="data/opensubtitles.txt")
     ap.add_argument("--out", default="data/subtitle_thoughts")
+    ap.add_argument("--target", default="response_end",
+                    choices=["response_end", "prompt_end"],
+                    help="Which teacher hidden to capture per record. "
+                         "response_end (round 5/6 default) was refuted; "
+                         "prompt_end is plain hidden-state distillation, "
+                         "the round-7 lever.")
     ap.add_argument("--min-line", type=int, default=8)
     ap.add_argument("--max-line", type=int, default=200)
     ap.add_argument("--max-input-tokens", type=int, default=128,
@@ -144,7 +148,7 @@ def main():
     # Batch up pairs and run the teacher in groups for throughput.
     pending: list[tuple[bytes, bytes]] = []
     pending_inputs: list[list[int]] = []
-    pending_resp_end_tok: list[int] = []
+    pending_target_tok: list[int] = []
 
     def flush_batch():
         nonlocal n_records
@@ -163,17 +167,19 @@ def main():
             out = model(ids_t, attention_mask=attn_t,
                         output_hidden_states=True, use_cache=False)
         last = out.hidden_states[-1]                         # (B, T, D)
-        for i, ((q, r), end_tok) in enumerate(zip(pending, pending_resp_end_tok)):
-            h = last[i, end_tok].to(torch.float16).cpu().numpy()  # (D,)
+        for i, ((q, r), tok_idx) in enumerate(zip(pending, pending_target_tok)):
+            h = last[i, tok_idx].to(torch.float16).cpu().numpy()  # (D,)
             thoughts = h.reshape(1, -1)                      # K=1
-            byte_pos = np.array([len(r) - 1], dtype=np.int32)
+            # byte_pos is unused by conv_jepa_loss but written for
+            # collate_records compatibility. 0 keeps it inside any window.
+            byte_pos = np.array([0], dtype=np.int32)
             written = write_record(bin_f, q.decode("utf-8"),
                                    r.decode("utf-8"), thoughts, byte_pos)
             offsets.append(offsets[-1] + written)
             n_records += 1
         pending.clear()
         pending_inputs.clear()
-        pending_resp_end_tok.clear()
+        pending_target_tok.clear()
 
     try:
         for q, r in pairs_iter:
@@ -185,10 +191,14 @@ def main():
             ids = tokenizer(joined, add_special_tokens=False)["input_ids"]
             if len(ids) < 2 or len(ids) > args.max_input_tokens:
                 continue
-            end_tok = find_response_end_token(tokenizer, prompt_text, joined, ids)
+            if args.target == "prompt_end":
+                target_bytes_pos = len(prompt_text.encode("utf-8"))
+            else:
+                target_bytes_pos = len(joined.encode("utf-8"))
+            tok_idx = find_token_at_byte(tokenizer, ids, target_bytes_pos)
             pending.append((q, r))
             pending_inputs.append(ids)
-            pending_resp_end_tok.append(end_tok)
+            pending_target_tok.append(tok_idx)
             if len(pending) >= args.batch:
                 flush_batch()
                 if n_attempts % (args.batch * 10) == 0:
