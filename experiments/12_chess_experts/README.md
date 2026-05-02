@@ -15,6 +15,9 @@ goal is to improve the chess expert itself.
 
 - [Chess Expert Lab](./chess_lab.html): static artifact explorer for metrics,
   curriculum mix, and full-game replay.
+- [Browser Chess Expert](./chess_browser_play.html): static ONNX Runtime Web
+  board that loads the archived experts from Hugging Face and runs inference
+  in the browser.
 
 ## Subsections
 

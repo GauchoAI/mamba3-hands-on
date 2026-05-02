@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser Chess Expert</title>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.all.min.js"></script>
+  <style>
+    :root {
+      --bg: #faf7f2;
+      --panel: #fffdf8;
+      --ink: #191713;
+      --muted: #6f675d;
+      --line: #d8d0c4;
+      --accent: #0f766e;
+      --light: #f0d9b5;
+      --dark: #b58863;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Georgia, "Times New Roman", serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.45 var(--sans);
+    }
+    .layout {
+      display: grid;
+      gap: 22px;
+      grid-template-columns: minmax(320px, 560px) minmax(300px, 1fr);
+      padding: clamp(14px, 3vw, 34px);
+    }
+    h1 {
+      font: 700 clamp(32px, 5vw, 58px)/.95 var(--serif);
+      margin: 0 0 10px;
+    }
+    p { margin: 0; }
+    button, select, input {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--ink);
+      font: inherit;
+      min-height: 38px;
+      padding: 9px 10px;
+    }
+    button { cursor: pointer; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 14px;
+    }
+    .toolbar, .movebar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .board {
+      aspect-ratio: 1 / 1;
+      border: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      grid-template-rows: repeat(8, minmax(0, 1fr));
+      max-width: 560px;
+      width: 100%;
+    }
+    .square {
+      align-items: center;
+      border: 0;
+      border-radius: 0;
+      display: grid;
+      font-family: "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols2", serif;
+      font-size: clamp(30px, 7vw, 58px);
+      justify-items: center;
+      line-height: 1;
+      min-height: 0;
+      min-width: 0;
+      padding: 0;
+      position: relative;
+    }
+    .light { background: var(--light); }
+    .dark { background: var(--dark); }
+    .square.selected { outline: 4px solid var(--accent); outline-offset: -4px; }
+    .square.last::after {
+      border: 4px solid rgba(15, 118, 110, .75);
+      content: "";
+      inset: 0;
+      pointer-events: none;
+      position: absolute;
+    }
+    .coord {
+      color: rgba(0, 0, 0, .55);
+      font: 700 10px/1 var(--sans);
+      left: 4px;
+      position: absolute;
+      top: 4px;
+    }
+    .muted { color: var(--muted); }
+    .mono { font-family: var(--mono); }
+    .moves {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      max-height: 310px;
+      overflow: auto;
+    }
+    .chip {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      font-family: var(--mono);
+      padding: 4px 6px;
+    }
+    .grid { display: grid; gap: 14px; }
+    @media (max-width: 920px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="layout">
+    <section>
+      <h1>Browser Chess Expert</h1>
+      <p class="muted">Static ONNX Runtime Web inference. The model runs in your browser, preferably through WebGPU.</p>
+      <div class="toolbar">
+        <select id="model">
+          <option value="motif_full_trace">Motif full trace</option>
+          <option value="jepa_full_trace">JEPA full trace</option>
+        </select>
+        <select id="side">
+          <option value="white">Play white</option>
+          <option value="black">Play black</option>
+        </select>
+        <button id="newBtn" class="primary">New game</button>
+        <button id="flipBtn">Flip</button>
+      </div>
+      <div id="board" class="board" style="margin-top:14px"></div>
+    </section>
+    <section class="grid">
+      <div class="panel">
+        <strong>Status</strong>
+        <p id="status" class="muted" style="margin-top:6px">Loading runtime...</p>
+      </div>
+      <div class="panel">
+        <strong>Move</strong>
+        <div class="movebar">
+          <input id="moveInput" placeholder="e2e4 or Nf3" autocomplete="off">
+          <button id="moveBtn" class="primary">Play</button>
+        </div>
+        <p class="muted" style="margin-top:8px">Click source and target squares, or type UCI/SAN. Promotions default to queen.</p>
+      </div>
+      <div class="panel">
+        <strong>Moves</strong>
+        <div id="moves" class="moves" style="margin-top:10px"></div>
+      </div>
+      <div class="panel">
+        <strong>FEN</strong>
+        <p id="fen" class="mono" style="margin-top:8px; overflow-wrap:anywhere"></p>
+      </div>
+    </section>
+  </main>
+
+  <script type="module">
+    import { Chess } from "https://cdn.jsdelivr.net/npm/chess.js@1.0.0/+esm";
+
+    const HF = "https://huggingface.co/miguelemosreverte/mamba3-chess-experts/resolve/main/chess_full_game_trace_arena";
+    const MODELS = {
+      motif_full_trace: {
+        url: `${HF}/motif_full_trace.onnx`,
+        dim: 773,
+        feature: motifFeatures
+      },
+      jepa_full_trace: {
+        url: `${HF}/jepa_full_trace.onnx`,
+        dim: 783,
+        feature: jepaFeatures
+      }
+    };
+    const pieceGlyph = {
+      p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+      P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔"
+    };
+    const piecePlane = { p: 0, n: 1, b: 2, r: 3, q: 4, k: 5 };
+    const files = "abcdefgh";
+    const $ = id => document.getElementById(id);
+    const state = {
+      chess: new Chess(),
+      sessions: {},
+      selected: "",
+      flipped: false,
+      last: [],
+      human: "white",
+      provider: ""
+    };
+
+    ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
+
+    function squareIndex(square) {
+      return files.indexOf(square[0]) + 8 * (Number(square[1]) - 1);
+    }
+    function castlingFlags(chess) {
+      const rights = chess.fen().split(" ")[2] || "-";
+      return [
+        rights.includes("K") ? 1 : 0,
+        rights.includes("Q") ? 1 : 0,
+        rights.includes("k") ? 1 : 0,
+        rights.includes("q") ? 1 : 0
+      ];
+    }
+    function addPieces(chess, x) {
+      for (let rank = 1; rank <= 8; rank++) {
+        for (const file of files) {
+          const square = `${file}${rank}`;
+          const piece = chess.get(square);
+          if (!piece) continue;
+          const offset = piece.color === "w" ? 0 : 6;
+          const plane = offset + piecePlane[piece.type];
+          x[plane * 64 + squareIndex(square)] = 1;
+        }
+      }
+    }
+    function motifFeatures(chess) {
+      const x = new Float32Array(773);
+      addPieces(chess, x);
+      const base = 12 * 64;
+      x[base] = chess.turn() === "w" ? 1 : 0;
+      const flags = castlingFlags(chess);
+      for (let i = 0; i < flags.length; i++) x[base + 1 + i] = flags[i];
+      return x;
+    }
+    function jepaFeatures(chess) {
+      const x = new Float32Array(783);
+      addPieces(chess, x);
+      const parts = chess.fen().split(" ");
+      const base = 12 * 64;
+      x[base] = chess.turn() === "w" ? 1 : 0;
+      const flags = castlingFlags(chess);
+      for (let i = 0; i < flags.length; i++) x[base + 1 + i] = flags[i];
+      const ep = parts[3];
+      if (ep && ep !== "-") x[base + 5 + files.indexOf(ep[0])] = 1;
+      x[base + 13] = Math.min(Number(parts[4] || 0), 100) / 100;
+      x[base + 14] = Math.min(Number(parts[5] || 1), 120) / 120;
+      return x;
+    }
+    function classIndex(move) {
+      return squareIndex(move.from) * 64 + squareIndex(move.to);
+    }
+    async function loadSession(name) {
+      if (state.sessions[name]) return state.sessions[name];
+      const spec = MODELS[name];
+      const providers = navigator.gpu ? ["webgpu", "wasm"] : ["wasm"];
+      const session = await ort.InferenceSession.create(spec.url, { executionProviders: providers });
+      state.sessions[name] = session;
+      state.provider = providers[0];
+      return session;
+    }
+    async function expertMove() {
+      const name = $("model").value;
+      const spec = MODELS[name];
+      const session = await loadSession(name);
+      const x = spec.feature(state.chess);
+      const feeds = { board_features: new ort.Tensor("float32", x, [1, spec.dim]) };
+      const outputs = await session.run(feeds);
+      const logits = outputs.logits.data;
+      const legal = state.chess.moves({ verbose: true });
+      legal.sort((a, b) => logits[classIndex(b)] - logits[classIndex(a)]);
+      const move = legal[0];
+      state.chess.move({ from: move.from, to: move.to, promotion: move.promotion || "q" });
+      state.last = [move.from, move.to];
+      return move;
+    }
+    function statusText(lastExpert = null) {
+      if (state.chess.isCheckmate()) return "Checkmate.";
+      if (state.chess.isStalemate()) return "Stalemate.";
+      if (state.chess.isDraw()) return "Draw.";
+      const side = state.chess.turn() === "w" ? "White" : "Black";
+      const suffix = lastExpert ? ` Expert played ${lastExpert.san}.` : "";
+      return `${side} to move.${suffix} Runtime: ${state.provider || "loading"}.`;
+    }
+    function render() {
+      const ranks = state.flipped ? [1,2,3,4,5,6,7,8] : [8,7,6,5,4,3,2,1];
+      const fileList = state.flipped ? [...files].reverse() : [...files];
+      $("board").innerHTML = ranks.map(rank => fileList.map(file => {
+        const square = `${file}${rank}`;
+        const piece = state.chess.get(square);
+        const symbol = piece ? (piece.color === "w" ? piece.type.toUpperCase() : piece.type) : "";
+        const dark = (files.indexOf(file) + rank - 1) % 2 === 0;
+        return `<button class="square ${dark ? "dark" : "light"} ${state.selected === square ? "selected" : ""} ${state.last.includes(square) ? "last" : ""}" data-square="${square}">
+          <span class="coord">${square}</span>${pieceGlyph[symbol] || ""}
+        </button>`;
+      }).join("")).join("");
+      $("fen").textContent = state.chess.fen();
+      $("moves").innerHTML = state.chess.history().map((m, i) => `<span class="chip">${i + 1}. ${m}</span>`).join("");
+      $("status").textContent = statusText();
+    }
+    async function newGame() {
+      state.chess = new Chess();
+      state.human = $("side").value;
+      state.selected = "";
+      state.last = [];
+      $("status").textContent = "Loading model...";
+      if (state.human === "black") await expertMove();
+      render();
+    }
+    async function playMoveText(text) {
+      const moveText = text.trim();
+      if (!moveText) return;
+      let move = null;
+      if (/^[a-h][1-8][a-h][1-8][qrbn]?$/i.test(moveText)) {
+        move = state.chess.move({
+          from: moveText.slice(0, 2),
+          to: moveText.slice(2, 4),
+          promotion: moveText[4] || "q"
+        });
+      } else {
+        move = state.chess.move(moveText);
+      }
+      if (!move) throw new Error(`Illegal move: ${moveText}`);
+      state.last = [move.from, move.to];
+      let reply = null;
+      if (!state.chess.isGameOver()) reply = await expertMove();
+      $("moveInput").value = "";
+      render();
+      $("status").textContent = statusText(reply);
+    }
+    $("board").addEventListener("click", event => {
+      const btn = event.target.closest("[data-square]");
+      if (!btn) return;
+      const square = btn.dataset.square;
+      if (!state.selected) {
+        state.selected = square;
+        render();
+        return;
+      }
+      playMoveText(state.selected + square).catch(err => {
+        $("status").textContent = err.message;
+        state.selected = "";
+        render();
+      });
+    });
+    $("moveBtn").addEventListener("click", () => {
+      playMoveText($("moveInput").value).catch(err => $("status").textContent = err.message);
+    });
+    $("moveInput").addEventListener("keydown", event => {
+      if (event.key === "Enter") $("moveBtn").click();
+    });
+    $("newBtn").addEventListener("click", () => {
+      newGame().catch(err => $("status").textContent = err.message);
+    });
+    $("flipBtn").addEventListener("click", () => {
+      state.flipped = !state.flipped;
+      render();
+    });
+    $("model").addEventListener("change", () => {
+      $("status").textContent = "Model will change on the next expert move.";
+    });
+
+    newGame().catch(err => $("status").textContent = err.message);
+  </script>
+</body>
+</html>

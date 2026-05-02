@@ -1001,3 +1001,36 @@ Firebase metadata was written under:
 This is the missing discipline: the result JSON is still useful for the static
 book, but the actual policies are now portable artifacts with SHA-256 hashes
 and direct HF bucket pointers.
+
+## Browser-Native ONNX Export
+
+GGUF is not the right interchange target for these chess experts. It is a
+strong ecosystem format for llama.cpp-style transformer inference, but these
+policies are small custom MLP graphs. The browser needs both weights and graph
+semantics; ONNX provides that, and `onnxruntime-web` can run the graph through
+WebGPU.
+
+Exported and verified ONNX models:
+
+```text
+motif_full_trace.onnx: 12,276,042 bytes
+jepa_full_trace.onnx:  14,891,219 bytes
+```
+
+PyTorch vs ONNX Runtime CPU max logit differences:
+
+```text
+motif_full_trace: 0.0000067
+jepa_full_trace:  0.0000954
+```
+
+The ONNX files were uploaded to a regular Hugging Face model repository because
+`/resolve/main/...` is CORS-fetchable from a static web page:
+
+```text
+https://huggingface.co/miguelemosreverte/mamba3-chess-experts
+```
+
+Added `chess_browser_play.html`, a static page that loads the ONNX model with
+`onnxruntime-web`, uses WebGPU when available, computes legal-move logits in
+the browser, and lets a user play against either archived policy.

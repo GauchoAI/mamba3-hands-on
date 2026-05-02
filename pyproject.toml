@@ -27,6 +27,11 @@ jepa = [
 jepa_structured_data = [
     "boto3>=1.34",
 ]
+browser_export = [
+    "onnx>=1.21",
+    "onnxscript>=0.7",
+    "onnxruntime>=1.25",
+]
 
 [project.scripts]
 lab = "cli.main:main"
