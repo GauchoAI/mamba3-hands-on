@@ -76,7 +76,20 @@ def full_trace_kpi(policy: str) -> dict:
     )
 
 
-def export_online_champion(checkpoint_path: Path, out_path: Path) -> tuple[dict, dict]:
+def tactical_risk(summary: dict) -> float | None:
+    audit = (summary.get("tactical_audit") or {}).get("adaptive_world_model") or {}
+    if not audit:
+        return None
+    return round(
+        2.0 * float(audit.get("tactical_blunder_rate") or 0.0)
+        + float(audit.get("queen_hang_rate") or 0.0)
+        + 0.75 * float(audit.get("major_piece_hang_rate") or 0.0)
+        + 0.1 * float(audit.get("avg_opponent_best_capture") or 0.0),
+        6,
+    )
+
+
+def export_online_checkpoint(checkpoint_path: Path, out_path: Path) -> tuple[dict, dict]:
     ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     width = int(ckpt["model_width"])
     model = OnlineValueModel(width)
@@ -112,10 +125,64 @@ def export_online_champion(checkpoint_path: Path, out_path: Path) -> tuple[dict,
     }
 
 
+def online_policy_from_checkpoint(checkpoint_path: Path, publish_rank: int) -> dict:
+    ckpt, online_asset = export_online_checkpoint(
+        checkpoint_path,
+        PLAYABLE_DIR / "online_strategies" / f"{checkpoint_path.stem}.onnx",
+    )
+    ckpt_asset = copy_asset(
+        checkpoint_path,
+        PLAYABLE_DIR / "online_strategies" / checkpoint_path.name,
+    )
+    strategy_id = ckpt.get("strategy_id") or checkpoint_path.stem.removesuffix("_value")
+    strategy_label = ckpt.get("strategy_label") or strategy_id.replace("_", " ").title()
+    champion_summary = ckpt.get("heldout_vs_safety", {}).get("summary", {})
+    alpha_summary = ckpt.get("heldout_vs_alpha", {}).get("summary", {})
+    online_kpi = ckpt.get("kpi") or bounded_kpi(
+        f"12_chess_experts/chess_online_world_model/{strategy_id}",
+        "heldout_vs_static_safety_alpha_score",
+        champion_summary.get("adaptive_score_rate") or 0.0,
+        "heldout_vs_safety.summary.adaptive_score_rate",
+    )
+    return {
+        "id": strategy_id,
+        "label": strategy_label,
+        "kind": "safety_candidate_reranker_value_head",
+        "default": False,
+        "playable": True,
+        "kpi": online_kpi,
+        "model": online_asset,
+        "checkpoint": ckpt_asset,
+        "input": "candidate_features",
+        "output": "value",
+        "feature_schema": "online_world_model_candidate_features/v1",
+        "candidate_source": "safety_aware_teacher_score_top_k",
+        "input_dim": FEATURE_DIM,
+        "top_k": int(ckpt["config"]["top_k"]),
+        "value_weight": float(ckpt["config"]["value_weight"]),
+        "adaptive_safety_weight": float(ckpt["config"]["adaptive_safety_weight"]),
+        "champion_iteration": ckpt.get("champion_iteration"),
+        "champion_promotions": ckpt.get("champion_promotions"),
+        "metrics": {
+            "heldout_vs_safety_score": champion_summary.get("adaptive_score_rate"),
+            "heldout_vs_safety_wld": [
+                champion_summary.get("adaptive_wins"),
+                champion_summary.get("opponent_wins"),
+                champion_summary.get("draws"),
+            ],
+            "heldout_vs_alpha_score": alpha_summary.get("adaptive_score_rate"),
+            "tactical_risk": tactical_risk(champion_summary),
+            "tactical_audit": champion_summary.get("tactical_audit", {}).get("adaptive_world_model", {}),
+        },
+        "publish_rank": publish_rank,
+    }
+
+
 def build_manifest(args) -> dict:
+    if PLAYABLE_DIR.exists():
+        shutil.rmtree(PLAYABLE_DIR)
     PLAYABLE_DIR.mkdir(parents=True, exist_ok=True)
     legacy_dir = PLAYABLE_DIR / "legacy_full_trace"
-    online_dir = PLAYABLE_DIR / "online_champion"
 
     motif_asset = copy_asset(FULL_TRACE_DIR / "motif_full_trace.onnx", legacy_dir / "motif_full_trace.onnx")
     jepa_asset = copy_asset(FULL_TRACE_DIR / "jepa_full_trace.onnx", legacy_dir / "jepa_full_trace.onnx")
@@ -123,20 +190,55 @@ def build_manifest(args) -> dict:
     if full_trace_manifest.exists():
         copy_asset(full_trace_manifest, legacy_dir / "onnx_manifest.json")
 
-    online_ckpt_path = ONLINE_DIR / "online_champion_value.pt"
-    ckpt, online_asset = export_online_champion(online_ckpt_path, online_dir / "online_champion_value.onnx")
-    online_ckpt_asset = copy_asset(online_ckpt_path, online_dir / "online_champion_value.pt")
-
-    champion_summary = ckpt.get("heldout_vs_safety", {}).get("summary", {})
-    alpha_summary = ckpt.get("heldout_vs_alpha", {}).get("summary", {})
-    online_kpi = ckpt.get("kpi") or bounded_kpi(
-        "12_chess_experts/chess_online_world_model/online_champion",
-        "heldout_vs_static_safety_alpha_score",
-        champion_summary.get("adaptive_score_rate") or 0.0,
-        "heldout_vs_safety.summary.adaptive_score_rate",
-    )
+    online_policies = [
+        online_policy_from_checkpoint(path, idx + 1)
+        for idx, path in enumerate(sorted(ONLINE_DIR.glob("*_value.pt")))
+    ]
     motif_kpi = full_trace_kpi("motif_full_trace")
     jepa_kpi = full_trace_kpi("jepa_full_trace")
+    legacy_rank = len(online_policies) + 1
+    policies = online_policies + [
+        {
+            "id": "motif_full_trace",
+            "label": "Motif full trace",
+            "kind": "legacy_onnx_policy",
+            "default": False,
+            "playable": True,
+            "kpi": motif_kpi,
+            "model": motif_asset,
+            "input": "board_features",
+            "output": "logits",
+            "feature_schema": "motif_board_features/v1",
+            "input_dim": 773,
+            "move_class": "from_square * 64 + to_square",
+            "publish_rank": legacy_rank,
+        },
+        {
+            "id": "jepa_full_trace",
+            "label": "JEPA full trace",
+            "kind": "legacy_onnx_policy",
+            "default": False,
+            "playable": True,
+            "kpi": jepa_kpi,
+            "model": jepa_asset,
+            "input": "board_features",
+            "output": "logits",
+            "feature_schema": "jepa_board_features/v1",
+            "input_dim": 783,
+            "move_class": "from_square * 64 + to_square",
+            "publish_rank": legacy_rank + 1,
+        },
+    ]
+    policies.sort(
+        key=lambda row: (
+            -row["kpi"]["value"],
+            row.get("metrics", {}).get("tactical_risk", float("inf")),
+            row["publish_rank"],
+        )
+    )
+    if policies:
+        policies[0]["default"] = True
+    default_policy = policies[0]["id"] if policies else ""
     manifest = {
         "format": "mamba3_chess_playable_manifest/v1",
         "created_at": time.time(),
@@ -145,73 +247,11 @@ def build_manifest(args) -> dict:
         "kpi_policy": {
             "required": True,
             "description": "Every pushed playable checkpoint carries a bounded 0-1 KPI used for default selection and future pruning.",
-            "default_selection": "highest kpi.value, then lowest publish_rank",
+            "default_selection": "highest kpi.value, then lowest tactical_risk, then lowest publish_rank",
         },
-        "default_policy": "online_champion",
-        "selection_reason": "highest held-out score against static_safety_alpha",
-        "policies": [
-            {
-                "id": "online_champion",
-                "label": "Online champion",
-                "kind": "safety_candidate_reranker_value_head",
-                "default": True,
-                "playable": True,
-                "kpi": online_kpi,
-                "model": online_asset,
-                "checkpoint": online_ckpt_asset,
-                "input": "candidate_features",
-                "output": "value",
-                "feature_schema": "online_world_model_candidate_features/v1",
-                "candidate_source": "safety_aware_teacher_score_top_k",
-                "input_dim": FEATURE_DIM,
-                "top_k": int(ckpt["config"]["top_k"]),
-                "value_weight": float(ckpt["config"]["value_weight"]),
-                "adaptive_safety_weight": float(ckpt["config"]["adaptive_safety_weight"]),
-                "champion_iteration": ckpt.get("champion_iteration"),
-                "champion_promotions": ckpt.get("champion_promotions"),
-                "metrics": {
-                    "heldout_vs_safety_score": champion_summary.get("adaptive_score_rate"),
-                    "heldout_vs_safety_wld": [
-                        champion_summary.get("adaptive_wins"),
-                        champion_summary.get("opponent_wins"),
-                        champion_summary.get("draws"),
-                    ],
-                    "heldout_vs_alpha_score": alpha_summary.get("adaptive_score_rate"),
-                    "tactical_audit": champion_summary.get("tactical_audit", {}).get("adaptive_world_model", {}),
-                },
-                "publish_rank": 1,
-            },
-            {
-                "id": "motif_full_trace",
-                "label": "Motif full trace",
-                "kind": "legacy_onnx_policy",
-                "default": False,
-                "playable": True,
-                "kpi": motif_kpi,
-                "model": motif_asset,
-                "input": "board_features",
-                "output": "logits",
-                "feature_schema": "motif_board_features/v1",
-                "input_dim": 773,
-                "move_class": "from_square * 64 + to_square",
-                "publish_rank": 2,
-            },
-            {
-                "id": "jepa_full_trace",
-                "label": "JEPA full trace",
-                "kind": "legacy_onnx_policy",
-                "default": False,
-                "playable": True,
-                "kpi": jepa_kpi,
-                "model": jepa_asset,
-                "input": "board_features",
-                "output": "logits",
-                "feature_schema": "jepa_board_features/v1",
-                "input_dim": 783,
-                "move_class": "from_square * 64 + to_square",
-                "publish_rank": 3,
-            },
-        ],
+        "default_policy": default_policy,
+        "selection_reason": "highest KPI value with tactical-risk tie break",
+        "policies": policies,
     }
     manifest_path = PLAYABLE_DIR / "playable_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")

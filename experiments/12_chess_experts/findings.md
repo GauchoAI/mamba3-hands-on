@@ -1444,3 +1444,40 @@ manifest to:
 ```text
 https://huggingface.co/miguelemosreverte/mamba3-chess-experts/resolve/main/chess_playable_assets/playable_manifest.json
 ```
+
+Eighth pass: checkpoint strategies, not just winners.
+
+The KPI is now namespaced by strategy:
+
+```text
+name: heldout_vs_static_safety_alpha_score
+range: [0.0, 1.0]
+higher_is_better: true
+source: champion.heldout_vs_safety.summary.adaptive_score_rate
+```
+
+The current sweep:
+
+```text
+online_top12          KPI 0.8125  W-L-D 6-1-1  tactical risk 0.185910  default
+online_top12_seed977  KPI 0.8125  W-L-D 6-1-1  tactical risk 0.213010
+online_champion       KPI 0.8125  W-L-D 6-1-1  tactical risk 0.258670
+online_value18        KPI 0.7500  W-L-D 6-2-0  tactical risk 0.258010
+online_top16          KPI 0.7500  W-L-D 6-2-0  tactical risk 0.374060
+online_wide192        KPI 0.6875  W-L-D 5-2-1  tactical risk 0.391990
+```
+
+The score has not moved beyond 0.8125 yet. The meaningful improvement in this
+pass is that the best tied strategy is cleaner: `online_top12` keeps the same
+held-out score while lowering the tactical-risk tie breaker from 0.258670 to
+0.185910.
+
+The playable manifest now selects the default by:
+
+```text
+highest kpi.value, then lowest tactical_risk, then lowest publish_rank
+```
+
+This makes checkpoint publication more natural: keep one checkpoint per
+strategy, require a bounded KPI on each checkpoint, and let the manifest choose
+the online champion automatically.

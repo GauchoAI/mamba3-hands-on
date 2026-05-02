@@ -1,0 +1,105 @@
+{
+  "format": "chess_online_world_model_strategy_sweep/v1",
+  "kpi": {
+    "name": "heldout_vs_static_safety_alpha_score",
+    "range": [
+      0,
+      1
+    ],
+    "higher_is_better": true
+  },
+  "tie_breaker": "lowest tactical_risk",
+  "best_strategy": {
+    "checkpoint": "online_top12_value.pt",
+    "strategy_id": "online_top12",
+    "strategy_label": "Online top 12 candidate breadth",
+    "kpi": 0.8125,
+    "wld": [
+      6,
+      1,
+      1
+    ],
+    "tactical_risk": 0.18591,
+    "bytes": 541621
+  },
+  "strategies": [
+    {
+      "checkpoint": "online_top12_value.pt",
+      "strategy_id": "online_top12",
+      "strategy_label": "Online top 12 candidate breadth",
+      "kpi": 0.8125,
+      "wld": [
+        6,
+        1,
+        1
+      ],
+      "tactical_risk": 0.18591,
+      "bytes": 541621
+    },
+    {
+      "checkpoint": "online_top12_seed977_value.pt",
+      "strategy_id": "online_top12_seed977",
+      "strategy_label": "Online top 12 restart 977",
+      "kpi": 0.8125,
+      "wld": [
+        6,
+        1,
+        1
+      ],
+      "tactical_risk": 0.21301,
+      "bytes": 541813
+    },
+    {
+      "checkpoint": "online_champion_value.pt",
+      "strategy_id": "online_champion",
+      "strategy_label": "Online champion",
+      "kpi": 0.8125,
+      "wld": [
+        6,
+        1,
+        1
+      ],
+      "tactical_risk": 0.25867,
+      "bytes": 546277
+    },
+    {
+      "checkpoint": "online_value18_value.pt",
+      "strategy_id": "online_value18",
+      "strategy_label": "Online value weight 0.18",
+      "kpi": 0.75,
+      "wld": [
+        6,
+        2,
+        0
+      ],
+      "tactical_risk": 0.25801,
+      "bytes": 541653
+    },
+    {
+      "checkpoint": "online_top16_value.pt",
+      "strategy_id": "online_top16",
+      "strategy_label": "Online top 16 candidate breadth",
+      "kpi": 0.75,
+      "wld": [
+        6,
+        2,
+        0
+      ],
+      "tactical_risk": 0.37406,
+      "bytes": 541621
+    },
+    {
+      "checkpoint": "online_wide192_value.pt",
+      "strategy_id": "online_wide192",
+      "strategy_label": "Online wide 192",
+      "kpi": 0.6875,
+      "wld": [
+        5,
+        2,
+        1
+      ],
+      "tactical_risk": 0.39199,
+      "bytes": 858069
+    }
+  ]
+}

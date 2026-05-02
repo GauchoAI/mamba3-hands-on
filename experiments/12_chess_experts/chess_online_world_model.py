@@ -584,11 +584,11 @@ def audit_score(summary: dict) -> float:
     )
 
 
-def checkpoint_kpi(heldout_vs_safety: dict | None) -> dict:
+def checkpoint_kpi(heldout_vs_safety: dict | None, strategy_id: str) -> dict:
     summary = (heldout_vs_safety or {}).get("summary") or {}
     value = float(summary.get("adaptive_score_rate") or 0.0)
     return {
-        "namespace": "12_chess_experts/chess_online_world_model",
+        "namespace": f"12_chess_experts/chess_online_world_model/{strategy_id}",
         "name": "heldout_vs_static_safety_alpha_score",
         "value": round(max(0.0, min(1.0, value)), 6),
         "range": [0.0, 1.0],
@@ -653,6 +653,8 @@ def main() -> None:
     parser.add_argument("--promotion-mode", choices=("latest", "champion"), default="champion")
     parser.add_argument("--promotion-margin", type=float, default=0.0)
     parser.add_argument("--audit-tolerance", type=float, default=0.05)
+    parser.add_argument("--strategy-id", default="online_champion")
+    parser.add_argument("--strategy-label", default="Online champion")
     parser.add_argument("--sample-games", type=int, default=2)
     parser.add_argument("--sample-ply-details", type=int, default=20)
     args = parser.parse_args()
@@ -705,9 +707,11 @@ def main() -> None:
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
     champion_checkpoint = {
         "format": "chess_online_world_model_champion/v1",
+        "strategy_id": args.strategy_id,
+        "strategy_label": args.strategy_label,
         "state_dict": champion_state,
         "config": vars(args),
-        "kpi": checkpoint_kpi(champion_eval),
+        "kpi": checkpoint_kpi(champion_eval, args.strategy_id),
         "feature_dim": FEATURE_DIM,
         "model_width": args.width,
         "champion_iteration": champion_iteration,
@@ -715,7 +719,7 @@ def main() -> None:
         "heldout_vs_safety": champion_eval or {},
         "heldout_vs_alpha": champion_alpha_eval or {},
     }
-    champion_path = CHECKPOINT_DIR / "online_champion_value.pt"
+    champion_path = CHECKPOINT_DIR / f"{args.strategy_id}_value.pt"
     torch.save(champion_checkpoint, champion_path)
     best_after_update = best_iteration_by(iterations, "heldout_after_update")
     best_vs_alpha = best_iteration_by(iterations, "heldout_vs_alpha")
@@ -733,10 +737,12 @@ def main() -> None:
         },
         "final_summary": iterations[-1]["summary"] if iterations else {},
         "champion": {
+            "strategy_id": args.strategy_id,
+            "strategy_label": args.strategy_label,
             "promotion_mode": args.promotion_mode,
             "iteration": champion_iteration,
             "promotions": champion_promotions,
-            "kpi": checkpoint_kpi(champion_eval),
+            "kpi": checkpoint_kpi(champion_eval, args.strategy_id),
             "checkpoint": str(champion_path.relative_to(HERE)),
             "heldout_vs_safety": champion_eval or {},
             "heldout_vs_alpha": champion_alpha_eval or {},

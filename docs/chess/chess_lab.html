@@ -347,6 +347,7 @@
           <select id="artifactSelect" title="Select artifact">
             <option value="artifacts/chess_full_game_trace_arena_result.json">Mixed curriculum</option>
             <option value="artifacts/chess_online_world_model_result.json">Online world model</option>
+            <option value="artifacts/chess_online_world_model_strategy_sweep.json">Online strategy sweep</option>
             <option value="artifacts/chess_full_game_arena_result.json">Full-game arena</option>
             <option value="artifacts/chess_competition_sweep_result.json">Competition sweep</option>
             <option value="artifacts/chess_puzzle_sequence_arena_result.json">Multi-ply puzzles</option>
@@ -536,7 +537,12 @@
     function renderCards() {
       const a = state.artifact;
       const summary = primarySummary();
-      const cards = a.status === "online_world_model_self_play" ? [
+      const cards = a.format === "chess_online_world_model_strategy_sweep/v1" ? [
+        ["Status", "Strategy sweep"],
+        ["Best KPI", pct(a.best_strategy?.kpi)],
+        ["Best strategy", label(a.best_strategy?.strategy_id)],
+        ["Strategies", a.strategies?.length]
+      ] : a.status === "online_world_model_self_play" ? [
         ["Status", "Online world model"],
         ["Champion safety", pct(a.champion?.heldout_vs_safety?.summary?.adaptive_score_rate ?? a.best_heldout_vs_safety?.summary?.adaptive_score_rate)],
         ["Promotions", a.champion?.promotions],
@@ -553,12 +559,35 @@
           <div class="card-value">${typeof v === "number" ? num(v) : (v || "—")}</div>
         </div>
       `).join("");
-      document.getElementById("scope").textContent = a.scope || "";
+      document.getElementById("scope").textContent = a.scope || (a.format === "chess_online_world_model_strategy_sweep/v1" ? "Checkpoint strategies ranked by bounded KPI, with tactical risk as the tie breaker." : "");
     }
 
     function renderCharts() {
       destroyChart("traceChart");
       destroyChart("scoreChart");
+      if (state.artifact.format === "chess_online_world_model_strategy_sweep/v1") {
+        const rows = state.artifact.strategies || [];
+        state.charts.traceChart = new Chart(document.getElementById("traceChart"), {
+          type: "bar",
+          data: {
+            labels: rows.map(row => label(row.strategy_id)),
+            datasets: [
+              { label: "KPI", data: rows.map(row => row.kpi), backgroundColor: "#0f766e" },
+              { label: "Tactical risk", data: rows.map(row => row.tactical_risk), backgroundColor: "#9a3412" }
+            ]
+          },
+          options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 1 } } }
+        });
+        state.charts.scoreChart = new Chart(document.getElementById("scoreChart"), {
+          type: "doughnut",
+          data: {
+            labels: rows.slice(0, 5).map(row => label(row.strategy_id)),
+            datasets: [{ data: rows.slice(0, 5).map(row => row.kpi), backgroundColor: ["#0f766e", "#8a8176", "#9a3412", "#155e75", "#7c2d12"] }]
+          },
+          options: { responsive: true, maintainAspectRatio: false }
+        });
+        return;
+      }
       if (state.artifact.status === "online_world_model_self_play") {
         const iterations = state.artifact.iterations || [];
         state.charts.traceChart = new Chart(document.getElementById("traceChart"), {
@@ -627,6 +656,25 @@
     }
 
     function renderMetrics() {
+      if (state.artifact.format === "chess_online_world_model_strategy_sweep/v1") {
+        const rows = state.artifact.strategies || [];
+        const rendered = table(rows, [
+          { name: "Strategy", render: r => label(r.strategy_id) },
+          { name: "KPI", num: true, render: r => pct(r.kpi) },
+          { name: "W-L-D", num: true, render: r => (r.wld || []).join("-") },
+          { name: "Risk", num: true, render: r => Number.isFinite(r.tactical_risk) ? r.tactical_risk.toFixed(6) : "—" },
+          { name: "Checkpoint", render: r => r.checkpoint },
+          { name: "Bytes", num: true, render: r => num(r.bytes) }
+        ]);
+        document.getElementById("traceMetrics").innerHTML = rendered;
+        document.getElementById("tacticalMetrics").innerHTML = rendered;
+        document.getElementById("sequenceMetrics").innerHTML = `<p class="muted">Best strategy: ${label(state.artifact.best_strategy?.strategy_id)}. Tie breaker: ${state.artifact.tie_breaker || "—"}.</p>`;
+        document.getElementById("bridgeMetrics").innerHTML = table(Object.entries(state.artifact.kpi || {}).map(([k, v]) => ({ k, v })), [
+          { name: "KPI Field", render: r => label(r.k) },
+          { name: "Value", render: r => Array.isArray(r.v) ? r.v.join(" - ") : String(r.v) }
+        ]);
+        return;
+      }
       if (state.artifact.status === "online_world_model_self_play") {
         const rows = [];
         for (const [section, labelText] of [
