@@ -611,6 +611,8 @@ def main():
     ap.add_argument("--kd-path", default=TrainConfig.kd_path,
                     help="KDTP corpus basename (.bin/.idx pair).")
     ap.add_argument("--mix-kd", type=float, default=TrainConfig.mix_kd)
+    ap.add_argument("--jepa-warmup", type=int, default=TrainConfig.jepa_warmup,
+                    help="Steps before any aux loss (jepa/conv/kd) ramp opens.")
 
     ap.add_argument("--mix-teacher", type=float, default=TrainConfig.mix_teacher)
     ap.add_argument("--mix-biling", type=float, default=TrainConfig.mix_biling)
@@ -660,6 +662,7 @@ def main():
         lambda_kd=args.lambda_kd,
         kd_path=args.kd_path,
         mix_kd=args.mix_kd,
+        jepa_warmup=args.jepa_warmup,
         mix_teacher=args.mix_teacher,
         mix_biling=args.mix_biling,
         mix_unary=args.mix_unary,
