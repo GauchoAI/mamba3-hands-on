@@ -1372,6 +1372,75 @@ retention at d_model=96 was small-scale-specific (model never produced
 diverse-enough text to crash to autopilot floor); it doesn't survive
 scale-up.
 
+### Round 10 / 10b — logit-projection KD refuted (2026-05-02 evening)
+
+Two KD variants:
+- **gpu1-kd-192** (slow ramp, jepa_warmup=2000): KD opens at step 2000,
+  full at step 3000. Reached step 2600 (~60% ramp).
+- **gpu2-kd-fastramp-192** (fast ramp, jepa_warmup=500): KD opens at
+  step 500, full at step 1500. Reached step 1450 (post-full-ramp).
+
+Eval results (one-shot via `eval_one.py`, commit `786fddb`):
+
+```
+r10b (fast ramp, post-full-ramp window)
+step    retention   drift    diversity   note
+1000    +0.045      1.40     0.00        autopilot
+1200    +0.003      1.43     0.18        autopilot
+1400    +0.203      1.29     0.36        ← spike
+1450    -0.104      1.52     0.38        back to autopilot
+mean    +0.037
+
+r10 (slow ramp, ~60% open)
+step    retention   drift    diversity
+2400    +0.007      1.46     0.49
+2600    -0.007      1.46     0.31
+```
+
+**KD doesn't crack autopilot.** Both ramp speeds, both with strong KD
+gradient, both produce the same noise-band oscillation [-0.10, +0.20]
+mean ≈ 0 that everything else has produced. Step 1400's 0.20 was the
+same noise-spike pattern we saw in rounds 4-9.
+
+Sample completions at step 1450 confirm: short, fragmented, prompt-
+ignoring — *"I don't know what he was a be a con the to se"*,
+*"I don't know the the t"*, *"I don't know the problema the to se to e"*.
+
+### Final verdict (2026-05-02 evening)
+
+The pseudo-distillation × loss-formulation × target-position grid is
+**comprehensively dead** at this scale. Across rounds 4–10 + mini sprint:
+
+| Class | Levers tried | Result |
+|---|---|---|
+| Data | dirty corpus, clean within-movie corpus | refuted at scale |
+| Loss formulation | smooth-L1, InfoNCE, soft-target CE (KD) | all refuted |
+| Loss target | response-end hidden, prompt-end hidden, per-byte | all refuted |
+| Capacity | 1.3M projector, 56k projector | refuted |
+| Self-distill | EMA / BYOL / DINO | refuted |
+| Multi-scale | 3-position residual matching | refuted |
+| Curriculum | seq-len 32→128 | refuted (made worse) |
+| Stability | residual-norm constraint | no-op |
+| Composition | kitchen-sink (5 levers stacked) | refuted (worse) |
+
+**The 1M-param byte-LM autopilot regime at d_model=192 is a hard
+floor.** The retention metric measures a real property (the model is
+not conditioning on prompts at the latent level), and no auxiliary loss
+formulation we constructed moves it. To get prompt-conditional behavior
+the only remaining options are:
+
+1. **Scale up significantly.** d_model=256/384/512+, more steps, more
+   data. The threshold beyond which the next-byte objective forces
+   prompt-conditioning may simply be above 1M params.
+2. **Different architecture.** Attention-based (transformer) LM at the
+   same parameter count may not have this regime, since attention has
+   built-in input-conditional weighting that Mamba's SSM doesn't.
+3. **Accept the result.** The comprehensive negative-result body is
+   itself a meaningful research contribution: a reproducible
+   demonstration that a 1M-param Mamba-3 byte-LM cannot be made
+   conversationally coherent under any pseudo-distillation flavor we
+   could construct, no matter how the loss target depends on the input.
+
 ---
 
 ## 10. Round 10 — logit-projection KD launched (2026-05-02 15:46 UTC)
