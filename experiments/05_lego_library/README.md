@@ -26,6 +26,16 @@ byte-perfect rollouts on 3D Cornell (32 k voxels × 96 steps, max diff
 
 **Findings.** [`docs/findings/lego.md`](../docs/findings/lego.md).
 
+## Visual Evidence
+
+The Cornell render is the clearest before/after artifact in this chapter:
+
+![Lego and symbolic Cornell 3D comparison](cornell3d_compare.png)
+
+The spherical-harmonic variant keeps the same comparison pattern:
+
+![Spherical-harmonic Lego and symbolic Cornell comparison](cornell3d_sh_compare.png)
+
 **What's here.** Step-function specialists
 (`bubble_step_function.py`, `conway_step_function.py`,
 `gcd_step_function.py`, `light_step_function.py`,

@@ -265,11 +265,13 @@
     }
     .chapter-card-grid {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
       gap: 10px;
     }
     .chapter-card-item {
       border-left: 3px solid #eee1cf;
+      min-width: 0;
+      overflow-wrap: anywhere;
       padding-left: 9px;
     }
     .chapter-card-item strong {
@@ -413,6 +415,81 @@
       height: 280px;
     }
     .chart.small { height: 210px; }
+    .prose img {
+      display: block;
+      width: min(100%, 860px);
+      height: auto;
+      aspect-ratio: 49 / 26;
+      object-fit: contain;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin: 14px 0;
+      background: var(--panel);
+    }
+    .feature-card {
+      max-width: 920px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      margin: 16px 0 20px;
+      overflow: hidden;
+    }
+    .feature-card-head {
+      align-items: start;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 10px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      padding: 14px;
+    }
+    .feature-card-head h3 {
+      margin: 0 0 5px;
+    }
+    .feature-card-body {
+      display: grid;
+      gap: 14px;
+      grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
+      padding: 14px;
+    }
+    .mini-chess-board {
+      aspect-ratio: 1 / 1;
+      border: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      grid-template-rows: repeat(8, minmax(0, 1fr));
+      width: 100%;
+      max-width: 360px;
+    }
+    .mini-chess-square {
+      align-items: center;
+      display: grid;
+      font-family: "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols2", serif;
+      font-size: clamp(22px, 5vw, 38px);
+      justify-items: center;
+      line-height: 1;
+      min-width: 0;
+    }
+    .mini-chess-light { background: #f0d9b5; }
+    .mini-chess-dark { background: #b58863; }
+    .feature-metrics {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .feature-metric {
+      border-left: 3px solid var(--accent);
+      padding-left: 10px;
+    }
+    .feature-metric strong {
+      display: block;
+      font-family: var(--serif);
+      font-size: 24px;
+      line-height: 1.05;
+    }
+    .feature-metric span {
+      color: var(--muted);
+      font-size: 12px;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -592,6 +669,7 @@
       .chapter-card-grid { grid-template-columns: 1fr; }
       .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      .feature-card-head, .feature-card-body { grid-template-columns: 1fr; }
       .event { grid-template-columns: 1fr; }
       .prose pre {
         white-space: pre-wrap;
@@ -674,6 +752,7 @@
   </script>
 
   <script>
+    if ("scrollRestoration" in history) history.scrollRestoration = "manual";
     const FB = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app";
     const RAW_REPO = "https://raw.githubusercontent.com/GauchoAI/mamba3-hands-on/main/";
     const COLORS = ["#0f766e", "#7c3aed", "#b45309", "#2563eb", "#be123c", "#15803d", "#9333ea", "#0369a1"];
@@ -692,6 +771,8 @@
       { id: "ch08", title: "RLF: RLF Cortex", path: "experiments/08_rlf_cortex/README.md", group: "experiment", experiment: "rlf_cortex" },
       { id: "ch09", title: "Bilingual: Cortex bilingual", path: "experiments/09_cortex_bilingual/README.md", group: "experiment", experiment: "cortex_bilingual" },
       { id: "ch10", title: "Structured JEPA: JEPA structured-data", path: "experiments/10_jepa_structured/README.md", group: "experiment", experiment: "jepa_structured" },
+      { id: "ch11", title: "Phi: Cold composition", path: "experiments/11_phi_cold_composition/README.md", group: "experiment", experiment: "phi_cold_composition" },
+      { id: "ch12", title: "Chess: Chess experts", path: "experiments/12_chess_experts/README.md", group: "experiment", experiment: "chess_experts", finding: "experiments/12_chess_experts/findings.md", feature: "chess" },
       { id: "kappa", title: "Kappa Architecture", path: "docs/KAPPA_ARCHITECTURE.md", group: "architecture" },
       { id: "cloud", title: "Cloud Archive", path: "docs/CLOUD_ARCHIVE.md", group: "architecture" },
       { id: "lab-run", title: "Lab Run and Book", path: "docs/LAB_RUN_AND_BOOK.md", group: "architecture" },
@@ -756,6 +837,11 @@
       const n = Number(v || 0);
       return Number.isFinite(n) ? n.toLocaleString() : "";
     }
+    function label(v) {
+      return String(v ?? "")
+        .replaceAll("_", " ")
+        .replace(/\b\w/g, c => c.toUpperCase());
+    }
     function ts(v) {
       const n = Number(v || 0);
       if (!n) return "";
@@ -810,6 +896,10 @@
         }
       }
       throw lastError || new Error(`Unable to load ${clean}`);
+    }
+    async function fetchRepoJson(path) {
+      const text = await fetchRepoText(path);
+      return JSON.parse(text);
     }
     async function getAll() {
       $("load-meta").textContent = "Loading Firebase chapters...";
@@ -982,20 +1072,33 @@
       }).filter(section => section.body);
       return { intro, sections };
     }
+    function imageRepoUrl(href, sourcePath = "") {
+      if (!href || href.startsWith("#") || href.startsWith("data:") || /^https?:\/\//i.test(href)) return href;
+      const repoPath = resolveRepoLink(href, sourcePath);
+      return repoPath ? rawRepoUrl(repoPath) : href;
+    }
+    function normalizeMarkdownImages(markdown, sourcePath = "") {
+      return markdown.replace(/!\[([^\]]*)\]\(([^)\s]+)(\s+\"[^\"]*\")?\)/g, (_match, alt, href, title = "") => {
+        return `![${alt}](${imageRepoUrl(href, sourcePath)}${title})`;
+      });
+    }
+    function renderMarked(markdown, sourcePath = "") {
+      return marked.parse(normalizeMarkdownImages(markdown, sourcePath));
+    }
     function renderMarkdownBody(markdown, attrs = {}, sourcePath = "") {
       const body = stripLeadHeading(markdown).trim();
       const { intro, sections } = splitMarkdownSections(body);
       const shouldSection = sections.length > 0 && (attrs.sections === "true" || (sections.length >= 3 && (body.length > 7000 || attrs.sections !== "flat")));
       const sourceAttr = `data-source-path="${esc(sourcePath)}"`;
-      if (!shouldSection) return `<div class="prose" ${sourceAttr}>${marked.parse(body)}</div>`;
-      const introHtml = intro ? `<div class="prose" ${sourceAttr}>${marked.parse(intro)}</div>` : "";
+      if (!shouldSection) return `<div class="prose" ${sourceAttr}>${renderMarked(body, sourcePath)}</div>`;
+      const introHtml = intro ? `<div class="prose" ${sourceAttr}>${renderMarked(intro, sourcePath)}</div>` : "";
       const openCount = Number(attrs.open_sections || 1);
       const sectionHtml = sections.map((section, i) => {
         const open = i < openCount ? "open" : "";
         const slug = slugify(section.title);
         return `<details class="md-section" ${open} data-section="${esc(section.title.toLowerCase())}" data-section-slug="${esc(slug)}">
           <summary><span class="section-title"><strong>${esc(section.title)}</strong><button class="section-link" data-copy-section="${esc(slug)}" type="button">Copy</button></span><span>${num(wordCount(section.body))} words</span></summary>
-          <div class="prose" ${sourceAttr}>${marked.parse(section.body)}</div>
+          <div class="prose" ${sourceAttr}>${renderMarked(section.body, sourcePath)}</div>
         </details>`;
       }).join("");
       return introHtml + sectionHtml;
@@ -1024,11 +1127,94 @@
     function sourceCards(sources) {
       return `<div class="source-list">${sources.map(src => `<div class="source-card"><div class="mono">${esc(src.path)}</div><strong>${esc(src.title)}</strong></div>`).join("")}</div>`;
     }
+    function chessFeatureCard() {
+      const labBase = localRepoUrl("experiments/12_chess_experts/chess_lab.html");
+      const labUrl = `${labBase}?artifact=artifacts/chess_full_game_trace_arena_result.json&game=0&ply=12#games`;
+      return `<div class="feature-card" data-chess-preview="experiments/12_chess_experts/artifacts/chess_full_game_trace_arena_result.json">
+        <div class="feature-card-head">
+          <div>
+            <h3>Interactive Chess Expert Replay</h3>
+            <div class="muted">A compact preview of the mixed-curriculum artifact. The full lab opens the playable board, artifact switcher, metrics, and raw JSON.</div>
+          </div>
+          <a class="chapter-link" href="${esc(labUrl)}">Open full lab</a>
+        </div>
+        <div class="feature-card-body">
+          <div class="mini-chess-board" data-chess-board><div class="empty">Loading board...</div></div>
+          <div>
+            <div class="feature-metrics" data-chess-metrics></div>
+            <p class="muted" data-chess-caption style="margin-top:12px"></p>
+          </div>
+        </div>
+      </div>`;
+    }
+    function pieceFromFen(ch) {
+      return {
+        p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚",
+        P: "♙", N: "♘", B: "♗", R: "♖", Q: "♕", K: "♔",
+      }[ch] || "";
+    }
+    function renderFenBoard(fen) {
+      const placement = String(fen || "").split(/\s+/)[0] || "8/8/8/8/8/8/8/8";
+      const rows = placement.split("/");
+      const cells = [];
+      rows.forEach((row, r) => {
+        let file = 0;
+        for (const ch of row) {
+          const n = Number(ch);
+          if (Number.isInteger(n) && n > 0) {
+            for (let i = 0; i < n; i++) {
+              cells.push({ piece: "", dark: (r + file) % 2 === 1 });
+              file++;
+            }
+          } else {
+            cells.push({ piece: pieceFromFen(ch), dark: (r + file) % 2 === 1 });
+            file++;
+          }
+        }
+      });
+      return cells.slice(0, 64).map(cell => `<div class="mini-chess-square ${cell.dark ? "mini-chess-dark" : "mini-chess-light"}">${cell.piece}</div>`).join("");
+    }
+    async function renderChessPreviews() {
+      const previews = [...document.querySelectorAll("[data-chess-preview]")];
+      await Promise.all(previews.map(async preview => {
+        try {
+          const artifact = await fetchRepoJson(preview.dataset.chessPreview);
+          const game = artifact.games?.[0] || {};
+          const summary = artifact.summary || {};
+          const metrics = artifact.metrics || {};
+          preview.querySelector("[data-chess-board]").innerHTML = renderFenBoard(game.final_fen);
+          preview.querySelector("[data-chess-metrics]").innerHTML = [
+            ["Training cases", artifact.trace_summary?.combined?.cases],
+            ["Full games", summary.games],
+            ["Motif wins", summary.motif_full_trace_wins ?? summary.motif_wins],
+            ["JEPA wins", summary.jepa_full_trace_wins ?? summary.jepa_wins],
+            ["Motif mate", pct(metrics.heldout_tactical_puzzles?.motif_full_trace?.legal_mate_rate)],
+            ["JEPA mate", pct(metrics.heldout_tactical_puzzles?.jepa_full_trace?.legal_mate_rate)],
+          ].map(([label, value]) => `<div class="feature-metric"><strong>${esc(value ?? "—")}</strong><span>${esc(label)}</span></div>`).join("");
+          preview.querySelector("[data-chess-caption]").textContent =
+            `Previewing game 1 final position: ${label(game.white)} vs ${label(game.black)}, winner ${label(game.winner)}, ${num(game.plies)} plies.`;
+        } catch (err) {
+          preview.querySelector("[data-chess-board]").innerHTML = `<div class="empty">Unable to load chess artifact.</div>`;
+          preview.querySelector("[data-chess-caption]").textContent = err.message;
+        }
+      }));
+    }
+    async function waitForBookImages() {
+      const images = [...document.querySelectorAll("#book img")].filter(img => !img.complete);
+      if (!images.length) return;
+      await Promise.race([
+        Promise.all(images.map(img => new Promise(resolve => {
+          img.addEventListener("load", resolve, { once: true });
+          img.addEventListener("error", resolve, { once: true });
+        }))),
+        new Promise(resolve => setTimeout(resolve, 1500)),
+      ]);
+    }
     function tocGroup(chapter) {
       if (chapter.id === "chapter-prologue") return { key: "Opening", open: true };
       if (chapter.id === "doc-ch01" || chapter.id === "chapter-curriculum" || chapter.id === "chapter-legacy-experiments") return { key: "01 - GA tournament", open: true };
       if (chapter.id.startsWith("exp-")) return { key: "01B - Task run appendix", open: false, sub: true };
-      if (chapter.id.startsWith("doc-ch")) return { key: "02-10 - Experiment chapters", open: true };
+      if (chapter.id.startsWith("doc-ch")) return { key: "02-12 - Experiment chapters", open: true };
       return { key: "Platform and archive", open: true };
     }
     function renderToc(chapters) {
@@ -1212,6 +1398,7 @@
         addChapter(chapters, `doc-${src.id}`, src.title,
           "Narrative material from the repository, paired with any matching live Firebase data.",
           md(src.path) +
+          (src.feature === "chess" ? chessFeatureCard() : "") +
           relatedPanel +
           finding);
 
@@ -1324,7 +1511,11 @@
       clearViewStateClasses();
       drawCharts(legacy, tasks);
       applyViewState();
-      applyRoute();
+      state.routeApplying = true;
+      Promise.all([renderChessPreviews(), waitForBookImages()]).finally(() => {
+        state.routeApplying = false;
+        applyRoute();
+      });
     }
     function renderEvents(events) {
       if (!events.length) return `<div class="empty">No matching events.</div>`;
