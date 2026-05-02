@@ -1307,13 +1307,44 @@ Two follow-ups firing now:
   13:40 UTC.
 - Round 9 trainer running on GPU 0 since 13:44 (gpu0-clean-corpus-192).
 - Round 10 corpus generation running on GPU 1 since 13:43
-  (`make_logit_kd_corpus.py`, 17.2 pairs/s, ETA ~1.6 h for 100k records).
+  (`make_logit_kd_corpus.py`, ~13–17 pairs/s, ETA ~1.5 h for 100k records).
 - Eval daemon on GPU 3 watching round 9.
 - Round 10 trainer wiring complete across commits `ca3f854`
   (KDTPDataset reader), `603b58b` (kd_loss in arch.py), `03ed70f`
   (kd batch kind in train.py). When the corpus finishes generating,
   round 10 launches with `--kd-path data/kd_logit_clean --mix-kd 0.6
   --lambda-kd 1.0`.
+
+### Round 9 — early trajectory (2026-05-02 14:00 UTC)
+
+```
+step    retention   drift   diversity   byte_ce
+100     0.98        0.19    0.00        4.91   (fresh; output ≈ prompt)
+150     0.96        0.29    0.00        3.99
+200     0.63        0.82    0.57        3.31
+250     0.12        1.33    0.00        2.86
+300     0.05        1.38    0.00        2.53   autopilot regime
+```
+
+**Initial high retention (0.98 → 0.63 over steps 100→200) was untrained-
+baseline bleed-off** — the model hadn't yet learned to produce different
+text from the prompt. Once byte_ce dropped below ~3 (model started
+actually generating), retention crashed within 100 steps to the same
+autopilot floor every prior run hit.
+
+**Walk-back of an earlier provisional read.** The mini exp_00 result
+(+0.12 retention at d_model=96) does **not** scale up: at d_model=192
+on the same clean corpus, retention reverts to the autopilot regime
+once the model is trained enough to differ from the prompt. So
+"corpus quality" is a real but **scale-dependent** lever — it lifts
+retention at small scale where the model never fully learns to generate
+diverse responses, but at d_model=192 where the LM head is strong
+enough, autopilot wins again.
+
+**Implication.** Clean corpus alone is not the answer at scale. The
+remaining unrefuted architectural lever is logit-projection KD (round
+10, corpus generating now). Everything else has been refuted across
+rounds 4–9 + mini sprint.
 
 ---
 
