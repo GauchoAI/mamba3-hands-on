@@ -1050,3 +1050,52 @@ that the expert played strong chess. It overextended the queen, lost it to
 with a queen checkmate. That is a useful qualitative signal for this stage: the
 policy has tactical pressure patterns, but it still lacks stable full-game
 material discipline.
+
+## Online World Model Self-Play
+
+The first self-play pass compares two policies:
+
+```text
+static_alpha_lite:      the existing legal heuristic move scorer
+adaptive_world_model:  the same scorer plus a 171,521-parameter online value model
+```
+
+The value model is intentionally small. It reads the board, candidate move,
+heuristic score, material delta, check bit, and capture value. After each batch
+of self-play games it trains from the completed game traces, using the final
+outcome plus material as the target. Iteration 0 uses no value influence, so the
+first replay buffer is not polluted by an untrained head.
+
+Bounded run:
+
+```text
+elapsed: 34.759s
+iterations: 8
+self-play games per iteration: 8
+held-out games per iteration: 8
+replay samples after iteration 7: 4,853
+```
+
+Held-out score rate for adaptive versus static after each online update:
+
+```text
+0: 0.500
+1: 0.375
+2: 0.500
+3: 0.562
+4: 0.562
+5: 0.438
+6: 0.438
+7: 0.625
+```
+
+This is a useful first signal, not a solved claim. The held-out benchmark ends
+above baseline at 0.625, while the live self-play score is still noisy and ends
+at 0.375. The interpretation is that the tiny world model is learning usable
+preferences from experience, but its integration is still brittle: it can help
+on repeated evaluation starts and still hurt in fresh exploratory games.
+
+The next improvement should make the value head conservative: use it mainly to
+reject obviously bad candidate moves, or require agreement over multiple
+rollouts, instead of letting one scalar override the alpha-lite scorer too
+early.
