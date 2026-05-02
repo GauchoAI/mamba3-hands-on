@@ -868,13 +868,14 @@
     async function getText(path) {
       return await fetchRepoText(path);
     }
-    function repoPageIsNested() {
-      return location.pathname.includes("/docs/lab_book/");
+    function repoPagePrefix() {
+      if (location.pathname.includes("/docs/lab_book/")) return "../../";
+      if (location.pathname.includes("/lab_book/")) return "../";
+      return "";
     }
     function localRepoUrl(path) {
       const clean = cleanRepoPath(path);
-      if (repoPageIsNested()) return new URL(`../../${clean}`, document.baseURI).href;
-      return new URL(clean, `${location.origin}/`).href;
+      return new URL(`${repoPagePrefix()}${clean}`, document.baseURI).href;
     }
     function rawRepoUrl(path) {
       return `${RAW_REPO}${cleanRepoPath(path)}`;
