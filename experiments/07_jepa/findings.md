@@ -987,7 +987,7 @@ attributable to the experimental lever.
 | 2 | Hybrid attention (CSA+HCA+window) | Multi-scale residual matching (3 positions) | ❌ refuted | `442c247` | retention **0.038**. Same trivial-collapse mode as exp_01: ms loss → 0.004, but residuals get *more* generic. Three positions × no augmentation = three trivial fits. Capacity composition can't fix a target that doesn't depend on the input. |
 | 3 | Curriculum (4k→1M context) | Seq-len curriculum (32→64→128) | ❌ refuted | `e088469` | retention **-0.024**. Worse than baseline. Short-context phase locked in surface n-gram patterns that override prompt-conditioning when context expands. Completions show interesting Spanish-English code-switching (more diverse output, less coherent). |
 | 4 | Muon optimizer | (skipped tonight — implementation cost too high vs likely gain; queued for later) | — | — | — |
-| 5 | MHC (Sinkhorn-Knopp) | Bounded residual-norm constraint | ⏳ queued | `e088469` | TBD |
+| 5 | MHC (Sinkhorn-Knopp) | Bounded residual-norm constraint | ❌ no-op | `e088469` | retention **0.116** ≈ baseline 0.120. Zero effect. V4 MHC is for trillion-param signal explosion; at 150k params our residuals don't have norm runaway, so the constraint has nothing to constrain. |
 | 6 | Compose-many-signals | Stack of #0+#1+#2+#3+#5 | ⏳ queued | `e088469` | TBD |
 
 **Runner:** `experiments/13_mini_sprint/run_sequential.sh` (commit
@@ -1133,6 +1133,32 @@ prediction task. Our seq_len curriculum is conceptually closer to
 local fluency, and the model never has to learn prompt-conditional
 extension. We should NOT generalize "curriculum" as "always good" —
 the right curriculum dimension matters.
+
+### exp_04 — bounded residual-norm constraint (V4 MHC light)
+
+**Script:** `experiments/13_mini_sprint/exp_04_residual_norm.py`
+**Hypothesis:** SSM residuals could drift in magnitude in ways that
+mask directional information; bounding norm growth could keep the
+residual subspace shaped for prompt-conditional encoding.
+
+**Result (commit `e088469`):**
+
+```
+            retention   drift   diversity   byte_ce   l_norm_final
+exp_00      +0.120      1.37    0.42        1.79      —             (baseline)
+exp_04      +0.116      1.37    0.42        1.79      0.067         (norm-constrained)
+```
+
+**No effect** — bit-identical to baseline within metric noise. The
+constraint converged to l_norm 0.067, meaning per-position residual
+norms are roughly within [exp(-0.26), exp(+0.26)] of √D — already
+naturally bounded at this scale.
+
+**Generalizable lesson:** the V4 MHC trick (Sinkhorn-Knopp doubly-
+stochastic constraint preventing signal explosion at 1.6T params)
+**doesn't transfer to small models** because small models don't have
+the signal-explosion problem it solves. Confirmed empirically. Don't
+add stability regularizers to a model that's already stable.
 
 ---
 
