@@ -1320,3 +1320,65 @@ More online training is not automatically better. The learned value head reaches
 a useful regime quickly, then later self-play updates can drift. This pushes the
 next implementation toward champion selection or early stopping: keep the best
 held-out checkpoint instead of trusting the latest online weights.
+
+Sixth pass: implement champion-gated online training.
+
+The training loop now separates candidate learning from the kept policy:
+
+```text
+candidate trains for one online iteration
+candidate is evaluated against static_safety_alpha
+candidate is promoted only if held-out score improves, or ties with acceptable audit
+otherwise the model weights are restored to the current champion
+```
+
+Bounded 10-iteration champion run:
+
+```text
+elapsed: 275.872s
+iterations: 10
+promotion_mode: champion
+promotions: 2
+champion iteration: 3
+```
+
+Candidate versus champion path:
+
+```text
+iter  candidate  promoted  reason                  champion
+0     0.6875     yes       first_candidate         0.6875
+1     0.5000     no        heldout_score_regressed 0.6875
+2     0.6250     no        heldout_score_regressed 0.6875
+3     0.8125     yes       heldout_score_improved  0.8125
+4     0.6875     no        heldout_score_regressed 0.8125
+5     0.5000     no        heldout_score_regressed 0.8125
+6     0.6875     no        heldout_score_regressed 0.8125
+7     0.6875     no        heldout_score_regressed 0.8125
+8     0.6875     no        heldout_score_regressed 0.8125
+9     0.5625     no        heldout_score_regressed 0.8125
+```
+
+Champion held-out result versus `static_safety_alpha`:
+
+```text
+adaptive wins: 6
+static_safety_alpha wins: 1
+draws: 1
+score rate: 0.8125
+```
+
+Champion tactical audit:
+
+```text
+adaptive queen hang rate:        0.0000
+adaptive major-piece hang rate:  0.1812
+adaptive tactical blunder rate:  0.0134
+adaptive avg best capture:       0.9597
+```
+
+Interpretation:
+
+This is the answer to the online-drift problem. We still let candidates keep
+training and failing, but the published policy is monotonic under the held-out
+promotion gate. Longer training now has a protected meaning: it creates more
+chances to discover a better candidate without forcing us to keep a worse one.

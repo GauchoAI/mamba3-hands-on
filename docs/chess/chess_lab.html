@@ -496,7 +496,7 @@
     function primarySummary() {
       const a = state.artifact || {};
       if (a.status === "online_world_model_self_play") {
-        return a.best_heldout_vs_safety?.summary || a.best_heldout_after_update?.summary || a.final_summary || {};
+        return a.champion?.heldout_vs_safety?.summary || a.best_heldout_vs_safety?.summary || a.best_heldout_after_update?.summary || a.final_summary || {};
       }
       return a.summary || a.score || {};
     }
@@ -538,8 +538,8 @@
       const summary = primarySummary();
       const cards = a.status === "online_world_model_self_play" ? [
         ["Status", "Online world model"],
-        ["Safety score", pct(a.best_heldout_vs_safety?.summary?.adaptive_score_rate)],
-        ["Alpha score", pct(a.best_heldout_vs_alpha?.summary?.adaptive_score_rate)],
+        ["Champion safety", pct(a.champion?.heldout_vs_safety?.summary?.adaptive_score_rate ?? a.best_heldout_vs_safety?.summary?.adaptive_score_rate)],
+        ["Promotions", a.champion?.promotions],
         ["Parameters", a.model?.parameters]
       ] : [
         ["Status", label(a.status)],
@@ -567,14 +567,15 @@
             labels: iterations.map(row => `Iter ${row.iteration}`),
             datasets: [
               { label: "Self-play", data: iterations.map(row => row.summary?.adaptive_score_rate), borderColor: "#8a8176", tension: 0.25 },
-              { label: "Held-out vs safety", data: iterations.map(row => row.heldout_vs_safety?.summary?.adaptive_score_rate), borderColor: "#0f766e", tension: 0.25 },
+              { label: "Candidate vs safety", data: iterations.map(row => row.heldout_vs_safety?.summary?.adaptive_score_rate), borderColor: "#0f766e", borderDash: [5, 5], tension: 0.25 },
+              { label: "Champion vs safety", data: iterations.map(row => row.promotion?.champion_score), borderColor: "#0f766e", borderWidth: 3, stepped: true },
               { label: "Held-out vs alpha", data: iterations.map(row => row.heldout_vs_alpha?.summary?.adaptive_score_rate), borderColor: "#9a3412", tension: 0.25 }
             ]
           },
           options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 1 } } }
         });
 
-        const s = state.artifact.best_heldout_vs_safety?.summary || {};
+        const s = state.artifact.champion?.heldout_vs_safety?.summary || state.artifact.best_heldout_vs_safety?.summary || {};
         state.charts.scoreChart = new Chart(document.getElementById("scoreChart"), {
           type: "doughnut",
           data: {
@@ -629,11 +630,16 @@
       if (state.artifact.status === "online_world_model_self_play") {
         const rows = [];
         for (const [section, labelText] of [
+          ["champion.heldout_vs_safety", "Champion vs safety"],
           ["best_heldout_vs_safety", "Best vs safety"],
           ["best_heldout_vs_alpha", "Best vs alpha"],
           ["final_summary", "Final self-play"]
         ]) {
-          const summary = section === "final_summary" ? state.artifact.final_summary : state.artifact[section]?.summary;
+          const summary = section === "final_summary"
+            ? state.artifact.final_summary
+            : section === "champion.heldout_vs_safety"
+              ? state.artifact.champion?.heldout_vs_safety?.summary
+              : state.artifact[section]?.summary;
           if (!summary) continue;
           const audit = summary.tactical_audit?.adaptive_world_model || {};
           rows.push({

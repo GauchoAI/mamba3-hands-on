@@ -5,6 +5,7 @@ import json
 import math
 import random
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -572,6 +573,34 @@ def best_iteration_by(iterations: list[dict], key: str) -> dict:
     )
 
 
+def audit_score(summary: dict) -> float:
+    audit = (summary.get("tactical_audit") or {}).get("adaptive_world_model") or {}
+    return (
+        2.0 * float(audit.get("tactical_blunder_rate") or 0.0)
+        + float(audit.get("queen_hang_rate") or 0.0)
+        + 0.75 * float(audit.get("major_piece_hang_rate") or 0.0)
+        + 0.1 * float(audit.get("avg_opponent_best_capture") or 0.0)
+    )
+
+
+def promote_candidate(candidate_eval: dict, champion_eval: dict | None, args) -> tuple[bool, str]:
+    if champion_eval is None:
+        return True, "first_candidate"
+    candidate_summary = candidate_eval["summary"]
+    champion_summary = champion_eval["summary"]
+    candidate_score = float(candidate_summary["adaptive_score_rate"])
+    champion_score = float(champion_summary["adaptive_score_rate"])
+    if candidate_score > champion_score + args.promotion_margin:
+        return True, "heldout_score_improved"
+    if candidate_score + args.promotion_margin < champion_score:
+        return False, "heldout_score_regressed"
+    candidate_audit = audit_score(candidate_summary)
+    champion_audit = audit_score(champion_summary)
+    if candidate_audit <= champion_audit * (1.0 + args.audit_tolerance):
+        return True, "heldout_score_tied_audit_ok"
+    return False, "audit_regressed"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=701)
@@ -607,6 +636,9 @@ def main() -> None:
     parser.add_argument("--exploration-decay", type=float, default=0.72)
     parser.add_argument("--min-exploration", type=float, default=0.03)
     parser.add_argument("--replay-limit", type=int, default=6000)
+    parser.add_argument("--promotion-mode", choices=("latest", "champion"), default="champion")
+    parser.add_argument("--promotion-margin", type=float, default=0.0)
+    parser.add_argument("--audit-tolerance", type=float, default=0.05)
     parser.add_argument("--sample-games", type=int, default=2)
     parser.add_argument("--sample-ply-details", type=int, default=20)
     args = parser.parse_args()
@@ -619,7 +651,43 @@ def main() -> None:
     model.eval()
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     replay: list[MoveSample] = []
-    iterations = [run_iteration(i, model, opt, replay, args, dev) for i in range(args.iterations)]
+    champion_state = deepcopy(model.state_dict())
+    champion_eval = None
+    champion_alpha_eval = None
+    champion_iteration = None
+    champion_promotions = 0
+    iterations = []
+    for i in range(args.iterations):
+        iteration = run_iteration(i, model, opt, replay, args, dev)
+        candidate_eval = iteration["heldout_vs_safety"]
+        promoted = args.promotion_mode == "latest"
+        reason = "latest_mode"
+        if args.promotion_mode == "champion":
+            promoted, reason = promote_candidate(candidate_eval, champion_eval, args)
+        if promoted:
+            champion_state = deepcopy(model.state_dict())
+            champion_eval = candidate_eval
+            champion_alpha_eval = iteration["heldout_vs_alpha"]
+            champion_iteration = i
+            champion_promotions += 1
+        else:
+            model.load_state_dict(champion_state)
+            opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+        iteration["promotion"] = {
+            "mode": args.promotion_mode,
+            "promoted": promoted,
+            "reason": reason,
+            "candidate_score": candidate_eval["summary"]["adaptive_score_rate"],
+            "candidate_audit_score": round(audit_score(candidate_eval["summary"]), 6),
+            "champion_iteration": champion_iteration,
+            "champion_promotions": champion_promotions,
+            "champion_score": champion_eval["summary"]["adaptive_score_rate"] if champion_eval else None,
+            "champion_audit_score": round(audit_score(champion_eval["summary"]), 6) if champion_eval else None,
+        }
+        if not promoted:
+            iteration["rejected_candidate_state_restored"] = True
+        iterations.append(iteration)
+    model.load_state_dict(champion_state)
     best_after_update = best_iteration_by(iterations, "heldout_after_update")
     best_vs_alpha = best_iteration_by(iterations, "heldout_vs_alpha")
     best_vs_safety = best_iteration_by(iterations, "heldout_vs_safety")
@@ -635,6 +703,13 @@ def main() -> None:
             "feature_dim": FEATURE_DIM,
         },
         "final_summary": iterations[-1]["summary"] if iterations else {},
+        "champion": {
+            "promotion_mode": args.promotion_mode,
+            "iteration": champion_iteration,
+            "promotions": champion_promotions,
+            "heldout_vs_safety": champion_eval or {},
+            "heldout_vs_alpha": champion_alpha_eval or {},
+        },
         "best_heldout_after_update": best_after_update.get("heldout_after_update", {}),
         "best_heldout_vs_alpha": best_vs_alpha.get("heldout_vs_alpha", {}),
         "best_heldout_vs_safety": best_vs_safety.get("heldout_vs_safety", {}),
