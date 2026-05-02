@@ -1346,6 +1346,32 @@ remaining unrefuted architectural lever is logit-projection KD (round
 10, corpus generating now). Everything else has been refuted across
 rounds 4–9 + mini sprint.
 
+### Round 9 — confirmed refutation at step 3200 (2026-05-02 evening)
+
+```
+step    retention   drift    diversity   byte_ce
+2000    +0.44       1.06     0.23        1.31     ← singleton spike (noise)
+2400    -0.01       1.47     0.40        —        autopilot
+2800    -0.01       1.47     0.15        —        autopilot
+3200    -0.05       1.49     0.63        —        autopilot
+```
+
+The +0.44 at step 2000 was confirmed (independent re-eval at +0.33 then
++0.44) but did **not sustain**: by step 2400 retention crashed back to
+-0.01 and stayed in the autopilot band through step 3200. Same pattern
+as gpu2-fresh-256 at step 3000 (0.40 → -0.07) and gpu1-prompt-distill at
+step 2200 (+0.15 → -0.15) — noise spikes that don't hold.
+
+**The retention metric on 8 prompts is too noisy for single-checkpoint
+reads to be reliable.** Need rolling-mean across ≥3 evals before calling
+anything signal. Lesson going forward.
+
+**Round 9 falls in line with rounds 4–8: byte-CE only at d_model=192
+on clean corpus stays in autopilot regime.** The mini sprint's +0.12
+retention at d_model=96 was small-scale-specific (model never produced
+diverse-enough text to crash to autopilot floor); it doesn't survive
+scale-up.
+
 ---
 
 ## 10. Round 10 — logit-projection KD launched (2026-05-02 15:46 UTC)
