@@ -202,6 +202,7 @@
     td.num, th.num {
       font-variant-numeric: tabular-nums;
       text-align: right;
+      white-space: nowrap;
     }
     .game-layout {
       align-items: start;
@@ -492,6 +493,24 @@
         .replace(/\b\w/g, c => c.toUpperCase());
     }
 
+    function primarySummary() {
+      const a = state.artifact || {};
+      if (a.status === "online_world_model_self_play") {
+        return a.best_heldout_vs_safety?.summary || a.best_heldout_after_update?.summary || a.final_summary || {};
+      }
+      return a.summary || a.score || {};
+    }
+
+    function artifactGames() {
+      const a = state.artifact || {};
+      if (Array.isArray(a.games)) return a.games;
+      return a.best_heldout_vs_safety?.sample_games
+        || a.best_heldout_after_update?.sample_games
+        || a.best_heldout_vs_alpha?.sample_games
+        || a.iterations?.flatMap(row => row.sample_games || [])
+        || [];
+    }
+
     function setQuery() {
       const params = new URLSearchParams(location.search);
       params.set("artifact", state.artifactPath);
@@ -516,8 +535,13 @@
 
     function renderCards() {
       const a = state.artifact;
-      const summary = a.summary || a.score || {};
-      const cards = [
+      const summary = primarySummary();
+      const cards = a.status === "online_world_model_self_play" ? [
+        ["Status", "Online world model"],
+        ["Safety score", pct(a.best_heldout_vs_safety?.summary?.adaptive_score_rate)],
+        ["Alpha score", pct(a.best_heldout_vs_alpha?.summary?.adaptive_score_rate)],
+        ["Parameters", a.model?.parameters]
+      ] : [
         ["Status", label(a.status)],
         ["Training cases", a.trace_summary?.combined?.cases ?? a.trace_summary?.cases ?? a.positions ?? a.puzzles],
         ["Games", summary.games],
@@ -535,6 +559,32 @@
     function renderCharts() {
       destroyChart("traceChart");
       destroyChart("scoreChart");
+      if (state.artifact.status === "online_world_model_self_play") {
+        const iterations = state.artifact.iterations || [];
+        state.charts.traceChart = new Chart(document.getElementById("traceChart"), {
+          type: "line",
+          data: {
+            labels: iterations.map(row => `Iter ${row.iteration}`),
+            datasets: [
+              { label: "Self-play", data: iterations.map(row => row.summary?.adaptive_score_rate), borderColor: "#8a8176", tension: 0.25 },
+              { label: "Held-out vs safety", data: iterations.map(row => row.heldout_vs_safety?.summary?.adaptive_score_rate), borderColor: "#0f766e", tension: 0.25 },
+              { label: "Held-out vs alpha", data: iterations.map(row => row.heldout_vs_alpha?.summary?.adaptive_score_rate), borderColor: "#9a3412", tension: 0.25 }
+            ]
+          },
+          options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 1 } } }
+        });
+
+        const s = state.artifact.best_heldout_vs_safety?.summary || {};
+        state.charts.scoreChart = new Chart(document.getElementById("scoreChart"), {
+          type: "doughnut",
+          data: {
+            labels: ["Adaptive wins", "Safety wins", "Draws"],
+            datasets: [{ data: [s.adaptive_wins || 0, s.opponent_wins || 0, s.draws || 0], backgroundColor: ["#0f766e", "#9a3412", "#8a8176"] }]
+          },
+          options: { responsive: true, maintainAspectRatio: false }
+        });
+        return;
+      }
       const trace = state.artifact.trace_summary?.combined?.phases || state.artifact.trace_summary?.phases || {};
       const traceLabels = Object.keys(trace);
       const traceValues = Object.values(trace);
@@ -576,6 +626,44 @@
     }
 
     function renderMetrics() {
+      if (state.artifact.status === "online_world_model_self_play") {
+        const rows = [];
+        for (const [section, labelText] of [
+          ["best_heldout_vs_safety", "Best vs safety"],
+          ["best_heldout_vs_alpha", "Best vs alpha"],
+          ["final_summary", "Final self-play"]
+        ]) {
+          const summary = section === "final_summary" ? state.artifact.final_summary : state.artifact[section]?.summary;
+          if (!summary) continue;
+          const audit = summary.tactical_audit?.adaptive_world_model || {};
+          rows.push({
+            section: labelText,
+            score: summary.adaptive_score_rate,
+            wins: summary.adaptive_wins,
+            losses: summary.opponent_wins,
+            draws: summary.draws,
+            blunders: audit.tactical_blunder_rate,
+            hangs: audit.major_piece_hang_rate,
+            capture: audit.avg_opponent_best_capture
+          });
+        }
+        const rendered = table(rows, [
+          { name: "Slice", render: r => r.section },
+          { name: "Score", num: true, render: r => pct(r.score) },
+          { name: "W-L-D", num: true, render: r => `${r.wins}-${r.losses}-${r.draws}` },
+          { name: "Blunder", num: true, render: r => pct(r.blunders) },
+          { name: "Major Hang", num: true, render: r => pct(r.hangs) },
+          { name: "Best Capture", num: true, render: r => Number.isFinite(r.capture) ? r.capture.toFixed(3) : "—" }
+        ]);
+        document.getElementById("traceMetrics").innerHTML = rendered;
+        document.getElementById("tacticalMetrics").innerHTML = rendered;
+        document.getElementById("sequenceMetrics").innerHTML = `<p class="muted">This artifact is an online full-game benchmark, not a fixed puzzle suite.</p>`;
+        document.getElementById("bridgeMetrics").innerHTML = table(Object.entries(state.artifact.config || {}).map(([k, v]) => ({ k, v })), [
+          { name: "Config", render: r => label(r.k) },
+          { name: "Value", render: r => String(r.v) }
+        ]);
+        return;
+      }
       const m = state.artifact.metrics || {};
       const traceRows = Object.entries(m.heldout_trace_imitation || {}).map(([name, data]) => ({
         name,
@@ -636,8 +724,7 @@
     }
 
     function renderBoard() {
-      const games = state.artifact.games || [];
-      const game = games[state.selectedGame];
+      const game = artifactGames()[state.selectedGame];
       const boardEl = document.getElementById("board");
       if (!game || !ChessCtor) {
         boardEl.innerHTML = `<div class="square light">No game</div>`;
@@ -674,9 +761,13 @@
     }
 
     function renderGames() {
-      const games = state.artifact.games || [];
+      const games = artifactGames();
       const select = document.getElementById("gameSelect");
-      select.innerHTML = games.map((g, i) => `<option value="${i}">Game ${i + 1}: ${g.white} vs ${g.black}</option>`).join("");
+      select.innerHTML = games.map((g, i) => {
+        const white = g.white || (g.adaptive_color === "white" ? "adaptive_world_model" : g.opponent_policy);
+        const black = g.black || (g.adaptive_color === "black" ? "adaptive_world_model" : g.opponent_policy);
+        return `<option value="${i}">Game ${i + 1}: ${label(white)} vs ${label(black)}</option>`;
+      }).join("");
       if (games.length) {
         state.selectedGame = Math.min(state.selectedGame, games.length - 1);
         select.value = String(state.selectedGame);
@@ -686,7 +777,7 @@
       state.ply = Math.min(state.ply, maxPly);
 
       document.getElementById("gameInfo").innerHTML = game ? `
-        <div><strong>${label(game.white)}</strong> vs <strong>${label(game.black)}</strong></div>
+        <div><strong>${label(game.white || (game.adaptive_color === "white" ? "adaptive_world_model" : game.opponent_policy))}</strong> vs <strong>${label(game.black || (game.adaptive_color === "black" ? "adaptive_world_model" : game.opponent_policy))}</strong></div>
         <div>Winner: <span class="${game.winner === "draw" ? "warn" : "good"}">${label(game.winner)}</span></div>
         <div>Termination: ${label(game.termination)} · Ply ${state.ply}/${maxPly}</div>
         <div>Start: ${game.start_fen}</div>
@@ -699,8 +790,8 @@
 
       document.getElementById("gameList").innerHTML = games.map((g, i) => `
         <div class="game-row ${i === state.selectedGame ? "active" : ""}" data-game="${i}">
-          <div><strong>Game ${i + 1}</strong> <span class="badge">${label(g.termination)}</span></div>
-          <div class="muted">${label(g.white)} vs ${label(g.black)}</div>
+          <div><strong>Game ${i + 1}</strong> <span class="badge">${label(g.termination || g.opponent_policy)}</span></div>
+          <div class="muted">${label(g.white || (g.adaptive_color === "white" ? "adaptive_world_model" : g.opponent_policy))} vs ${label(g.black || (g.adaptive_color === "black" ? "adaptive_world_model" : g.opponent_policy))}</div>
           <div>Winner: ${label(g.winner)} · ${g.plies} plies</div>
         </div>
       `).join("");
@@ -720,6 +811,7 @@
       renderGames();
       renderRaw();
       updateNav();
+      requestAnimationFrame(scrollHashIntoView);
     }
 
     async function loadArtifact() {
@@ -735,8 +827,14 @@
       document.querySelectorAll(".nav a").forEach(a => a.classList.toggle("active", a.dataset.section === active));
     }
 
+    function scrollHashIntoView() {
+      const active = location.hash ? location.hash.slice(1) : "";
+      const el = active ? document.getElementById(active) : null;
+      if (el) el.scrollIntoView({ block: "start" });
+    }
+
     function step(delta) {
-      const game = state.artifact?.games?.[state.selectedGame];
+      const game = artifactGames()[state.selectedGame];
       if (!game) return;
       state.ply = Math.max(0, Math.min((game.moves_san || []).length, state.ply + delta));
       renderGames();
@@ -755,7 +853,7 @@
       }
       document.getElementById("playBtn").textContent = "Ⅱ";
       state.timer = setInterval(() => {
-        const game = state.artifact?.games?.[state.selectedGame];
+        const game = artifactGames()[state.selectedGame];
         if (!game || state.ply >= game.moves_san.length) {
           stopPlay();
           return;
@@ -785,7 +883,7 @@
     document.getElementById("playBtn").addEventListener("click", togglePlay);
     document.getElementById("nextBtn").addEventListener("click", () => step(1));
     document.getElementById("lastBtn").addEventListener("click", () => {
-      const game = state.artifact?.games?.[state.selectedGame];
+      const game = artifactGames()[state.selectedGame];
       state.ply = game?.moves_san?.length || 0;
       renderGames();
     });

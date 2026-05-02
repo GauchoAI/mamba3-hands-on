@@ -159,10 +159,49 @@ def heuristic_candidates(board: chess.Board, seen: dict[str, int], top_k: int) -
     return scored[: min(top_k, len(scored))]
 
 
+def safety_penalty(audit: dict, args) -> float:
+    penalty = 0.0
+    penalty += args.static_blunder_penalty if audit["tactical_blunder"] else 0.0
+    penalty += args.static_queen_hang_penalty if audit["queen_hang"] else 0.0
+    penalty += args.static_major_hang_penalty if audit["major_piece_hang"] else 0.0
+    penalty += args.static_best_capture_penalty * float(audit["opponent_best_capture"])
+    penalty += args.static_reply_delta_penalty * max(0.0, -float(audit["opponent_best_reply_delta"]))
+    return penalty
+
+
+def static_candidates(board: chess.Board, seen: dict[str, int], top_k: int, static_policy: str, args) -> list[tuple[float, float, chess.Move, dict]]:
+    scored = []
+    for move in board.legal_moves:
+        raw = teacher_score(board, move, seen)
+        audit = tactical_audit(board, move)
+        adjusted = raw if static_policy == "static_alpha_lite" else raw - safety_penalty(audit, args)
+        scored.append((adjusted, raw, move, audit))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return scored[: min(top_k, len(scored))]
+
+
+def adaptive_candidates(board: chess.Board, seen: dict[str, int], top_k: int, args) -> list[tuple[float, float, chess.Move, dict]]:
+    scored = []
+    for move in board.legal_moves:
+        raw = teacher_score(board, move, seen)
+        audit = tactical_audit(board, move)
+        adjusted = raw - args.adaptive_safety_weight * safety_penalty(audit, args)
+        scored.append((adjusted, raw, move, audit))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return scored[: min(top_k, len(scored))]
+
+
 @torch.no_grad()
-def choose_static(board: chess.Board, seen: dict[str, int], top_k: int) -> tuple[chess.Move, dict]:
-    score, move = heuristic_candidates(board, seen, top_k)[0]
-    return move, {"heuristic": round(score, 4), "value": None, "mixed": round(score, 4)}
+def choose_static(board: chess.Board, seen: dict[str, int], top_k: int, static_policy: str, args) -> tuple[chess.Move, dict]:
+    adjusted, raw, move, audit = static_candidates(board, seen, top_k, static_policy, args)[0]
+    return move, {
+        "heuristic": round(raw, 4),
+        "value": None,
+        "mixed": round(adjusted, 4),
+        "static_policy": static_policy,
+        "static_safety_penalty": round(raw - adjusted, 4),
+        "audit": audit,
+    }
 
 
 @torch.no_grad()
@@ -178,46 +217,66 @@ def choose_adaptive(
     decision_mode: str,
     max_heuristic_drop: float,
     value_margin: float,
+    args,
 ) -> tuple[chess.Move, dict]:
-    candidates = heuristic_candidates(board, seen, top_k)
+    candidates = adaptive_candidates(board, seen, top_k, args)
     if rng.random() < exploration and len(candidates) > 1:
-        score, move = rng.choice(candidates[: min(4, len(candidates))])
-        return move, {"heuristic": round(score, 4), "value": None, "mixed": round(score, 4), "explore": True}
+        adjusted, score, move, _audit = rng.choice(candidates[: min(4, len(candidates))])
+        return move, {
+            "heuristic": round(score, 4),
+            "value": None,
+            "mixed": round(adjusted, 4),
+            "explore": True,
+            "adaptive_safety_penalty": round(score - adjusted, 4),
+        }
     if value_weight <= 0:
-        score, move = candidates[0]
-        return move, {"heuristic": round(score, 4), "value": None, "mixed": round(score, 4), "decision": "heuristic_cold_start"}
-    feats = torch.stack([feature(board, move, score) for score, move in candidates]).to(dev)
+        safe_score, score, move, _audit = candidates[0]
+        return move, {
+            "heuristic": round(score, 4),
+            "value": None,
+            "mixed": round(safe_score, 4),
+            "decision": "safety_cold_start",
+            "adaptive_safety_penalty": round(score - safe_score, 4),
+        }
+    feats = torch.stack([feature(board, move, score) for _adjusted, score, move, _audit in candidates]).to(dev)
     values = model(feats).detach().cpu().tolist()
     if decision_mode == "veto":
-        best_score, best_move = candidates[0]
+        best_score, best_raw, best_move, _best_audit = candidates[0]
         best_value = float(values[0])
         eligible = []
-        for (score, move), value in zip(candidates, values):
+        for (score, raw_score, move, _audit), value in zip(candidates, values):
             if best_score - score <= max_heuristic_drop:
-                eligible.append((float(value), score, move))
+                eligible.append((float(value), score, raw_score, move))
         eligible.sort(key=lambda item: item[0], reverse=True)
-        value, score, move = eligible[0]
+        value, score, raw_score, move = eligible[0]
         if move != best_move and value - best_value >= value_margin:
             return move, {
-                "heuristic": round(score, 4),
+                "heuristic": round(raw_score, 4),
                 "value": round(value, 4),
                 "mixed": round(value, 4),
                 "decision": "value_veto",
+                "adaptive_safety_penalty": round(raw_score - score, 4),
             }
         return best_move, {
-            "heuristic": round(best_score, 4),
+            "heuristic": round(best_raw, 4),
             "value": round(best_value, 4),
             "mixed": round(best_value, 4),
             "decision": "heuristic_kept",
+            "adaptive_safety_penalty": round(best_raw - best_score, 4),
         }
     mixed = []
     best_h = candidates[0][0]
-    for (score, move), value in zip(candidates, values):
-        h = math.tanh((score - best_h) / 6.0)
-        mixed.append((h + value_weight * float(value), score, float(value), move))
+    for (adjusted, score, move, _audit), value in zip(candidates, values):
+        h = math.tanh((adjusted - best_h) / 6.0)
+        mixed.append((h + value_weight * float(value), score, adjusted, float(value), move))
     mixed.sort(key=lambda item: item[0], reverse=True)
-    total, score, value, move = mixed[0]
-    return move, {"heuristic": round(score, 4), "value": round(value, 4), "mixed": round(total, 4)}
+    total, score, adjusted, value, move = mixed[0]
+    return move, {
+        "heuristic": round(score, 4),
+        "value": round(value, 4),
+        "mixed": round(total, 4),
+        "adaptive_safety_penalty": round(score - adjusted, 4),
+    }
 
 
 def game_value(board: chess.Board, mover: chess.Color) -> float:
@@ -239,6 +298,7 @@ def play_match_game(
     rng: random.Random,
     exploration: float,
     value_weight: float,
+    static_policy: str,
 ) -> tuple[dict, list[MoveSample]]:
     board = start_board.copy(stack=False)
     seen = {position_key(board): 1}
@@ -262,13 +322,14 @@ def play_match_game(
                 args.decision_mode,
                 args.max_heuristic_drop,
                 args.value_margin,
+                args,
             )
             policy = "adaptive_world_model"
         else:
-            move, info = choose_static(board, seen, args.top_k)
-            policy = "static_alpha_lite"
+            move, info = choose_static(board, seen, args.top_k, static_policy, args)
+            policy = static_policy
         san = board.san(move)
-        audit = tactical_audit(board, move)
+        audit = info.pop("audit", None) or tactical_audit(board, move)
         board.push(move)
         seen[position_key(board)] = seen.get(position_key(board), 0) + 1
         moves.append({"san": san, "uci": move.uci(), "policy": policy, **info, "audit": audit})
@@ -286,9 +347,10 @@ def play_match_game(
         for fen, move_uci, mover, material_after in trace
     ]
     adaptive_value = game_value(board, adaptive_color)
-    winner = "adaptive_world_model" if adaptive_value > 0.2 else ("static_alpha_lite" if adaptive_value < -0.2 else "draw")
+    winner = "adaptive_world_model" if adaptive_value > 0.2 else (static_policy if adaptive_value < -0.2 else "draw")
     return {
         "adaptive_color": "white" if adaptive_color == chess.WHITE else "black",
+        "opponent_policy": static_policy,
         "start_fen": start_board.fen(),
         "plies": len(moves),
         "winner": winner,
@@ -313,17 +375,28 @@ def train_online(model: OnlineValueModel, opt: torch.optim.Optimizer, replay: li
         ys = []
         for sample in batch:
             board = chess.Board(sample.fen)
-            move = chess.Move.from_uci(sample.move_uci)
-            h = teacher_score(board, move, {})
-            audit = tactical_audit(board, move)
-            blunder_penalty = 0.0
-            blunder_penalty += args.blunder_penalty if audit["tactical_blunder"] else 0.0
-            blunder_penalty += args.queen_hang_penalty if audit["queen_hang"] else 0.0
-            target = 0.72 * sample.final_value + 0.28 * max(-1.0, min(1.0, sample.material_after / 10.0))
-            target -= blunder_penalty
-            target = max(-1.0, min(1.0, target))
-            xs.append(feature(board, move, h))
-            ys.append(target)
+            played = chess.Move.from_uci(sample.move_uci)
+            candidates = adaptive_candidates(board, {}, args.train_candidate_top_k, args)
+            if all(move != played for _adjusted, _score, move, _audit in candidates) and played in board.legal_moves:
+                audit = tactical_audit(board, played)
+                h = teacher_score(board, played, {})
+                adjusted = h - args.adaptive_safety_weight * safety_penalty(audit, args)
+                candidates.append((adjusted, h, played, audit))
+            for _adjusted, h, move, audit in candidates:
+                after = board.copy(stack=False)
+                before_material = material_for_turn(board, board.turn)
+                after.push(move)
+                material_delta = material_for_turn(after, board.turn) - before_material
+                target = args.counterfactual_material_weight * max(-1.0, min(1.0, material_delta / 9.0))
+                target -= args.counterfactual_safety_weight * safety_penalty(audit, args) / 12.0
+                if after.is_checkmate():
+                    target = 1.0
+                if move == played:
+                    target += args.played_outcome_weight * sample.final_value
+                    target += args.played_material_weight * max(-1.0, min(1.0, sample.material_after / 10.0))
+                target = max(-1.0, min(1.0, target))
+                xs.append(feature(board, move, h))
+                ys.append(target)
         x = torch.stack(xs).to(dev)
         y = torch.tensor(ys, dtype=torch.float32, device=dev)
         pred = model(x)
@@ -338,14 +411,21 @@ def train_online(model: OnlineValueModel, opt: torch.optim.Optimizer, replay: li
 
 def summarize(games: list[dict]) -> dict:
     wins = sum(1 for game in games if game["winner"] == "adaptive_world_model")
-    losses = sum(1 for game in games if game["winner"] == "static_alpha_lite")
+    losses = sum(1 for game in games if game["winner"] not in {"adaptive_world_model", "draw"})
     draws = len(games) - wins - losses
     values = [game["adaptive_value"] for game in games]
     audit = summarize_tactical_audit(games)
+    opponent_winners: dict[str, int] = {}
+    for game in games:
+        if game["winner"] in {"adaptive_world_model", "draw"}:
+            continue
+        opponent_winners[game["winner"]] = opponent_winners.get(game["winner"], 0) + 1
     return {
         "games": len(games),
         "adaptive_wins": wins,
         "static_wins": losses,
+        "opponent_wins": losses,
+        "opponent_winners": opponent_winners,
         "draws": draws,
         "adaptive_score_rate": round((wins + 0.5 * draws) / max(len(games), 1), 4),
         "avg_adaptive_value": round(sum(values) / max(len(values), 1), 4),
@@ -359,14 +439,12 @@ def empty_audit_totals() -> dict:
 
 
 def summarize_move_audit(moves: list[dict]) -> dict:
-    totals = {
-        "adaptive_world_model": empty_audit_totals(),
-        "static_alpha_lite": empty_audit_totals(),
-    }
+    totals = {"adaptive_world_model": empty_audit_totals()}
     for move in moves:
         policy = move.get("policy")
-        if policy not in totals:
+        if not policy:
             continue
+        totals.setdefault(policy, empty_audit_totals())
         audit = move.get("audit") or {}
         totals[policy]["moves"] += 1
         totals[policy]["queen_hangs"] += int(bool(audit.get("queen_hang")))
@@ -377,15 +455,11 @@ def summarize_move_audit(moves: list[dict]) -> dict:
 
 
 def summarize_tactical_audit(games: list[dict]) -> dict:
-    totals = {
-        "adaptive_world_model": empty_audit_totals(),
-        "static_alpha_lite": empty_audit_totals(),
-    }
+    totals = {"adaptive_world_model": empty_audit_totals()}
     for game in games:
         summary = game.get("audit_summary") or {}
         for policy, stats in summary.items():
-            if policy not in totals:
-                continue
+            totals.setdefault(policy, empty_audit_totals())
             totals[policy]["moves"] += stats.get("moves", 0)
             totals[policy]["queen_hangs"] += stats.get("queen_hangs", 0)
             totals[policy]["major_piece_hangs"] += stats.get("major_piece_hangs", 0)
@@ -412,16 +486,27 @@ def finish_audit_totals(totals: dict) -> dict:
     return out
 
 
-def evaluate_fixed(model: OnlineValueModel, iteration: int, args, dev: str, value_weight: float) -> dict:
+def evaluate_fixed(model: OnlineValueModel, iteration: int, args, dev: str, value_weight: float, static_policy: str) -> dict:
     rng = random.Random(args.seed + 700_000 + iteration)
     games = []
     for game_idx in range(args.eval_games):
         start = warmup_board(args.seed + 800_000 + game_idx // 2, args.opening_plies)
         adaptive_color = chess.WHITE if game_idx % 2 == 0 else chess.BLACK
-        game, _ = play_match_game(model, adaptive_color, start, args, dev, rng, exploration=0.0, value_weight=value_weight)
+        game, _ = play_match_game(
+            model,
+            adaptive_color,
+            start,
+            args,
+            dev,
+            rng,
+            exploration=0.0,
+            value_weight=value_weight,
+            static_policy=static_policy,
+        )
         games.append(game)
     return {
         "value_weight": round(value_weight, 4),
+        "opponent_policy": static_policy,
         "summary": summarize(games),
         "sample_games": games[: args.sample_games],
     }
@@ -436,7 +521,17 @@ def run_iteration(iteration: int, model: OnlineValueModel, opt, replay: list[Mov
     for game_idx in range(args.games_per_iteration):
         start = warmup_board(args.seed + 40_000 + iteration * 100 + game_idx // 2, args.opening_plies)
         adaptive_color = chess.WHITE if game_idx % 2 == 0 else chess.BLACK
-        game, samples = play_match_game(model, adaptive_color, start, args, dev, rng, exploration, effective_value_weight)
+        game, samples = play_match_game(
+            model,
+            adaptive_color,
+            start,
+            args,
+            dev,
+            rng,
+            exploration,
+            effective_value_weight,
+            args.static_policy,
+        )
         games.append(game)
         new_samples.extend(samples)
     replay.extend(new_samples)
@@ -449,7 +544,10 @@ def run_iteration(iteration: int, model: OnlineValueModel, opt, replay: list[Mov
         args,
         dev,
         args.value_weight if len(replay) >= args.batch_size else 0.0,
+        args.static_policy,
     )
+    heldout_vs_alpha = evaluate_fixed(model, iteration, args, dev, args.value_weight, "static_alpha_lite")
+    heldout_vs_safety = evaluate_fixed(model, iteration, args, dev, args.value_weight, "static_safety_alpha")
     return {
         "iteration": iteration,
         "exploration": round(exploration, 4),
@@ -459,29 +557,52 @@ def run_iteration(iteration: int, model: OnlineValueModel, opt, replay: list[Mov
         "summary": summarize(games),
         "online_update": update,
         "heldout_after_update": evaluation,
+        "heldout_vs_alpha": heldout_vs_alpha,
+        "heldout_vs_safety": heldout_vs_safety,
         "sample_games": games[: args.sample_games],
     }
+
+
+def best_iteration_by(iterations: list[dict], key: str) -> dict:
+    if not iterations:
+        return {}
+    return max(
+        iterations,
+        key=lambda row: row[key]["summary"]["adaptive_score_rate"],
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=701)
-    parser.add_argument("--iterations", type=int, default=4)
-    parser.add_argument("--games-per-iteration", type=int, default=8)
+    parser.add_argument("--iterations", type=int, default=5)
+    parser.add_argument("--games-per-iteration", type=int, default=6)
     parser.add_argument("--eval-games", type=int, default=8)
-    parser.add_argument("--max-plies", type=int, default=120)
+    parser.add_argument("--max-plies", type=int, default=60)
     parser.add_argument("--opening-plies", type=int, default=6)
     parser.add_argument("--top-k", type=int, default=8)
-    parser.add_argument("--width", type=int, default=192)
+    parser.add_argument("--static-policy", choices=("static_alpha_lite", "static_safety_alpha"), default="static_safety_alpha")
+    parser.add_argument("--width", type=int, default=128)
     parser.add_argument("--lr", type=float, default=2e-3)
-    parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--online-epochs", type=int, default=32)
-    parser.add_argument("--value-weight", type=float, default=0.35)
+    parser.add_argument("--batch-size", type=int, default=96)
+    parser.add_argument("--online-epochs", type=int, default=6)
+    parser.add_argument("--train-candidate-top-k", type=int, default=4)
+    parser.add_argument("--played-outcome-weight", type=float, default=0.55)
+    parser.add_argument("--played-material-weight", type=float, default=0.2)
+    parser.add_argument("--counterfactual-material-weight", type=float, default=0.2)
+    parser.add_argument("--counterfactual-safety-weight", type=float, default=0.9)
+    parser.add_argument("--value-weight", type=float, default=0.12)
     parser.add_argument("--decision-mode", choices=("blend", "veto"), default="blend")
     parser.add_argument("--max-heuristic-drop", type=float, default=3.0)
     parser.add_argument("--value-margin", type=float, default=0.12)
     parser.add_argument("--blunder-penalty", type=float, default=0.35)
     parser.add_argument("--queen-hang-penalty", type=float, default=0.25)
+    parser.add_argument("--static-blunder-penalty", type=float, default=6.0)
+    parser.add_argument("--static-queen-hang-penalty", type=float, default=8.0)
+    parser.add_argument("--static-major-hang-penalty", type=float, default=1.2)
+    parser.add_argument("--static-best-capture-penalty", type=float, default=0.35)
+    parser.add_argument("--static-reply-delta-penalty", type=float, default=0.25)
+    parser.add_argument("--adaptive-safety-weight", type=float, default=1.0)
     parser.add_argument("--exploration", type=float, default=0.25)
     parser.add_argument("--exploration-decay", type=float, default=0.72)
     parser.add_argument("--min-exploration", type=float, default=0.03)
@@ -499,6 +620,9 @@ def main() -> None:
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     replay: list[MoveSample] = []
     iterations = [run_iteration(i, model, opt, replay, args, dev) for i in range(args.iterations)]
+    best_after_update = best_iteration_by(iterations, "heldout_after_update")
+    best_vs_alpha = best_iteration_by(iterations, "heldout_vs_alpha")
+    best_vs_safety = best_iteration_by(iterations, "heldout_vs_safety")
     payload = {
         "status": "online_world_model_self_play",
         "scope": "static alpha-lite heuristic versus the same heuristic augmented by an online value/world model trained from completed self-play games",
@@ -511,6 +635,14 @@ def main() -> None:
             "feature_dim": FEATURE_DIM,
         },
         "final_summary": iterations[-1]["summary"] if iterations else {},
+        "best_heldout_after_update": best_after_update.get("heldout_after_update", {}),
+        "best_heldout_vs_alpha": best_vs_alpha.get("heldout_vs_alpha", {}),
+        "best_heldout_vs_safety": best_vs_safety.get("heldout_vs_safety", {}),
+        "best_iterations": {
+            "heldout_after_update": best_after_update.get("iteration"),
+            "heldout_vs_alpha": best_vs_alpha.get("iteration"),
+            "heldout_vs_safety": best_vs_safety.get("iteration"),
+        },
         "iterations": iterations,
     }
     ARTIFACT.parent.mkdir(exist_ok=True)

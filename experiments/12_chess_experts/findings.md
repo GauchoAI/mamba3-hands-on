@@ -1201,3 +1201,69 @@ adaptive model is not merely winning more often on the held-out starts; it is
 also leaving fewer immediate tactical liabilities by the audit we added. The
 self-play score is lower than the unaudited best run, but the result is more
 credible because it now reports the safety mechanism that chess actually needs.
+
+Fourth pass: make the comparison harder by adding a stronger software opponent:
+
+```text
+static_safety_alpha = alpha-lite heuristic minus immediate tactical-safety penalties
+```
+
+The first learned-only attempt lost badly to this opponent. That was the useful
+negative result: a small online value head is not a substitute for explicit
+one-ply tactical safety. The adaptive policy was then corrected so its candidate
+pool is also safety-aware before the learned value head reranks moves.
+
+Current bounded default run:
+
+```text
+elapsed: 145.823s
+iterations: 5
+self-play games per iteration: 6
+held-out games per iteration: 8
+parameters: 133,633
+feature_dim: 909
+value_weight: 0.12
+train_candidate_top_k: 4
+opponent: static_safety_alpha
+```
+
+Best held-out result versus `static_safety_alpha`:
+
+```text
+adaptive wins: 5
+static_safety_alpha wins: 2
+draws: 1
+score rate: 0.6875
+```
+
+The same checkpoint versus `static_alpha_lite`:
+
+```text
+adaptive wins: 8
+static_alpha_lite wins: 0
+draws: 0
+score rate: 1.0000
+```
+
+Final held-out tactical audit versus `static_safety_alpha`:
+
+```text
+adaptive queen hang rate:        0.0058
+static queen hang rate:          0.0059
+adaptive major-piece hang rate:  0.2456
+static major-piece hang rate:    0.3235
+adaptive tactical blunder rate:  0.0526
+static tactical blunder rate:    0.0588
+adaptive avg best capture:       1.2105
+static avg best capture:         1.3706
+```
+
+Interpretation:
+
+The deeper claim is now narrower and more defensible. The learned online model
+does not magically discover chess safety from terminal outcomes. It becomes
+useful when composed with an explicit tactical candidate filter, then learns a
+small value preference over that safer move set. In this bounded run, that
+combination beats the raw alpha-lite heuristic decisively and beats the
+safety-alpha baseline on held-out starts, while also reporting comparable or
+better tactical-liability rates.
