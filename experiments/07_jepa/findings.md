@@ -1301,6 +1301,20 @@ Two follow-ups firing now:
    for round-10 (next round after the corpus-scale check). Round-9
    slot reserved for the d_model=192 + clean corpus run.
 
+### Status (afternoon update)
+
+- `data/movie_pairs_clean.txt` rsynced mini→box, 4.37 GB landed at
+  13:40 UTC.
+- Round 9 trainer running on GPU 0 since 13:44 (gpu0-clean-corpus-192).
+- Round 10 corpus generation running on GPU 1 since 13:43
+  (`make_logit_kd_corpus.py`, 17.2 pairs/s, ETA ~1.6 h for 100k records).
+- Eval daemon on GPU 3 watching round 9.
+- Round 10 trainer wiring complete across commits `ca3f854`
+  (KDTPDataset reader), `603b58b` (kd_loss in arch.py), `03ed70f`
+  (kd batch kind in train.py). When the corpus finishes generating,
+  round 10 launches with `--kd-path data/kd_logit_clean --mix-kd 0.6
+  --lambda-kd 1.0`.
+
 ---
 
 ## How to reproduce
