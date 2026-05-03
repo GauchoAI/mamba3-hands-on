@@ -36,3 +36,9 @@ Optional proposal field:
   - kpi: object with namespace, metric, direction, and target
   - falsifier: concrete result that kills the bill
   - follow_up: what Parliament should inspect after completion
+
+Proposal command constraints:
+- command must be one single command line, not a shell script.
+- Do not use heredocs, pipes, redirection, command substitution, `&&`, `||`, or `;`.
+- Prefer invoking an existing repository script with `.venv/bin/python path/to/script.py ...`.
+- kpi.direction must be one of: increase, decrease, hit.

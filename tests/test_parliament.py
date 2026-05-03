@@ -154,6 +154,24 @@ stance: Exactness first.
         errors = validate_proposal(proposal)
         self.assertTrue(any("shell control" in error for error in errors))
 
+    def test_bill_proposal_rejects_multiline_embedded_code(self) -> None:
+        from tools.parliament_bill import validate_proposal
+
+        proposal = {
+            "proposal_id": "bad-multiline",
+            "title": "Bad multiline",
+            "objective": "should fail",
+            "hypothesis": "should fail",
+            "command": "python - <<'PY'\nprint('bad')\nPY",
+            "max_wall_s": 60,
+            "expected_artifacts": ["runs/x.json"],
+            "kpi": {"namespace": "test", "metric": "score", "direction": "increase", "target": 0.1},
+            "falsifier": "none",
+            "follow_up": "none",
+        }
+        errors = validate_proposal(proposal)
+        self.assertTrue(any("single line" in error for error in errors))
+
     def test_bill_proposal_accepts_bounded_repo_python_command(self) -> None:
         from tools.parliament_bill import validate_proposal
 

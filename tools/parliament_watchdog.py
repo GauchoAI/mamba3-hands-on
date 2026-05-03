@@ -95,6 +95,8 @@ def run_procedural_chamber(args: argparse.Namespace, reason: str) -> dict[str, A
         "--trace",
         "--firebase",
         "--firebase-prior",
+        "--evidence-cmd",
+        "cat runs/parliament/compiled_bills/procedural_bill_request.json",
     ]
     proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=args.wall_timeout_s)
     compile_cmd = [

@@ -52,6 +52,8 @@ def validate_proposal(proposal: dict[str, Any]) -> list[str]:
     command = str(proposal.get("command", "")).strip()
     if not command:
         errors.append("command is empty")
+    if "\n" in command or "\r" in command:
+        errors.append("command must be one single line; create or reuse a script instead of embedding code")
     if any(token in command for token in DISALLOWED_SHELL):
         errors.append("command contains unsupported shell control syntax")
     try:
@@ -88,6 +90,11 @@ def validate_proposal(proposal: dict[str, Any]) -> list[str]:
         for key in ["namespace", "metric", "direction", "target"]:
             if key not in kpi:
                 errors.append(f"kpi missing {key}")
+        direction = str(kpi.get("direction", ""))
+        if direction in {"maximize", "maximise"}:
+            kpi["direction"] = "increase"
+        elif direction in {"minimize", "minimise"}:
+            kpi["direction"] = "decrease"
         if str(kpi.get("direction", "")) not in {"increase", "decrease", "hit"}:
             errors.append("kpi.direction must be increase, decrease, or hit")
     return errors
