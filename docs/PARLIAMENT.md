@@ -142,8 +142,9 @@ under `runs/parliament/scheduler/`, and uses a lock so slow model backends
 cannot overlap the next tick.
 
 Persisted mode appends the speech log, posts short speech records to Firebase,
-keeps traces, and syncs Parliament artifacts to Hugging Face when `HF_TOKEN` is
-present:
+loads prior Firebase speeches for the same motion so members can reply to the
+actual thread, keeps traces, and syncs Parliament artifacts to Hugging Face when
+`HF_TOKEN` is present:
 
 ```bash
 .venv/bin/python tools/install_parliament_schedule.py \
@@ -153,11 +154,33 @@ present:
   --timeout-s 45 \
   --wall-timeout-s 120 \
   --persist \
-  --archive
+  --archive \
+  --execute-actions
 ```
 
 The public chat view is `docs/parliament/index.html`; it fetches
 `/parliament/nodes` and `/parliament/speeches` from Firebase.
+
+## Vote-To-Action Contract
+
+Parliament does not execute loose prose. It passes a concrete bill.
+
+An action bill lives at `parliament/actions/{motion_id}.json`. It names the
+motion, quorum, approval threshold, cooldown, exact action kind, target nodes,
+manifest path, timeout, and allowed command prefixes. When a persisted tick
+runs with `--execute-actions`, `tools/parliament_action.py` tallies the latest
+Firebase vote per speaker. If quorum and approval are met, the clerk executes
+the bill and writes the result to:
+
+```text
+/parliament/actions/{motion_id}/{action_id}
+runs/parliament/actions/{motion_id}-{action_id}.json
+```
+
+The first bill is `parliament/actions/small_lm_recovery.json`. It dispatches
+`parliament/action_manifests/small_lm_recovery_smoke.json` to the M4 Pro and
+Mac Mini, proving that an approved Parliament motion causes concrete cluster
+work without allowing arbitrary shell text from a speech to run.
 
 ## Queryable Log Contract
 

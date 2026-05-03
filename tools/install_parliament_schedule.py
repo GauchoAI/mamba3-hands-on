@@ -23,6 +23,8 @@ def main() -> int:
     parser.add_argument("--wall-timeout-s", type=int, default=270)
     parser.add_argument("--persist", action="store_true")
     parser.add_argument("--archive", action="store_true")
+    parser.add_argument("--execute-actions", action="store_true")
+    parser.add_argument("--action-timeout-s", type=int, default=420)
     parser.add_argument("--uninstall", action="store_true")
     args = parser.parse_args()
 
@@ -43,12 +45,15 @@ def main() -> int:
         f"--backend {args.backend} "
         f"--panel-size {args.panel_size} "
         f"--timeout-s {args.timeout_s} "
-        f"--wall-timeout-s {args.wall_timeout_s}"
+        f"--wall-timeout-s {args.wall_timeout_s} "
+        f"--action-timeout-s {args.action_timeout_s}"
     )
     if args.persist:
         shell_cmd += " --persist"
     if args.archive:
         shell_cmd += " --archive"
+    if args.execute_actions:
+        shell_cmd += " --execute-actions"
     log_dir = ROOT / "runs" / "parliament" / "scheduler"
     log_dir.mkdir(parents=True, exist_ok=True)
     path_value = f"{Path.home() / '.local' / 'bin'}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"

@@ -204,7 +204,7 @@ def build_prompt(identity: dict[str, Any], motion: dict[str, Any], prior_speeche
     judge_prompt = (PROMPTS_DIR / "judge.md").read_text(encoding="utf-8")
     motion_body = str(motion.get("body", ""))
     compact_prior = []
-    for record in prior_speeches[-3:]:
+    for record in prior_speeches[-6:]:
         speech = record.get("speech", {})
         compact_prior.append(
             {
@@ -254,12 +254,21 @@ def simulated_backend(identity: dict[str, Any], motion: dict[str, Any], evidence
 
     stance = identity.get("stance", "")
     critique = "The next useful step is to demand an inspectable benchmark artifact, not just a narrative claim."
+    reply = "I am opening the motion rather than replying to a prior member."
+    position = "amend"
     if prior_speeches:
-        critique = "I read the prior speech and would require its claim to be tied to a measurable KPI before promotion."
+        last = prior_speeches[-1]
+        last_speech = last.get("speech", {}) if isinstance(last.get("speech"), dict) else {}
+        last_speaker = last.get("speaker", "the previous speaker")
+        last_body = str(last_speech.get("body", "")).strip()
+        reply = f"I am replying to {last_speaker}: {last_body[:220]}"
+        critique = "I accept the need for action only if the vote is attached to a concrete bill with commands, nodes, timeouts, and a KPI."
+        if "falsifier" in last_body.lower() or "kpi" in last_body.lower():
+            position = "approve"
     return {
         "kind": "position",
-        "position": "amend",
-        "body": f"{speaker}: {critique} {stance}",
+        "position": position,
+        "body": f"{speaker}: {reply} {critique} {stance}",
         "evidence": evidence_summary(evidence),
         "prediction": "If this direction is correct, the next run will produce a checkpoint, a KPI, and a public artifact that can be reviewed independently.",
         "falsifier": "If repo inspection shows no reproducible command, no checkpoint lineage, or no KPI movement, the motion should not advance.",
@@ -512,6 +521,25 @@ def firebase_get(path: str, timeout: float = 5.0) -> Any:
         return None
 
 
+def flatten_firebase_speeches(payload: Any) -> list[dict[str, Any]]:
+    speeches: list[dict[str, Any]] = []
+    if not isinstance(payload, dict):
+        return speeches
+    for speaker_bucket in payload.values():
+        if isinstance(speaker_bucket, dict):
+            for record in speaker_bucket.values():
+                if isinstance(record, dict):
+                    speeches.append(record)
+    return sorted(speeches, key=lambda r: str(r.get("created_at", "")))
+
+
+def firebase_prior_speeches(motion_id: str, limit: int) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
+    payload = firebase_get(f"parliament/speeches/{motion_id}", timeout=8.0)
+    return flatten_firebase_speeches(payload)[-limit:]
+
+
 def parliament_node_manifest(node_id: str | None = None, speakers: list[str] | None = None) -> dict[str, Any]:
     try:
         from server.node_agent import probe_capabilities
@@ -586,13 +614,15 @@ def cmd_speak(args: argparse.Namespace) -> None:
 
 
 def cmd_chamber(args: argparse.Namespace) -> None:
-    speeches: list[dict[str, Any]] = []
+    motion = load_motion(Path(args.motion) if args.motion else None, args.text)
+    speeches: list[dict[str, Any]] = firebase_prior_speeches(motion["motion_id"], args.prior_limit) if args.firebase_prior else []
+    new_speeches: list[dict[str, Any]] = []
     for speaker in expand_speakers(args.speakers):
         speaker_args = argparse.Namespace(**vars(args))
         speaker_args.speaker = speaker
-        record = run_speaker(speaker_args, speeches)
-        speeches.append(record)
-    print(json.dumps({"schema": "parliament.chamber.v1", "dry_run": args.dry_run, "speeches": speeches}, indent=2, ensure_ascii=False))
+        record = run_speaker(speaker_args, speeches + new_speeches)
+        new_speeches.append(record)
+    print(json.dumps({"schema": "parliament.chamber.v1", "dry_run": args.dry_run, "prior_count": len(speeches), "speeches": new_speeches}, indent=2, ensure_ascii=False))
 
 
 def classify_event(event: dict[str, Any]) -> dict[str, Any]:
@@ -695,6 +725,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_chamber = sub.add_parser("chamber", parents=[common], help="Run multiple speakers sequentially")
     p_chamber.add_argument("--speakers", nargs="+", required=True)
+    p_chamber.add_argument("--firebase-prior", action="store_true", help="Seed the chamber with prior Firebase speeches for the same motion")
+    p_chamber.add_argument("--prior-limit", type=int, default=12, help="Number of prior Firebase speeches to provide")
     p_chamber.set_defaults(func=cmd_chamber)
 
     p_event = sub.add_parser("event", help="Classify whether an event should trigger deliberation")

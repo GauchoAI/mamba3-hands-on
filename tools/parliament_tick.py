@@ -167,7 +167,7 @@ def run_tick(args: argparse.Namespace) -> int:
         if not args.persist:
             cmd.append("--dry-run")
         else:
-            cmd.extend(["--trace", "--firebase"])
+            cmd.extend(["--trace", "--firebase", "--firebase-prior"])
         t0 = time.time()
         try:
             proc = subprocess.run(
@@ -205,6 +205,29 @@ def run_tick(args: argparse.Namespace) -> int:
             payload = json.loads(stdout)
             result.update(summarize_chamber(payload))
             result["archive"] = archive_parliament_artifacts(args.archive)
+            if args.execute_actions and args.persist:
+                motion_id = str(args.motion.stem)
+                action_cmd = [
+                    repo_python(),
+                    str(ROOT / "tools" / "parliament_action.py"),
+                    "review",
+                    "--motion",
+                    motion_id,
+                    "--execute",
+                ]
+                action_proc = subprocess.run(
+                    action_cmd,
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=args.action_timeout_s,
+                )
+                result["action_review"] = {
+                    "cmd": action_cmd,
+                    "returncode": action_proc.returncode,
+                    "stdout_tail": action_proc.stdout[-6000:],
+                    "stderr_tail": action_proc.stderr[-3000:],
+                }
         else:
             result["schema"] = "parliament.scheduler_tick.v1"
             result["created_at"] = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -231,6 +254,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--speaker", action="append", help="Override rotating speaker list")
     parser.add_argument("--persist", action="store_true", help="Append durable local/Firebase Parliament speeches")
     parser.add_argument("--archive", action="store_true", help="Sync Parliament artifacts to Hugging Face when HF_TOKEN is set")
+    parser.add_argument("--execute-actions", action="store_true", help="Execute allowlisted actions when Parliament has approved them")
+    parser.add_argument("--action-timeout-s", type=int, default=420, help="Whole action executor timeout")
     args = parser.parse_args(argv)
     return run_tick(args)
 

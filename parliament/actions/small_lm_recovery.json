@@ -1,0 +1,23 @@
+{
+  "schema": "parliament.action_spec.v1",
+  "motion_id": "small_lm_recovery",
+  "action_id": "small_lm_recovery_parliament_smoke",
+  "description": "When the small language model recovery motion has enough support, dispatch a concrete cross-node smoke check of the Parliament machinery.",
+  "cooldown_s": 86400,
+  "approval": {
+    "quorum": 2,
+    "min_approve": 2,
+    "min_confidence": 0.6,
+    "positive_positions": ["approve", "amend"]
+  },
+  "action": {
+    "kind": "cluster_dispatch",
+    "nodes": "tools/cluster/cluster_nodes.json",
+    "manifest": "parliament/action_manifests/small_lm_recovery_smoke.json",
+    "per_task_timeout_s": 300,
+    "wall_timeout_s": 360,
+    "allowed_command_prefixes": [
+      "git pull --ff-only && .venv/bin/python -m unittest"
+    ]
+  }
+}

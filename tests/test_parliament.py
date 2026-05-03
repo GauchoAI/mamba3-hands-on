@@ -107,6 +107,32 @@ stance: Exactness first.
         self.assertEqual(choose_panel(1, speakers, 2), ["c", "d"])
         self.assertEqual(choose_panel(2, speakers, 2), ["e", "a"])
 
+    def test_action_tally_requires_quorum_and_confidence(self) -> None:
+        from tools.parliament_action import tally_votes
+
+        speeches = [
+            {"speaker": "a", "created_at": "1", "speech": {"position": "approve", "confidence": 0.7}},
+            {"speaker": "b", "created_at": "1", "speech": {"position": "amend", "confidence": 0.8}},
+            {"speaker": "c", "created_at": "1", "speech": {"position": "approve", "confidence": 0.2}},
+        ]
+        tally = tally_votes(
+            speeches,
+            {"quorum": 2, "min_approve": 2, "min_confidence": 0.6, "positive_positions": ["approve", "amend"]},
+        )
+        self.assertTrue(tally["approved"])
+        self.assertEqual(tally["approvals"], 2)
+
+    def test_action_manifest_rejects_unallowlisted_commands(self) -> None:
+        import tempfile
+
+        from tools.parliament_action import validate_manifest
+
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as f:
+            json.dump([{"node": "m4-pro", "name": "bad", "cmd": "rm -rf runs"}], f)
+            f.flush()
+            with self.assertRaises(ValueError):
+                validate_manifest(Path(f.name), ["git pull --ff-only && .venv/bin/python -m unittest"])
+
     def test_training_heartbeat_without_checkpoint_is_silent(self) -> None:
         result = run_parliament(
             "event",
