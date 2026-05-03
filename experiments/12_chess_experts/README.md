@@ -13,11 +13,12 @@ goal is to improve the chess expert itself.
 
 ## Playground
 
-- [Chess Expert Lab](./chess_lab.html): static artifact explorer for metrics,
-  curriculum mix, and full-game replay.
 - [Browser Chess Expert](./chess_browser_play.html): static ONNX Runtime Web
-  board that loads the archived experts from Hugging Face and runs inference
-  in the browser.
+  board that loads the current default expert (`online_top12`) from Hugging
+  Face and runs inference in the browser.
+- [Chess Expert Lab](./chess_lab.html?artifact=artifacts/chess_online_world_model_strategy_sweep.json#metrics):
+  static artifact explorer for the KPI-ranked checkpoint strategy sweep,
+  curriculum mix, metrics, and full-game replay.
 
 ## Subsections
 
