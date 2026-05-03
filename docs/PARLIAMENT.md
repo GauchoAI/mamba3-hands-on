@@ -203,6 +203,24 @@ quorum and command-policy checks. The no-silence rule is therefore procedural:
 if no job is running and no executable bill is ready, the watchdog asks
 Parliament for bills; it does not choose the experiment itself.
 
+## Bounded Event Loop
+
+`tools/parliament_event_loop.py` is the normal scheduler entrypoint. The
+five-minute launchd timer is only a wake-up safety net; once awake, the event
+loop immediately runs the chain:
+
+1. scheduler tick and node heartbeat
+2. action review for already-approved work
+3. watchdog state check
+4. procedural proposal/revision round when idle
+5. compile model-authored bills
+6. up to two vote rounds on a compiled bill
+7. action execution only if quorum passes
+
+The default deliberation budget is 600 seconds. Training or benchmark actions
+then use their declared action timeout, so discussion stays bounded while
+runtime remains flexible.
+
 ## Queryable Log Contract
 
 Moving forward, every chapter may cite Parliament reasoning by reference rather

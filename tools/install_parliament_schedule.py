@@ -27,6 +27,8 @@ def main() -> int:
     parser.add_argument("--action-timeout-s", type=int, default=420)
     parser.add_argument("--watchdog", action="store_true")
     parser.add_argument("--watchdog-backend", default="auto")
+    parser.add_argument("--event-loop", action="store_true")
+    parser.add_argument("--deliberation-budget-s", type=int, default=600)
     parser.add_argument("--uninstall", action="store_true")
     args = parser.parse_args()
 
@@ -41,23 +43,36 @@ def main() -> int:
     py = Path("/opt/homebrew/bin/python3")
     if not py.exists():
         py = Path(sys.executable)
-    shell_cmd = (
-        f"cd {ROOT} && "
-        f"{py} {ROOT / 'tools' / 'parliament_tick.py'} "
-        f"--backend {args.backend} "
-        f"--panel-size {args.panel_size} "
-        f"--timeout-s {args.timeout_s} "
-        f"--wall-timeout-s {args.wall_timeout_s} "
-        f"--action-timeout-s {args.action_timeout_s}"
-    )
-    if args.persist:
-        shell_cmd += " --persist"
-    if args.archive:
-        shell_cmd += " --archive"
-    if args.execute_actions:
-        shell_cmd += " --execute-actions"
-    if args.watchdog:
-        shell_cmd += f" --watchdog --watchdog-backend {args.watchdog_backend}"
+    if args.event_loop:
+        shell_cmd = (
+            f"cd {ROOT} && "
+            f"{py} {ROOT / 'tools' / 'parliament_event_loop.py'} "
+            f"--tick-backend {args.backend} "
+            f"--watchdog-backend {args.watchdog_backend} "
+            f"--panel-size {args.panel_size} "
+            f"--tick-timeout-s {args.timeout_s} "
+            f"--tick-wall-timeout-s {args.wall_timeout_s} "
+            f"--action-timeout-s {args.action_timeout_s} "
+            f"--deliberation-budget-s {args.deliberation_budget_s}"
+        )
+    else:
+        shell_cmd = (
+            f"cd {ROOT} && "
+            f"{py} {ROOT / 'tools' / 'parliament_tick.py'} "
+            f"--backend {args.backend} "
+            f"--panel-size {args.panel_size} "
+            f"--timeout-s {args.timeout_s} "
+            f"--wall-timeout-s {args.wall_timeout_s} "
+            f"--action-timeout-s {args.action_timeout_s}"
+        )
+        if args.persist:
+            shell_cmd += " --persist"
+        if args.archive:
+            shell_cmd += " --archive"
+        if args.execute_actions:
+            shell_cmd += " --execute-actions"
+        if args.watchdog:
+            shell_cmd += f" --watchdog --watchdog-backend {args.watchdog_backend}"
     log_dir = ROOT / "runs" / "parliament" / "scheduler"
     log_dir.mkdir(parents=True, exist_ok=True)
     path_value = f"{Path.home() / '.local' / 'bin'}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"

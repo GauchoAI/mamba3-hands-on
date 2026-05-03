@@ -233,6 +233,20 @@ stance: Exactness first.
         self.assertEqual(len(payload["speeches"]), 2)
         self.assertEqual(payload["speeches"][1]["model_family"], "Claude")
 
+    def test_inline_motion_id_override_is_durable(self) -> None:
+        result = run_parliament(
+            "chamber",
+            "--speakers",
+            "gpt5-ch12-chess-champion",
+            "--text",
+            "Vote on a compiled bill.",
+            "--motion-id",
+            "procedural_bill_request",
+            "--dry-run",
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["speeches"][0]["motion_id"], "procedural_bill_request")
+
 
 if __name__ == "__main__":
     unittest.main()

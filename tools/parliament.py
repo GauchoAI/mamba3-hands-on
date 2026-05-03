@@ -121,7 +121,7 @@ def load_identity(speaker: str) -> tuple[Path, dict[str, Any]]:
     return path, load_yaml(path)
 
 
-def load_motion(path: Path | None, text: str | None) -> dict[str, Any]:
+def load_motion(path: Path | None, text: str | None, motion_id_override: str | None = None) -> dict[str, Any]:
     if path:
         raw = path.read_text(encoding="utf-8")
         motion_id = path.stem
@@ -129,6 +129,8 @@ def load_motion(path: Path | None, text: str | None) -> dict[str, Any]:
     else:
         body = text or "Review the current repository direction."
         motion_id = stable_id(body)
+    if motion_id_override:
+        motion_id = motion_id_override
     return {"motion_id": motion_id, "body": body.strip(), "source": str(path) if path else "inline"}
 
 
@@ -577,7 +579,7 @@ def parliament_node_manifest(node_id: str | None = None, speakers: list[str] | N
 
 def run_speaker(args: argparse.Namespace, prior_speeches: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     identity_path, identity = load_identity(args.speaker)
-    motion = load_motion(Path(args.motion) if args.motion else None, args.text)
+    motion = load_motion(Path(args.motion) if args.motion else None, args.text, args.motion_id)
     evidence = collect_evidence(args.evidence_cmd or [])
     prompt = build_prompt(identity, motion, prior_speeches or [], evidence, args.dry_run)
 
@@ -614,7 +616,7 @@ def cmd_speak(args: argparse.Namespace) -> None:
 
 
 def cmd_chamber(args: argparse.Namespace) -> None:
-    motion = load_motion(Path(args.motion) if args.motion else None, args.text)
+    motion = load_motion(Path(args.motion) if args.motion else None, args.text, args.motion_id)
     speeches: list[dict[str, Any]] = firebase_prior_speeches(motion["motion_id"], args.prior_limit) if args.firebase_prior else []
     new_speeches: list[dict[str, Any]] = []
     for speaker in expand_speakers(args.speakers):
@@ -710,6 +712,7 @@ def main(argv: list[str] | None = None) -> int:
 
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--motion", help="Path to a motion markdown file")
+    common.add_argument("--motion-id", help="Override durable motion id for inline or procedural vote motions")
     common.add_argument("--text", help="Inline motion text")
     common.add_argument("--backend", default="simulated", help="simulated, auto, codex, claude, symphony, or another command adapter")
     common.add_argument("--command", help="Override backend command. Receives prompt on stdin and PARLIAMENT_PROMPT.")
