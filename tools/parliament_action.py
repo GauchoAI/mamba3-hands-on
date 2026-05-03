@@ -110,13 +110,26 @@ def load_previous_event(motion_id: str, action_id: str) -> dict[str, Any] | None
 
 
 def in_cooldown(spec: dict[str, Any], previous: dict[str, Any] | None) -> bool:
-    if not previous or previous.get("status") != "completed":
+    if not previous or previous.get("status") not in {"completed", "cooldown", "skipped_cooldown"}:
         return False
     cooldown_s = int(spec.get("cooldown_s", 0) or 0)
     if cooldown_s <= 0:
         return True
     completed_at = float(previous.get("completed_at_epoch", 0.0) or 0.0)
+    if not completed_at and isinstance(previous.get("previous"), dict):
+        completed_at = float(previous["previous"].get("completed_at_epoch", 0.0) or 0.0)
     return bool(completed_at and time.time() - completed_at < cooldown_s)
+
+
+def cooldown_completed_epoch(previous: dict[str, Any] | None) -> float | None:
+    if not previous:
+        return None
+    completed_at = float(previous.get("completed_at_epoch", 0.0) or 0.0)
+    if completed_at:
+        return completed_at
+    if isinstance(previous.get("previous"), dict):
+        return cooldown_completed_epoch(previous["previous"])
+    return None
 
 
 def resolve_repo_path(value: str) -> Path:
@@ -195,7 +208,10 @@ def review_motion(motion_id: str, execute: bool = False, force: bool = False) ->
     if not tally["approved"]:
         event["status"] = "waiting_for_votes"
     elif in_cooldown(spec, previous) and not force:
-        event["status"] = "cooldown"
+        event["status"] = "skipped_cooldown"
+        completed_epoch = cooldown_completed_epoch(previous)
+        if completed_epoch:
+            event["completed_at_epoch"] = completed_epoch
         event["previous"] = previous
     elif not execute:
         event["status"] = "ready"
@@ -212,7 +228,7 @@ def review_motion(motion_id: str, execute: bool = False, force: bool = False) ->
 
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     local_event_path(motion_id, action_id).write_text(json.dumps(event, indent=2, ensure_ascii=False), encoding="utf-8")
-    if execute or event.get("status") in {"ready", "waiting_for_votes", "cooldown"}:
+    if execute or event.get("status") in {"ready", "waiting_for_votes", "skipped_cooldown"}:
         firebase_put(f"parliament/actions/{motion_id}/{action_id}", event, timeout=5.0)
     return event
 

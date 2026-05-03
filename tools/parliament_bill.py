@@ -108,12 +108,15 @@ def proposal_from_record(record: dict[str, Any]) -> dict[str, Any] | None:
 
 def collect_proposals(motion_id: str) -> list[dict[str, Any]]:
     speeches = flatten_firebase_speeches(firebase_get(f"parliament/speeches/{motion_id}", timeout=8.0))
-    out = []
+    by_id: dict[str, dict[str, Any]] = {}
     for record in speeches:
         proposal = proposal_from_record(record)
         if proposal:
-            out.append({"speaker": record.get("speaker"), "created_at": record.get("created_at"), "proposal": proposal})
-    return out
+            proposal_id = str(proposal.get("proposal_id", ""))
+            item = {"speaker": record.get("speaker"), "created_at": record.get("created_at"), "proposal": proposal}
+            if proposal_id not in by_id or str(record.get("created_at", "")) >= str(by_id[proposal_id].get("created_at", "")):
+                by_id[proposal_id] = item
+    return sorted(by_id.values(), key=lambda item: str(item.get("created_at", "")))
 
 
 def compile_proposal(motion_id: str, item: dict[str, Any], node: str) -> dict[str, Any]:

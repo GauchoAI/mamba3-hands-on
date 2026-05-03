@@ -122,6 +122,15 @@ stance: Exactness first.
         self.assertTrue(tally["approved"])
         self.assertEqual(tally["approvals"], 2)
 
+    def test_action_cooldown_accepts_previous_cooldown_wrapper(self) -> None:
+        from tools.parliament_action import in_cooldown
+
+        previous = {
+            "status": "skipped_cooldown",
+            "previous": {"status": "completed", "completed_at_epoch": 9999999999.0},
+        }
+        self.assertTrue(in_cooldown({"cooldown_s": 86400}, previous))
+
     def test_action_manifest_rejects_unallowlisted_commands(self) -> None:
         import tempfile
 
