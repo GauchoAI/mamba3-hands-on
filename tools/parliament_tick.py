@@ -117,27 +117,39 @@ def run_tick(args: argparse.Namespace) -> int:
             str(args.timeout_s),
         ]
         t0 = time.time()
-        proc = subprocess.run(
-            cmd,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=args.wall_timeout_s,
-        )
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=args.wall_timeout_s,
+            )
+            stdout = proc.stdout
+            stderr = proc.stderr
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode("utf-8", errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode("utf-8", errors="replace")
+            returncode = 124
         wall_s = round(time.time() - t0, 2)
-        raw_path.write_text(proc.stdout, encoding="utf-8")
+        raw_path.write_text(stdout, encoding="utf-8")
 
         result = {
             "tick": tick,
             "panel": panel,
             "cmd": cmd,
-            "returncode": proc.returncode,
+            "returncode": returncode,
             "wall_s": wall_s,
             "raw_path": str(raw_path.relative_to(ROOT)),
-            "stderr_tail": proc.stderr[-4000:],
+            "stderr_tail": str(stderr)[-4000:],
         }
-        if proc.returncode == 0:
-            payload = json.loads(proc.stdout)
+        if returncode == 0:
+            payload = json.loads(stdout)
             result.update(summarize_chamber(payload))
         else:
             result["schema"] = "parliament.scheduler_tick.v1"
@@ -147,20 +159,20 @@ def run_tick(args: argparse.Namespace) -> int:
         state["tick"] = tick + 1
         state["last_summary"] = str(summary_path.relative_to(ROOT))
         state["last_panel"] = panel
-        state["last_returncode"] = proc.returncode
+        state["last_returncode"] = returncode
         state["updated_at"] = result["created_at"]
         save_state(state)
 
         print(json.dumps(result, indent=2, ensure_ascii=False), flush=True)
-        return proc.returncode
+        return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one bounded Parliament scheduler tick")
     parser.add_argument("--motion", type=Path, default=DEFAULT_MOTION)
     parser.add_argument("--backend", default="auto")
-    parser.add_argument("--panel-size", type=int, default=2)
-    parser.add_argument("--timeout-s", type=int, default=120, help="Per-speaker backend timeout")
+    parser.add_argument("--panel-size", type=int, default=1)
+    parser.add_argument("--timeout-s", type=int, default=240, help="Per-speaker backend timeout")
     parser.add_argument("--wall-timeout-s", type=int, default=270, help="Whole tick timeout")
     parser.add_argument("--speaker", action="append", help="Override rotating speaker list")
     args = parser.parse_args(argv)
