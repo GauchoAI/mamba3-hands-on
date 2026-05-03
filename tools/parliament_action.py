@@ -132,6 +132,21 @@ def cooldown_completed_epoch(previous: dict[str, Any] | None) -> float | None:
     return None
 
 
+def compact_previous_event(previous: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not previous:
+        return None
+    return {
+        "schema": previous.get("schema"),
+        "motion_id": previous.get("motion_id"),
+        "action_id": previous.get("action_id"),
+        "status": previous.get("status"),
+        "created_at": previous.get("created_at"),
+        "completed_at": previous.get("completed_at"),
+        "completed_at_epoch": cooldown_completed_epoch(previous),
+        "returncode": (previous.get("result") or {}).get("returncode") if isinstance(previous.get("result"), dict) else None,
+    }
+
+
 def resolve_repo_path(value: str) -> Path:
     path = (ROOT / value).resolve()
     if ROOT.resolve() not in path.parents and path != ROOT.resolve():
@@ -212,7 +227,7 @@ def review_motion(motion_id: str, execute: bool = False, force: bool = False) ->
         completed_epoch = cooldown_completed_epoch(previous)
         if completed_epoch:
             event["completed_at_epoch"] = completed_epoch
-        event["previous"] = previous
+        event["previous"] = compact_previous_event(previous)
     elif not execute:
         event["status"] = "ready"
     else:
