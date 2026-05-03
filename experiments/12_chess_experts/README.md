@@ -20,6 +20,10 @@ goal is to improve the chess expert itself.
   static artifact explorer for the KPI-ranked checkpoint strategy sweep,
   curriculum mix, metrics, and full-game replay.
 
+Latest human playtest: the deployed `online_top12` champion is beatable but
+dangerous. A human win converted two promoted queens into a mate on move 60:
+`60. Qh4#`.
+
 ## Subsections
 
 - Teacher distillation adapter: use a UCI chess engine such as Stockfish as a

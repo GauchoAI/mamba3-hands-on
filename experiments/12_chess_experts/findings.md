@@ -1481,3 +1481,29 @@ highest kpi.value, then lowest tactical_risk, then lowest publish_rank
 This makes checkpoint publication more natural: keep one checkpoint per
 strategy, require a bounded KPI on each checkpoint, and let the manifest choose
 the online champion automatically.
+
+Ninth pass: deployed human playtest.
+
+The deployed GitHub Pages board now defaults to `online_top12`, loading the
+playable checkpoint manifest from Hugging Face. In a manual playtest, the human
+player beat the current champion after a long conversion:
+
+```text
+1. g4 e5 2. h4 e4 3. f3 exf3 4. exf3 Qe7+ 5. Qe2 Qxe2+ 6. Bxe2 d5
+7. c4 dxc4 8. Bxc4 Bc5 9. d3 Bxg1 10. Rxg1 c5 11. Kd2 b5
+12. Bb3 c4 13. Bc2 cxd3 14. Bxd3 f5 15. Re1+ Kd7 16. Re5 fxg4
+17. fxg4 Kd6 18. Rxb5 Nd7 19. Nc3 h6 20. Ne4+ Ke6 21. b4 Ke7
+22. Bb2 Ke6 23. Bxg7 Rh7 24. Bd4 a6 25. Rc5 Nxc5 26. Bxc5 Rd7
+27. Re1 Ke5 28. g5 hxg5 29. Nxg5+ Kf4 30. Re4+ Kf5 31. Ke3 Rd5
+32. Nf7 Bd7 33. Re5+ Kg4 34. Rxd5 Re8+ 35. Re5 Rxe5+
+36. Nxe5+ Kxh4 37. Nxd7 Kg4 38. Bxa6 Kf5 39. b5 Kg4 40. b6 Kf5
+41. b7 Kg4 42. b8=Q Nh6 43. Qf4+ Kh5 44. Qxh6+ Kxh6 45. Bb7 Kg5
+46. a4 Kf5 47. a5 Kg4 48. a6 Kf5 49. a7 Kg4 50. a8=Q Kf5
+51. Bc8 Kg4 52. Qe4+ Kg5 53. Kf3 Kh5 54. Qg4+ Kh6 55. Kg3 Kh7
+56. Kf4 Kh8 57. Kf5 Kh7 58. Kf6 Kh8 59. Kf7 Kh7 60. Qh4#
+```
+
+Interpretation: the champion is now strong enough to create a difficult game,
+but it still loses long-horizon endgames. That is the next useful weakness:
+promotion races, king opposition, and repetition avoidance are now more
+valuable targets than another small opening-tactic tweak.
