@@ -68,6 +68,7 @@
       grid-template-columns: repeat(8, minmax(0, 1fr));
       grid-template-rows: repeat(8, minmax(0, 1fr));
       max-width: 560px;
+      position: relative;
       width: 100%;
     }
     .square {
@@ -93,6 +94,24 @@
       inset: 0;
       pointer-events: none;
       position: absolute;
+    }
+    .square.animating-to {
+      color: transparent;
+    }
+    .piece-ghost {
+      align-items: center;
+      display: grid;
+      font-family: "Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols2", serif;
+      font-size: clamp(30px, 7vw, 58px);
+      justify-items: center;
+      left: 0;
+      line-height: 1;
+      pointer-events: none;
+      position: fixed;
+      top: 0;
+      transform: translate(var(--from-x), var(--from-y));
+      transition: transform 220ms ease-out;
+      z-index: 10;
     }
     .coord {
       color: rgba(0, 0, 0, .55);
@@ -209,10 +228,12 @@
       flipped: false,
       last: [],
       human: "white",
-      provider: ""
+      provider: "",
+      busy: false
     };
 
     ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/";
+    const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
     function squareIndex(square) {
       return files.indexOf(square[0]) + 8 * (Number(square[1]) - 1);
@@ -508,6 +529,37 @@
       const suffix = lastExpert ? ` Expert played ${lastExpert.san}.` : "";
       return `${side} to move.${suffix} Runtime: ${state.provider || "loading"}.`;
     }
+    function moveGlyph(move) {
+      const type = (move.promotion || move.piece || "").toLowerCase();
+      const symbol = move.color === "w" ? type.toUpperCase() : type;
+      return pieceGlyph[symbol] || "";
+    }
+    function animateMove(move) {
+      const from = document.querySelector(`[data-square="${move.from}"]`);
+      const to = document.querySelector(`[data-square="${move.to}"]`);
+      const glyph = moveGlyph(move);
+      if (!from || !to || !glyph || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      const a = from.getBoundingClientRect();
+      const b = to.getBoundingClientRect();
+      const ghost = document.createElement("div");
+      ghost.className = "piece-ghost";
+      ghost.textContent = glyph;
+      ghost.style.width = `${a.width}px`;
+      ghost.style.height = `${a.height}px`;
+      ghost.style.setProperty("--from-x", `${a.left}px`);
+      ghost.style.setProperty("--from-y", `${a.top}px`);
+      ghost.style.setProperty("--to-x", `${b.left}px`);
+      ghost.style.setProperty("--to-y", `${b.top}px`);
+      to.classList.add("animating-to");
+      document.body.appendChild(ghost);
+      requestAnimationFrame(() => {
+        ghost.style.transform = "translate(var(--to-x), var(--to-y))";
+      });
+      setTimeout(() => {
+        ghost.remove();
+        to.classList.remove("animating-to");
+      }, 260);
+    }
     function render() {
       const ranks = state.flipped ? [1,2,3,4,5,6,7,8] : [8,7,6,5,4,3,2,1];
       const fileList = state.flipped ? [...files].reverse() : [...files];
@@ -534,11 +586,26 @@
       state.human = $("side").value;
       state.selected = "";
       state.last = [];
-      $("status").textContent = "Loading model...";
-      if (state.human === "black") await expertMove();
       render();
+      if (state.human === "black") {
+        state.busy = true;
+        $("status").textContent = "Expert thinking...";
+        const reply = await expertMoveWithDelay();
+        render();
+        animateMove(reply);
+        $("status").textContent = statusText(reply);
+        state.busy = false;
+      }
+    }
+    async function expertMoveWithDelay() {
+      const started = performance.now();
+      const move = await expertMove();
+      const remaining = 1000 - (performance.now() - started);
+      if (remaining > 0) await sleep(remaining);
+      return move;
     }
     async function playMoveText(text) {
+      if (state.busy) return;
       const moveText = text.trim();
       if (!moveText) return;
       let move = null;
@@ -553,13 +620,26 @@
       }
       if (!move) throw new Error(`Illegal move: ${moveText}`);
       state.last = [move.from, move.to];
+      state.selected = "";
+      render();
+      animateMove(move);
       let reply = null;
-      if (!state.chess.isGameOver()) reply = await expertMove();
+      if (!state.chess.isGameOver()) {
+        state.busy = true;
+        $("status").textContent = "Expert thinking...";
+        try {
+          reply = await expertMoveWithDelay();
+        } finally {
+          state.busy = false;
+        }
+      }
       $("moveInput").value = "";
       render();
+      if (reply) animateMove(reply);
       $("status").textContent = statusText(reply);
     }
     $("board").addEventListener("click", event => {
+      if (state.busy) return;
       const btn = event.target.closest("[data-square]");
       if (!btn) return;
       const square = btn.dataset.square;
@@ -589,6 +669,7 @@
       });
     });
     $("moveBtn").addEventListener("click", () => {
+      if (state.busy) return;
       playMoveText($("moveInput").value).catch(err => $("status").textContent = err.message);
     });
     $("moveInput").addEventListener("keydown", event => {
