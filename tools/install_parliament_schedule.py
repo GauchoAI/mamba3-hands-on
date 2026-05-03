@@ -45,6 +45,7 @@ def main() -> int:
     )
     log_dir = ROOT / "runs" / "parliament" / "scheduler"
     log_dir.mkdir(parents=True, exist_ok=True)
+    path_value = f"{Path.home() / '.local' / 'bin'}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     plist = {
         "Label": LABEL,
         "ProgramArguments": ["/bin/zsh", "-lc", shell_cmd],
@@ -54,7 +55,7 @@ def main() -> int:
         "StandardOutPath": str(log_dir / "launchd.out.log"),
         "StandardErrorPath": str(log_dir / "launchd.err.log"),
         "EnvironmentVariables": {
-            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+            "PATH": path_value,
         },
     }
     PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
