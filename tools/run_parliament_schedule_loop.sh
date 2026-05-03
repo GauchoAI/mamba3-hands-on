@@ -9,6 +9,8 @@ PANEL_SIZE="${PARLIAMENT_PANEL_SIZE:-2}"
 TIMEOUT_S="${PARLIAMENT_TIMEOUT_S:-120}"
 WALL_TIMEOUT_S="${PARLIAMENT_WALL_TIMEOUT_S:-270}"
 PYTHON_BIN="${PARLIAMENT_PYTHON:-/opt/homebrew/bin/python3}"
+PERSIST="${PARLIAMENT_PERSIST:-0}"
+ARCHIVE="${PARLIAMENT_ARCHIVE:-0}"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
@@ -16,7 +18,15 @@ fi
 
 mkdir -p runs/parliament/scheduler
 
-echo "[parliament-loop] start interval=${INTERVAL_S}s backend=${BACKEND} panel=${PANEL_SIZE}" >&2
+EXTRA_ARGS=()
+if [[ "$PERSIST" == "1" ]]; then
+  EXTRA_ARGS+=(--persist)
+fi
+if [[ "$ARCHIVE" == "1" ]]; then
+  EXTRA_ARGS+=(--archive)
+fi
+
+echo "[parliament-loop] start interval=${INTERVAL_S}s backend=${BACKEND} panel=${PANEL_SIZE} persist=${PERSIST} archive=${ARCHIVE}" >&2
 
 while true; do
   date -u +"[parliament-loop] tick %Y-%m-%dT%H:%M:%SZ" >&2
@@ -25,6 +35,7 @@ while true; do
     --panel-size "$PANEL_SIZE" \
     --timeout-s "$TIMEOUT_S" \
     --wall-timeout-s "$WALL_TIMEOUT_S" \
+    "${EXTRA_ARGS[@]}" \
     || true
   sleep "$INTERVAL_S"
 done
