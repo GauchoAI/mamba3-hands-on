@@ -10,7 +10,7 @@
     "host": "192.168.0.170",
     "port": 22,
     "user": "miguel_lemos",
-    "repo_path": "~/mamba3-hands-on",
+    "repo_path": "/Volumes/TB4/mac-mini-storage/air-home/Desktop/mamba3-hands-on",
     "_chip": "Apple M4, 10 cores",
     "_macos": "15.1.1"
   }

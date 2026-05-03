@@ -123,6 +123,32 @@ Keep a node online:
 .venv/bin/python tools/parliament.py register-node --watch --interval-s 30
 ```
 
+Run one bounded scheduler tick:
+
+```bash
+.venv/bin/python tools/parliament_tick.py
+```
+
+Install the five-minute local schedule:
+
+```bash
+.venv/bin/python tools/install_parliament_schedule.py --interval-s 300
+```
+
+Each tick invites a rotating two-speaker panel against
+`parliament/motions/small_lm_recovery.md`, writes raw and summarized dry-run
+records under `runs/parliament/scheduler/`, and uses a lock so slow model
+backends cannot overlap the next tick.
+
+If macOS blocks LaunchAgent access to the Desktop working tree, run the same
+schedule from the current trusted shell:
+
+```bash
+nohup tools/run_parliament_schedule_loop.sh \
+  > runs/parliament/scheduler/nohup.out.log \
+  2> runs/parliament/scheduler/nohup.err.log &
+```
+
 ## Five-Minute Iteration Rule
 
 A Parliament run should fit the lab's normal rhythm. Even long training should

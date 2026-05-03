@@ -83,6 +83,14 @@ class ParliamentSmokeTests(unittest.TestCase):
         self.assertEqual(expand_speakers(["all"]), DEFAULT_CHAMBER_SPEAKERS)
         self.assertEqual(expand_speakers(["claude-opposition-architect"]), ["claude-opposition-architect"])
 
+    def test_scheduler_panel_rotates(self) -> None:
+        from tools.parliament_tick import choose_panel
+
+        speakers = ["a", "b", "c", "d", "e"]
+        self.assertEqual(choose_panel(0, speakers, 2), ["a", "b"])
+        self.assertEqual(choose_panel(1, speakers, 2), ["c", "d"])
+        self.assertEqual(choose_panel(2, speakers, 2), ["e", "a"])
+
     def test_training_heartbeat_without_checkpoint_is_silent(self) -> None:
         result = run_parliament(
             "event",
