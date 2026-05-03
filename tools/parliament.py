@@ -346,6 +346,8 @@ def claude_backend(prompt: str, timeout_s: int) -> dict[str, Any]:
         "claude",
         "-p",
         prompt,
+        "--system-prompt",
+        "You are a bounded Parliament speech generator. Do not use tools; repository evidence is already included in the prompt. Return only one JSON object with the required speech fields.",
         "--output-format",
         "json",
         "--no-session-persistence",
