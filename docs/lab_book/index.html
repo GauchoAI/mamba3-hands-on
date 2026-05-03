@@ -281,6 +281,18 @@
       margin-bottom: 3px;
       text-transform: uppercase;
     }
+    .source-inline {
+      background: transparent;
+      border: 0;
+      color: var(--accent);
+      cursor: pointer;
+      font: inherit;
+      min-height: 0;
+      padding: 0;
+      text-align: left;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
     .doc-frontmatter-head {
       align-items: center;
       display: flex;
@@ -450,6 +462,18 @@
       gap: 14px;
       grid-template-columns: minmax(260px, 360px) minmax(0, 1fr);
       padding: 14px;
+    }
+    .feature-play {
+      border-bottom: 1px solid var(--line);
+      padding: 14px;
+    }
+    .feature-play-frame {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      display: block;
+      height: min(900px, 86vh);
+      min-height: 720px;
+      width: 100%;
     }
     .mini-chess-board {
       aspect-ratio: 1 / 1;
@@ -1081,13 +1105,38 @@
       const repoPath = resolveRepoLink(href, sourcePath);
       return repoPath ? rawRepoUrl(repoPath) : href;
     }
+    function renderedPageUrl(repoPath) {
+      const clean = cleanRepoPath(repoPath);
+      if (clean.startsWith("docs/")) return docsRelativeUrl(clean);
+      if (clean.startsWith("experiments/12_chess_experts/")) {
+        return docsRelativeUrl(`chess/${clean.split("/").pop()}`);
+      }
+      return "";
+    }
+    function markdownLinkUrl(href, sourcePath = "") {
+      if (!href || href.startsWith("#") || href.startsWith("mailto:") || /^https?:\/\//i.test(href)) return href;
+      const hash = href.includes("#") ? `#${href.split("#").slice(1).join("#")}` : "";
+      const query = href.includes("?") ? `?${href.split("?")[1].split("#")[0]}` : "";
+      const repoPath = resolveRepoLink(href, sourcePath);
+      if (!repoPath) return href;
+      if (/\.html?$/i.test(repoPath)) {
+        const page = renderedPageUrl(repoPath);
+        if (page) return `${page}${query}${hash}`;
+      }
+      return href;
+    }
     function normalizeMarkdownImages(markdown, sourcePath = "") {
       return markdown.replace(/!\[([^\]]*)\]\(([^)\s]+)(\s+\"[^\"]*\")?\)/g, (_match, alt, href, title = "") => {
         return `![${alt}](${imageRepoUrl(href, sourcePath)}${title})`;
       });
     }
+    function normalizeMarkdownLinks(markdown, sourcePath = "") {
+      return markdown.replace(/(?<!!)\[([^\]]+)\]\(([^)\s]+)(\s+\"[^\"]*\")?\)/g, (_match, text, href, title = "") => {
+        return `[${text}](${markdownLinkUrl(href, sourcePath)}${title})`;
+      });
+    }
     function renderMarked(markdown, sourcePath = "") {
-      return marked.parse(normalizeMarkdownImages(markdown, sourcePath));
+      return marked.parse(normalizeMarkdownLinks(normalizeMarkdownImages(markdown, sourcePath), sourcePath));
     }
     function renderMarkdownBody(markdown, attrs = {}, sourcePath = "") {
       const body = stripLeadHeading(markdown).trim();
@@ -1115,7 +1164,12 @@
         ["Sections", attrs.sections === "true" ? "sectioned" : (attrs.open_sections != null ? `${attrs.open_sections} open` : "")],
       ].filter(([, value]) => value !== "");
       if (!items.length) return "";
-      return `<div class="chapter-card">${attrs.summary ? `<p>${esc(attrs.summary)}</p>` : ""}<div class="chapter-card-grid">${items.map(([label, value]) => `<div class="chapter-card-item"><strong>${esc(label)}</strong>${esc(value)}</div>`).join("")}</div></div>`;
+      return `<div class="chapter-card">${attrs.summary ? `<p>${esc(attrs.summary)}</p>` : ""}<div class="chapter-card-grid">${items.map(([label, value]) => {
+        const rendered = label === "Source"
+          ? `<button class="source-inline" data-open-source="${esc(value)}" type="button">${esc(value)}</button>`
+          : esc(value);
+        return `<div class="chapter-card-item"><strong>${esc(label)}</strong>${rendered}</div>`;
+      }).join("")}</div></div>`;
     }
     function md(path) {
       const text = state.markdown[path] || "";
@@ -1145,6 +1199,9 @@
             <a class="chapter-link" href="${esc(playUrl)}">Play current champion</a>
             <a class="chapter-link" href="${esc(labUrl)}">Open strategy sweep</a>
           </div>
+        </div>
+        <div class="feature-play">
+          <iframe class="feature-play-frame" title="Playable chess champion" src="${esc(playUrl)}" loading="lazy"></iframe>
         </div>
         <div class="feature-card-body">
           <div class="mini-chess-board" data-chess-board><div class="empty">Loading board...</div></div>
@@ -1778,9 +1835,16 @@
       });
     }
     function attachSourceLinkHandlers() {
+      document.querySelectorAll("[data-open-source]").forEach(button => {
+        button.addEventListener("click", () => {
+          const repoPath = button.getAttribute("data-open-source");
+          if (repoPath) openSourceModal(repoPath);
+        });
+      });
       document.querySelectorAll(".prose a[href]").forEach(link => {
         link.addEventListener("click", (event) => {
           const href = link.getAttribute("href") || "";
+          if (/\.html?(?:[?#]|$)/i.test(href)) return;
           const sourcePath = link.closest(".prose")?.dataset.sourcePath || "";
           const repoPath = resolveRepoLink(href, sourcePath);
           if (!repoPath || !isViewableSource(repoPath)) return;
