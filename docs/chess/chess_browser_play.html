@@ -166,7 +166,11 @@
   <script type="module">
     import { Chess } from "https://cdn.jsdelivr.net/npm/chess.js@1.0.0/+esm";
 
-    const ASSET_BASE = "https://huggingface.co/miguelemosreverte/mamba3-chess-experts/resolve/main/chess_playable_assets";
+    const params = new URLSearchParams(location.search);
+    const localAssets = params.get("localAssets") === "1";
+    const ASSET_BASE = localAssets
+      ? "../../experiments/12_chess_experts/checkpoints/chess_playable_assets"
+      : "https://huggingface.co/miguelemosreverte/mamba3-chess-experts/resolve/main/chess_playable_assets";
     const LEGACY_BASE = "https://huggingface.co/miguelemosreverte/mamba3-chess-experts/resolve/main/chess_full_game_trace_arena";
     const MANIFEST_URL = `${ASSET_BASE}/playable_manifest.json`;
     let MODELS = {
@@ -445,6 +449,7 @@
             output: policy.output,
             topK: policy.top_k || existing.topK,
             valueWeight: policy.value_weight || existing.valueWeight,
+            feature: policy.kind === "safety_candidate_reranker_value_head" ? onlineCandidateFeatures : existing.feature,
             kpi: policy.kpi
           };
         }
