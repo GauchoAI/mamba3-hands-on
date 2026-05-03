@@ -151,6 +151,8 @@ def run_procedural_chamber(args: argparse.Namespace, reason: str) -> dict[str, A
         "--trace",
         "--firebase",
         "--firebase-prior",
+        "--prior-limit",
+        "4",
         "--evidence-cmd",
         "cat runs/parliament/compiled_bills/procedural_bill_request.json",
         "--evidence-cmd",

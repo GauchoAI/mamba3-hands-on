@@ -206,14 +206,14 @@ def build_prompt(identity: dict[str, Any], motion: dict[str, Any], prior_speeche
     judge_prompt = (PROMPTS_DIR / "judge.md").read_text(encoding="utf-8")
     motion_body = str(motion.get("body", ""))
     compact_prior = []
-    for record in prior_speeches[-6:]:
+    for record in prior_speeches[-4:]:
         speech = record.get("speech", {})
         compact_prior.append(
             {
                 "speaker": record.get("speaker"),
                 "position": speech.get("position"),
-                "body": str(speech.get("body", ""))[:500],
-                "prediction": str(speech.get("prediction", ""))[:300],
+                "body": str(speech.get("body", ""))[:260],
+                "prediction": str(speech.get("prediction", ""))[:160],
                 "confidence": speech.get("confidence"),
             }
         )
@@ -360,6 +360,7 @@ def claude_backend(prompt: str, timeout_s: int) -> dict[str, Any]:
         prompt,
         "--system-prompt",
         "You are a bounded Parliament speech generator. Do not use tools; repository evidence is already included in the prompt. Return only one JSON object with the required speech fields.",
+        "You are a bounded Parliament speech generator. Do not use tools; repository evidence is already included. Return only one compact JSON object. Keep body, prediction, and falsifier under 70 words each. Do not restate old speeches.",
         "--output-format",
         "json",
         "--no-session-persistence",
@@ -368,7 +369,7 @@ def claude_backend(prompt: str, timeout_s: int) -> dict[str, Any]:
         "--effort",
         "low",
         "--max-budget-usd",
-        os.environ.get("PARLIAMENT_CLAUDE_MAX_BUDGET_USD", "0.05"),
+        os.environ.get("PARLIAMENT_CLAUDE_MAX_BUDGET_USD", "0.08"),
         "--tools",
         "",
     ]

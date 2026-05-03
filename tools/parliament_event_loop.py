@@ -208,6 +208,8 @@ def run_event_loop(args: argparse.Namespace) -> dict[str, Any]:
             "--trace",
             "--firebase",
             "--firebase-prior",
+            "--prior-limit",
+            "6",
             "--evidence-cmd",
             "cat runs/parliament/compiled_bills/procedural_bill_request.json",
             "--evidence-cmd",
