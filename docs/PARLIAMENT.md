@@ -182,6 +182,27 @@ The first bill is `parliament/actions/small_lm_recovery.json`. It dispatches
 Mac Mini, proving that an approved Parliament motion causes concrete cluster
 work without allowing arbitrary shell text from a speech to run.
 
+## Proposal Compiler And Watchdog
+
+The harness must not invent the research agenda. When the approved work is
+complete, cooling down, or absent, `tools/parliament_watchdog.py` opens the
+procedural motion `parliament/motions/procedural_bill_request.md`. That motion
+asks members to attach an executable `proposal` object or object with reasons.
+
+`tools/parliament_bill.py` compiles only model-authored proposals that satisfy
+`parliament/proposal_schema.json`: bounded runtime, repo-local command, expected
+artifacts, KPI, and falsifier. Compiled bills are written to:
+
+```text
+/parliament/compiled_bills/{motion_id}
+runs/parliament/compiled_bills/{motion_id}.json
+```
+
+The action clerk can then load a compiled bill and execute it through the same
+quorum and command-policy checks. The no-silence rule is therefore procedural:
+if no job is running and no executable bill is ready, the watchdog asks
+Parliament for bills; it does not choose the experiment itself.
+
 ## Queryable Log Contract
 
 Moving forward, every chapter may cite Parliament reasoning by reference rather

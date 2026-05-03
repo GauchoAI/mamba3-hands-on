@@ -10,6 +10,8 @@ Procedure:
 Scheduled cadence:
 - Prefer one concrete claim, one concrete next experiment, and one falsifier.
 - If there is no new checkpoint, KPI movement, failure, or publication event, remain silent.
+- If the motion is procedural and asks for executable proposals, do not stay
+  silent. Either object with a concrete reason, or attach one proposal.
 - Keep body, prediction, and falsifier concise enough for another judge to read in the next five-minute tick.
 
 Required speech fields:
@@ -20,3 +22,17 @@ Required speech fields:
 - prediction: what should happen if your position is correct
 - falsifier: what result would prove you wrong
 - confidence: number from 0 to 1
+
+Optional proposal field:
+- proposal: an object, only when the motion asks for executable bills.
+  Required proposal keys:
+  - proposal_id: stable lowercase id, letters/numbers/dashes/underscores only
+  - title: concise bill title
+  - objective: what this bill tries to prove
+  - hypothesis: expected result
+  - command: repository-relative command to run
+  - max_wall_s: maximum runtime in seconds, normally <= 300
+  - expected_artifacts: list of paths the command should write
+  - kpi: object with namespace, metric, direction, and target
+  - falsifier: concrete result that kills the bill
+  - follow_up: what Parliament should inspect after completion

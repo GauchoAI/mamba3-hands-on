@@ -136,6 +136,41 @@ stance: Exactness first.
                     ["git pull --ff-only && .venv/bin/python tools/parliament_action.py review --motion small_lm_recovery"],
                 )
 
+    def test_bill_proposal_rejects_destructive_shell(self) -> None:
+        from tools.parliament_bill import validate_proposal
+
+        proposal = {
+            "proposal_id": "bad-shell",
+            "title": "Bad shell",
+            "objective": "should fail",
+            "hypothesis": "should fail",
+            "command": ".venv/bin/python ok.py && rm -rf runs",
+            "max_wall_s": 60,
+            "expected_artifacts": ["runs/x.json"],
+            "kpi": {"namespace": "test", "metric": "score", "direction": "increase", "target": 0.1},
+            "falsifier": "none",
+            "follow_up": "none",
+        }
+        errors = validate_proposal(proposal)
+        self.assertTrue(any("shell control" in error for error in errors))
+
+    def test_bill_proposal_accepts_bounded_repo_python_command(self) -> None:
+        from tools.parliament_bill import validate_proposal
+
+        proposal = {
+            "proposal_id": "bounded-probe",
+            "title": "Bounded probe",
+            "objective": "Run one bounded probe",
+            "hypothesis": "Metric improves",
+            "command": ".venv/bin/python tools/parliament_action.py review --motion small_lm_recovery",
+            "max_wall_s": 60,
+            "expected_artifacts": ["runs/parliament/actions/small_lm_recovery-small_lm_recovery_parliament_smoke.json"],
+            "kpi": {"namespace": "parliament/test", "metric": "returncode", "direction": "hit", "target": 0},
+            "falsifier": "nonzero returncode",
+            "follow_up": "review action event",
+        }
+        self.assertEqual(validate_proposal(proposal), [])
+
     def test_training_heartbeat_without_checkpoint_is_silent(self) -> None:
         result = run_parliament(
             "event",

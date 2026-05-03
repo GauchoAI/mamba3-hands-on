@@ -1,0 +1,20 @@
+{
+  "schema": "parliament.proposal_schema.v1",
+  "required": [
+    "proposal_id",
+    "title",
+    "objective",
+    "hypothesis",
+    "command",
+    "max_wall_s",
+    "expected_artifacts",
+    "kpi",
+    "falsifier",
+    "follow_up"
+  ],
+  "kpi_required": ["namespace", "metric", "direction", "target"],
+  "command_policy": {
+    "description": "The compiler accepts only bounded repo-local commands. Destructive shell metacharacters and filesystem escape paths are rejected.",
+    "max_wall_s": 300
+  }
+}

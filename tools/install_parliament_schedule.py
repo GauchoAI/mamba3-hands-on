@@ -25,6 +25,8 @@ def main() -> int:
     parser.add_argument("--archive", action="store_true")
     parser.add_argument("--execute-actions", action="store_true")
     parser.add_argument("--action-timeout-s", type=int, default=420)
+    parser.add_argument("--watchdog", action="store_true")
+    parser.add_argument("--watchdog-backend", default="auto")
     parser.add_argument("--uninstall", action="store_true")
     args = parser.parse_args()
 
@@ -54,6 +56,8 @@ def main() -> int:
         shell_cmd += " --archive"
     if args.execute_actions:
         shell_cmd += " --execute-actions"
+    if args.watchdog:
+        shell_cmd += f" --watchdog --watchdog-backend {args.watchdog_backend}"
     log_dir = ROOT / "runs" / "parliament" / "scheduler"
     log_dir.mkdir(parents=True, exist_ok=True)
     path_value = f"{Path.home() / '.local' / 'bin'}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"

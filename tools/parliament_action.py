@@ -26,6 +26,13 @@ def utc_now() -> str:
 def load_action_spec(motion_id: str) -> dict[str, Any] | None:
     path = ACTION_DIR / f"{motion_id}.json"
     if not path.exists():
+        compiled = firebase_get(f"parliament/compiled_bills/{motion_id}", timeout=5.0)
+        if isinstance(compiled, dict):
+            bills = compiled.get("bills", [])
+            if isinstance(bills, list):
+                for bill in reversed(bills):
+                    if isinstance(bill, dict) and bill.get("status") == "compiled" and isinstance(bill.get("action_spec"), dict):
+                        return bill["action_spec"]
         return None
     spec = json.loads(path.read_text(encoding="utf-8"))
     if spec.get("motion_id") != motion_id:

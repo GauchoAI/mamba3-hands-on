@@ -228,6 +228,35 @@ def run_tick(args: argparse.Namespace) -> int:
                     "stdout_tail": action_proc.stdout[-6000:],
                     "stderr_tail": action_proc.stderr[-3000:],
                 }
+            if args.watchdog and args.persist:
+                watchdog_cmd = [
+                    repo_python(),
+                    str(ROOT / "tools" / "parliament_watchdog.py"),
+                    "--motion",
+                    str(args.motion.stem),
+                    "--backend",
+                    args.watchdog_backend,
+                    "--timeout-s",
+                    str(args.watchdog_timeout_s),
+                    "--wall-timeout-s",
+                    str(args.watchdog_wall_timeout_s),
+                    "--action-timeout-s",
+                    str(args.action_timeout_s),
+                    "--execute",
+                ]
+                watchdog_proc = subprocess.run(
+                    watchdog_cmd,
+                    cwd=ROOT,
+                    capture_output=True,
+                    text=True,
+                    timeout=args.watchdog_wall_timeout_s + args.action_timeout_s + 90,
+                )
+                result["watchdog"] = {
+                    "cmd": watchdog_cmd,
+                    "returncode": watchdog_proc.returncode,
+                    "stdout_tail": watchdog_proc.stdout[-6000:],
+                    "stderr_tail": watchdog_proc.stderr[-3000:],
+                }
         else:
             result["schema"] = "parliament.scheduler_tick.v1"
             result["created_at"] = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -256,6 +285,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--archive", action="store_true", help="Sync Parliament artifacts to Hugging Face when HF_TOKEN is set")
     parser.add_argument("--execute-actions", action="store_true", help="Execute allowlisted actions when Parliament has approved them")
     parser.add_argument("--action-timeout-s", type=int, default=420, help="Whole action executor timeout")
+    parser.add_argument("--watchdog", action="store_true", help="Run idle watchdog after a persisted tick")
+    parser.add_argument("--watchdog-backend", default="auto")
+    parser.add_argument("--watchdog-timeout-s", type=int, default=120)
+    parser.add_argument("--watchdog-wall-timeout-s", type=int, default=270)
     args = parser.parse_args(argv)
     return run_tick(args)
 

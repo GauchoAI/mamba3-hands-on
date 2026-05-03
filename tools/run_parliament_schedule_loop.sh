@@ -13,6 +13,8 @@ PERSIST="${PARLIAMENT_PERSIST:-0}"
 ARCHIVE="${PARLIAMENT_ARCHIVE:-0}"
 EXECUTE_ACTIONS="${PARLIAMENT_EXECUTE_ACTIONS:-0}"
 ACTION_TIMEOUT_S="${PARLIAMENT_ACTION_TIMEOUT_S:-420}"
+WATCHDOG="${PARLIAMENT_WATCHDOG:-0}"
+WATCHDOG_BACKEND="${PARLIAMENT_WATCHDOG_BACKEND:-auto}"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   PYTHON_BIN="python3"
@@ -30,8 +32,11 @@ fi
 if [[ "$EXECUTE_ACTIONS" == "1" ]]; then
   EXTRA_ARGS+=(--execute-actions)
 fi
+if [[ "$WATCHDOG" == "1" ]]; then
+  EXTRA_ARGS+=(--watchdog --watchdog-backend "$WATCHDOG_BACKEND")
+fi
 
-echo "[parliament-loop] start interval=${INTERVAL_S}s backend=${BACKEND} panel=${PANEL_SIZE} persist=${PERSIST} archive=${ARCHIVE} execute_actions=${EXECUTE_ACTIONS}" >&2
+echo "[parliament-loop] start interval=${INTERVAL_S}s backend=${BACKEND} panel=${PANEL_SIZE} persist=${PERSIST} archive=${ARCHIVE} execute_actions=${EXECUTE_ACTIONS} watchdog=${WATCHDOG}" >&2
 
 while true; do
   date -u +"[parliament-loop] tick %Y-%m-%dT%H:%M:%SZ" >&2
