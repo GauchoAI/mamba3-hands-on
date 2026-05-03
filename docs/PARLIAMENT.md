@@ -71,6 +71,20 @@ Two-speaker chamber:
   --dry-run
 ```
 
+Real mixed chamber:
+
+```bash
+.venv/bin/python tools/parliament.py chamber \
+  --speakers gpt5-ch12-chess-champion claude-opposition-architect \
+  --backend auto \
+  --motion parliament/motions/example_chess_kpi.md \
+  --dry-run \
+  --timeout-s 300
+```
+
+With `--backend auto`, identities whose `model_family` contains `Claude` use
+Claude Code. Other identities use Codex in a read-only sandbox.
+
 Silence policy:
 
 ```bash

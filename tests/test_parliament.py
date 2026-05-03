@@ -49,6 +49,13 @@ class ParliamentSmokeTests(unittest.TestCase):
                 }
             )
 
+    def test_auto_backend_selects_from_identity_family(self) -> None:
+        from tools.parliament import resolve_backend_name
+
+        self.assertEqual(resolve_backend_name("auto", {"model_family": "Claude"}), "claude")
+        self.assertEqual(resolve_backend_name("auto", {"model_family": "GPT-5 / Codex"}), "codex")
+        self.assertEqual(resolve_backend_name("simulated", {"model_family": "Claude"}), "simulated")
+
     def test_training_heartbeat_without_checkpoint_is_silent(self) -> None:
         result = run_parliament(
             "event",

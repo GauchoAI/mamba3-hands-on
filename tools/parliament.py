@@ -19,6 +19,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 from dataclasses import dataclass
@@ -224,6 +225,84 @@ def command_backend(command: str, prompt: str, timeout_s: int) -> dict[str, Any]
     return extract_json_object(raw)
 
 
+def codex_backend(prompt: str, timeout_s: int) -> dict[str, Any]:
+    with tempfile.NamedTemporaryFile(prefix="parliament-codex-", suffix=".json", delete=False) as f:
+        out_path = Path(f.name)
+    cmd = [
+        "codex",
+        "exec",
+        "-C",
+        str(ROOT),
+        "--sandbox",
+        "read-only",
+        "--output-last-message",
+        str(out_path),
+        prompt,
+    ]
+    try:
+        proc = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=timeout_s)
+        if proc.returncode != 0:
+            raise RuntimeError(f"codex backend failed: {proc.stderr[-2000:] or proc.stdout[-2000:]}")
+        raw = out_path.read_text(encoding="utf-8") if out_path.exists() else proc.stdout
+        return extract_json_object(raw)
+    finally:
+        try:
+            out_path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def claude_backend(prompt: str, timeout_s: int) -> dict[str, Any]:
+    cmd = [
+        "claude",
+        "-p",
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "dontAsk",
+        "--allowedTools",
+        "Read,Bash(rg *),Bash(sed *),Bash(git status *),Bash(git log *),Bash(python3 tools/parliament.py event *)",
+    ]
+    proc = subprocess.run(
+        cmd,
+        cwd=ROOT,
+        input=prompt,
+        capture_output=True,
+        text=True,
+        timeout=timeout_s,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"claude backend failed: {proc.stderr[-2000:] or proc.stdout[-2000:]}")
+    return extract_json_object(proc.stdout)
+
+
+def resolve_backend_name(requested: str, identity: dict[str, Any]) -> str:
+    if requested != "auto":
+        return requested
+    family = str(identity.get("model_family", "")).lower()
+    if "claude" in family:
+        return "claude"
+    return "codex"
+
+
+def invoke_backend(
+    backend: str,
+    prompt: str,
+    timeout_s: int,
+    command: str | None,
+) -> dict[str, Any]:
+    if command:
+        return command_backend(command, prompt, timeout_s)
+    env_command = os.environ.get(f"PARLIAMENT_BACKEND_{backend.upper()}_CMD")
+    if env_command:
+        return command_backend(env_command, prompt, timeout_s)
+    if backend == "codex":
+        return codex_backend(prompt, timeout_s)
+    if backend == "claude":
+        return claude_backend(prompt, timeout_s)
+    raise RuntimeError(f"backend {backend!r} needs --command or PARLIAMENT_BACKEND_{backend.upper()}_CMD")
+
+
 def validate_speech(speech: dict[str, Any]) -> dict[str, Any]:
     required = ["kind", "position", "body", "evidence", "prediction", "falsifier", "confidence"]
     missing = [k for k in required if k not in speech]
@@ -377,14 +456,11 @@ def run_speaker(args: argparse.Namespace, prior_speeches: list[dict[str, Any]] |
     evidence = collect_evidence(args.evidence_cmd or [])
     prompt = build_prompt(identity, motion, prior_speeches or [], evidence, args.dry_run)
 
-    backend_name = args.backend
-    if args.backend == "simulated":
+    backend_name = resolve_backend_name(args.backend, identity)
+    if backend_name == "simulated":
         speech = simulated_backend(identity, motion, evidence, prior_speeches or [])
     else:
-        command = args.command or os.environ.get(f"PARLIAMENT_BACKEND_{args.backend.upper()}_CMD")
-        if not command:
-            raise RuntimeError(f"backend {args.backend!r} needs --command or PARLIAMENT_BACKEND_{args.backend.upper()}_CMD")
-        speech = command_backend(command, prompt, args.timeout_s)
+        speech = invoke_backend(backend_name, prompt, args.timeout_s, args.command)
     speech = validate_speech(speech)
 
     record = wrap_speech(speech, identity_path, identity, motion, args.dry_run, backend_name, None)
@@ -502,8 +578,8 @@ def main(argv: list[str] | None = None) -> int:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--motion", help="Path to a motion markdown file")
     common.add_argument("--text", help="Inline motion text")
-    common.add_argument("--backend", default="simulated", help="simulated, codex, claude, symphony, or another command adapter")
-    common.add_argument("--command", help="Command backend. Receives prompt on stdin and PARLIAMENT_PROMPT.")
+    common.add_argument("--backend", default="simulated", help="simulated, auto, codex, claude, symphony, or another command adapter")
+    common.add_argument("--command", help="Override backend command. Receives prompt on stdin and PARLIAMENT_PROMPT.")
     common.add_argument("--timeout-s", type=int, default=300)
     common.add_argument("--dry-run", action="store_true", help="Do not append durable logs or Firebase")
     common.add_argument("--trace", action="store_true", help="Write a trace even for non-dry runs")
