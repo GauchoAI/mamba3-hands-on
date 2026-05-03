@@ -87,6 +87,12 @@ Register this machine as a Parliament node:
 .venv/bin/python tools/parliament.py nodes
 ```
 
+Keep a node online:
+
+```bash
+.venv/bin/python tools/parliament.py register-node --watch --interval-s 30
+```
+
 ## Five-Minute Iteration Rule
 
 A Parliament run should fit the lab's normal rhythm. Even long training should

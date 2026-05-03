@@ -458,10 +458,16 @@ def cmd_register_node(args: argparse.Namespace) -> None:
     if args.dry_run:
         print(json.dumps(manifest, indent=2, ensure_ascii=False))
         return
-    ok = firebase_put(f"parliament/nodes/{manifest['node_id']}", manifest)
-    if not ok:
-        raise SystemExit("failed to register Parliament node")
-    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+    while True:
+        manifest["last_heartbeat"] = time.time()
+        manifest["status"] = "online"
+        ok = firebase_put(f"parliament/nodes/{manifest['node_id']}", manifest)
+        if not ok:
+            raise SystemExit("failed to register Parliament node")
+        print(json.dumps(manifest, indent=2, ensure_ascii=False), flush=True)
+        if not args.watch:
+            return
+        time.sleep(args.interval_s)
 
 
 def cmd_nodes(args: argparse.Namespace) -> None:
@@ -520,6 +526,8 @@ def main(argv: list[str] | None = None) -> int:
     p_register.add_argument("--node-id", help="Override node id")
     p_register.add_argument("--speaker", action="append", help="Speaker identity this node can run")
     p_register.add_argument("--dry-run", action="store_true", help="Print manifest without Firebase write")
+    p_register.add_argument("--watch", action="store_true", help="Keep sending Parliament heartbeats")
+    p_register.add_argument("--interval-s", type=int, default=30, help="Heartbeat interval for --watch")
     p_register.set_defaults(func=cmd_register_node)
 
     p_nodes = sub.add_parser("nodes", help="List registered Parliament nodes")
