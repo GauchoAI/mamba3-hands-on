@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Bounded event loop for Parliament deliberation and action dispatch.
 
-The five-minute scheduler is only a wake-up safety net. This loop drives the
-immediate chain after a wake: tick, watchdog, bill compilation, bounded vote
-rounds, and action execution if the vote passes.
+Firebase events are the primary wake-up path. The five-minute scheduler is only
+a watchdog safety net. This loop drives one bounded chain after a wake: optional
+heartbeat/tick, watchdog, bill compilation, bounded vote rounds, and action
+execution if the vote passes.
 """
 from __future__ import annotations
 
@@ -115,47 +116,37 @@ def run_event_loop(args: argparse.Namespace) -> dict[str, Any]:
         "schema": "parliament.event_loop.v1",
         "created_at": utc_now(),
         "deliberation_budget_s": args.deliberation_budget_s,
+        "trigger": args.trigger,
         "steps": [],
     }
 
-    tick_cmd = [
-        repo_python(),
-        str(ROOT / "tools" / "parliament_tick.py"),
-        "--backend",
-        args.tick_backend,
-        "--panel-size",
-        str(args.panel_size),
-        "--timeout-s",
-        str(args.tick_timeout_s),
-        "--wall-timeout-s",
-        str(args.tick_wall_timeout_s),
-        "--action-timeout-s",
-        str(args.action_timeout_s),
-        "--persist",
-        "--archive",
-        "--execute-actions",
-    ]
-    event["steps"].append({"name": "tick", **run_json(tick_cmd, args.tick_wall_timeout_s + args.action_timeout_s + 60)})
-
-    watchdog_cmd = [
-        repo_python(),
-        str(ROOT / "tools" / "parliament_watchdog.py"),
-        "--motion",
-        args.motion,
-        "--backend",
-        args.watchdog_backend,
-        "--timeout-s",
-        str(args.speaker_timeout_s),
-        "--wall-timeout-s",
-        str(max(30, int(deadline - time.time()))),
-        "--action-timeout-s",
-        str(args.action_timeout_s),
-        "--execute",
-    ]
-    event["steps"].append({"name": "watchdog", **run_json(watchdog_cmd, max(45, int(deadline - time.time()) + args.action_timeout_s))})
+    if args.skip_tick:
+        heartbeat_cmd = [repo_python(), str(ROOT / "tools" / "parliament.py"), "register-node"]
+        event["steps"].append({"name": "node_heartbeat", **run_json(heartbeat_cmd, 20)})
+    else:
+        tick_cmd = [
+            repo_python(),
+            str(ROOT / "tools" / "parliament_tick.py"),
+            "--backend",
+            args.tick_backend,
+            "--panel-size",
+            str(args.panel_size),
+            "--timeout-s",
+            str(args.tick_timeout_s),
+            "--wall-timeout-s",
+            str(args.tick_wall_timeout_s),
+            "--action-timeout-s",
+            str(args.action_timeout_s),
+            "--persist",
+            "--archive",
+            "--execute-actions",
+        ]
+        event["steps"].append(
+            {"name": "tick", **run_json(tick_cmd, args.tick_wall_timeout_s + args.action_timeout_s + 60)}
+        )
 
     state_cmd = [repo_python(), str(ROOT / "tools" / "parliament_watchdog.py"), "--motion", args.motion, "--state-only"]
-    state_step = {"name": "state_after_watchdog", **run_json(state_cmd, 30)}
+    state_step = {"name": "state_before_action", **run_json(state_cmd, 30)}
     event["steps"].append(state_step)
     state = state_step.get("payload", {})
 
@@ -169,6 +160,29 @@ def run_event_loop(args: argparse.Namespace) -> dict[str, Any]:
     ]
     action_step = {"name": "compiled_bill_action_review", **run_json(action_cmd, args.action_timeout_s)}
     event["steps"].append(action_step)
+
+    if action_status(action_step) in {"no_action", "unknown"}:
+        watchdog_cmd = [
+            repo_python(),
+            str(ROOT / "tools" / "parliament_watchdog.py"),
+            "--motion",
+            args.motion,
+            "--backend",
+            args.watchdog_backend,
+            "--timeout-s",
+            str(args.speaker_timeout_s),
+            "--wall-timeout-s",
+            str(max(30, int(deadline - time.time()))),
+            "--action-timeout-s",
+            str(args.action_timeout_s),
+            "--execute",
+        ]
+        event["steps"].append({"name": "watchdog", **run_json(watchdog_cmd, max(45, int(deadline - time.time()) + args.action_timeout_s))})
+        state_step = {"name": "state_after_watchdog", **run_json(state_cmd, 30)}
+        event["steps"].append(state_step)
+        state = state_step.get("payload", {})
+        action_step = {"name": "compiled_bill_action_review_after_watchdog", **run_json(action_cmd, args.action_timeout_s)}
+        event["steps"].append(action_step)
 
     rounds = 0
     while action_status(action_step) == "waiting_for_votes" and rounds < args.max_vote_rounds and time.time() < deadline:
@@ -227,6 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deliberation-budget-s", type=int, default=600)
     parser.add_argument("--max-vote-rounds", type=int, default=2)
     parser.add_argument("--vote-speaker", dest="vote_speakers", action="append", default=[])
+    parser.add_argument("--skip-tick", action="store_true", help="Do only heartbeat/state/action work; do not create a normal chamber tick")
+    parser.add_argument("--trigger", default="manual", help="Short trigger label written to the event-loop record")
     args = parser.parse_args(argv)
     if not args.vote_speakers:
         args.vote_speakers = ["claude-opposition-architect", "gpt5-ch12-chess-champion"]

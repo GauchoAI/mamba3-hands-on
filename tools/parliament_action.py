@@ -14,6 +14,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 ACTION_DIR = ROOT / "parliament" / "actions"
 RUN_DIR = ROOT / "runs" / "parliament" / "actions"
+HISTORY_DIR = RUN_DIR / "history"
 
 sys.path.insert(0, str(ROOT))
 from tools.parliament import firebase_get, firebase_put  # noqa: E402
@@ -96,17 +97,55 @@ def local_event_path(motion_id: str, action_id: str) -> Path:
     return RUN_DIR / f"{motion_id}-{action_id}.json"
 
 
+def historical_event_paths(motion_id: str, action_id: str) -> list[Path]:
+    return sorted(HISTORY_DIR.glob(f"{motion_id}-{action_id}-*.json"))
+
+
+def completed_event_from_event_loops(motion_id: str, action_id: str) -> dict[str, Any] | None:
+    paths = sorted((ROOT / "runs" / "parliament" / "event_loop").glob("*.json"), reverse=True)
+    for path in paths[:50]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        for step in reversed(payload.get("steps", [])):
+            event = step.get("payload") if isinstance(step, dict) else None
+            if (
+                isinstance(event, dict)
+                and event.get("motion_id") == motion_id
+                and event.get("action_id") == action_id
+                and event.get("status") in {"completed", "cooldown", "skipped_cooldown"}
+            ):
+                return event
+    return None
+
+
+def best_previous_event(motion_id: str, action_id: str, candidates: list[dict[str, Any] | None]) -> dict[str, Any] | None:
+    usable = [event for event in candidates if isinstance(event, dict)]
+    durable = [event for event in usable if event.get("status") in {"completed", "cooldown", "skipped_cooldown"}]
+    if durable:
+        return sorted(durable, key=lambda e: float(cooldown_completed_epoch(e) or 0.0))[-1]
+    return usable[0] if usable else None
+
+
 def load_previous_event(motion_id: str, action_id: str) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any] | None] = []
     remote = firebase_get(f"parliament/actions/{motion_id}/{action_id}", timeout=5.0)
     if isinstance(remote, dict):
-        return remote
+        candidates.append(remote)
     path = local_event_path(motion_id, action_id)
     if path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            candidates.append(json.loads(path.read_text(encoding="utf-8")))
         except Exception:
-            return None
-    return None
+            pass
+    for history_path in historical_event_paths(motion_id, action_id)[-20:]:
+        try:
+            candidates.append(json.loads(history_path.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+    candidates.append(completed_event_from_event_loops(motion_id, action_id))
+    return best_previous_event(motion_id, action_id, candidates)
 
 
 def in_cooldown(spec: dict[str, Any], previous: dict[str, Any] | None) -> bool:
@@ -220,14 +259,14 @@ def review_motion(motion_id: str, execute: bool = False, force: bool = False) ->
         "tally": tally,
         "dry_run": not execute,
     }
-    if not tally["approved"]:
-        event["status"] = "waiting_for_votes"
-    elif in_cooldown(spec, previous) and not force:
+    if in_cooldown(spec, previous) and not force:
         event["status"] = "skipped_cooldown"
         completed_epoch = cooldown_completed_epoch(previous)
         if completed_epoch:
             event["completed_at_epoch"] = completed_epoch
         event["previous"] = compact_previous_event(previous)
+    elif not tally["approved"]:
+        event["status"] = "waiting_for_votes"
     elif not execute:
         event["status"] = "ready"
     else:
@@ -243,6 +282,12 @@ def review_motion(motion_id: str, execute: bool = False, force: bool = False) ->
 
     RUN_DIR.mkdir(parents=True, exist_ok=True)
     local_event_path(motion_id, action_id).write_text(json.dumps(event, indent=2, ensure_ascii=False), encoding="utf-8")
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+    (HISTORY_DIR / f"{motion_id}-{action_id}-{stamp}.json").write_text(
+        json.dumps(event, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     if execute or event.get("status") in {"ready", "waiting_for_votes", "skipped_cooldown"}:
         firebase_put(f"parliament/actions/{motion_id}/{action_id}", event, timeout=5.0)
     return event

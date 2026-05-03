@@ -185,9 +185,28 @@ def compile_motion(motion_id: str, node: str = "m4-pro") -> dict[str, Any]:
         "bills": compiled,
     }
     RUN_DIR.mkdir(parents=True, exist_ok=True)
-    (RUN_DIR / f"{motion_id}.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    out = RUN_DIR / f"{motion_id}.json"
+    if out.exists():
+        try:
+            previous = json.loads(out.read_text(encoding="utf-8"))
+        except Exception:
+            previous = None
+        if isinstance(previous, dict) and stable_compile_payload(previous) == stable_compile_payload(payload):
+            previous["unchanged"] = True
+            return previous
+    out.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     firebase_put(f"parliament/compiled_bills/{motion_id}", payload, timeout=5.0)
     return payload
+
+
+def stable_compile_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    stable = json.loads(json.dumps(payload, sort_keys=True, ensure_ascii=False))
+    stable.pop("created_at", None)
+    stable.pop("unchanged", None)
+    for bill in stable.get("bills", []):
+        if isinstance(bill, dict):
+            bill.pop("created_at", None)
+    return stable
 
 
 def main(argv: list[str] | None = None) -> int:

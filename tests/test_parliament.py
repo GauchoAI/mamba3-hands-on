@@ -247,6 +247,38 @@ stance: Exactness first.
         payload = json.loads(result.stdout)
         self.assertEqual(payload["speeches"][0]["motion_id"], "procedural_bill_request")
 
+    def test_event_listener_ignores_initial_snapshot_and_heartbeats(self) -> None:
+        from tools.parliament_event_listener import should_trigger
+
+        self.assertEqual(should_trigger({"path": "/", "data": {"speeches": {}}}, False), (False, "initial snapshot"))
+        self.assertEqual(should_trigger({"path": "/nodes/local", "data": {"ok": True}}, True), (False, "node heartbeat"))
+
+    def test_event_listener_triggers_on_speech_bill_and_action_changes(self) -> None:
+        from tools.parliament_event_listener import should_trigger
+
+        for path in ["/speeches/small_lm/a/id", "/compiled_bills/procedural_bill_request", "/actions/x/y"]:
+            trigger, reason = should_trigger({"path": path, "data": {"x": 1}}, True)
+            self.assertTrue(trigger)
+            self.assertEqual(reason, path)
+
+        self.assertEqual(
+            should_trigger({"path": "/actions/x/y", "data": {"status": "skipped_cooldown"}}, True),
+            (False, "terminal action cooldown"),
+        )
+
+    def test_watchdog_does_not_open_new_bill_when_compiled_bill_waits_for_votes(self) -> None:
+        from tools.parliament_watchdog import should_trigger
+
+        trigger, reason = should_trigger(
+            summary={"created_at": "2026-05-03T00:00:00Z"},
+            actions={"state": "no_ready_actions"},
+            bills={"compiled_count": 1},
+            active_jobs=[],
+            procedural_actions={"state": "no_ready_actions", "waiting": ["chess"]},
+        )
+        self.assertFalse(trigger)
+        self.assertIn("awaiting vote", reason)
+
 
 if __name__ == "__main__":
     unittest.main()

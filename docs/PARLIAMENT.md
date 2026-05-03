@@ -203,13 +203,28 @@ quorum and command-policy checks. The no-silence rule is therefore procedural:
 if no job is running and no executable bill is ready, the watchdog asks
 Parliament for bills; it does not choose the experiment itself.
 
-## Bounded Event Loop
+## Event-Driven Parliament
 
-`tools/parliament_event_loop.py` is the normal scheduler entrypoint. The
-five-minute launchd timer is only a wake-up safety net; once awake, the event
-loop immediately runs the chain:
+`tools/parliament_event_listener.py` is the normal low-latency entrypoint. It
+keeps a Firebase streaming connection open against `/parliament` and immediately
+runs the bounded event loop when a relevant speech, compiled bill, or action
+state changes. Node heartbeats and watchdog mirrors are ignored so the listener
+does not wake itself for noise.
 
-1. scheduler tick and node heartbeat
+Install the event listener:
+
+```bash
+.venv/bin/python tools/install_parliament_schedule.py \
+  --event-listener \
+  --watchdog-backend auto \
+  --timeout-s 120 \
+  --action-timeout-s 420 \
+  --deliberation-budget-s 600
+```
+
+`tools/parliament_event_loop.py` drives one bounded chain after an event:
+
+1. node heartbeat, or a full scheduler tick when explicitly requested
 2. action review for already-approved work
 3. watchdog state check
 4. procedural proposal/revision round when idle
@@ -220,6 +235,19 @@ loop immediately runs the chain:
 The default deliberation budget is 600 seconds. Training or benchmark actions
 then use their declared action timeout, so discussion stays bounded while
 runtime remains flexible.
+
+The five-minute launchd job is now only the watchdog fallback. It catches missed
+Firebase stream events, crashed listeners, and true silence:
+
+```bash
+.venv/bin/python tools/install_parliament_schedule.py \
+  --watchdog-only \
+  --interval-s 300 \
+  --watchdog-backend auto \
+  --timeout-s 120 \
+  --wall-timeout-s 270 \
+  --action-timeout-s 420
+```
 
 ## Queryable Log Contract
 

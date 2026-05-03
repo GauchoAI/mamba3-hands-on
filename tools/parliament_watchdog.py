@@ -114,11 +114,19 @@ def watchdog_state(motion_id: str) -> dict[str, Any]:
     }
 
 
-def should_trigger(summary: dict[str, Any] | None, actions: dict[str, Any], bills: dict[str, Any], active_jobs: list[dict[str, Any]]) -> tuple[bool, str]:
+def should_trigger(
+    summary: dict[str, Any] | None,
+    actions: dict[str, Any],
+    bills: dict[str, Any],
+    active_jobs: list[dict[str, Any]],
+    procedural_actions: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
     if active_jobs:
         return False, f"active research process detected: {active_jobs[0]['command'][:140]}"
     if actions["state"] in {"running", "ready"}:
         return False, f"action_state={actions['state']}"
+    if procedural_actions and (procedural_actions.get("state") in {"running", "ready"} or procedural_actions.get("waiting")):
+        return False, "compiled procedural bill is awaiting vote or execution"
     if bills.get("compiled_count", 0) > 0 and actions["state"] == "no_actions":
         return False, "compiled bills exist; clerk must review them"
     if not summary:
@@ -188,8 +196,9 @@ def run_watchdog(args: argparse.Namespace) -> dict[str, Any]:
     summary = latest_scheduler_summary()
     actions = action_status(args.motion)
     bills = compiled_bill_status("procedural_bill_request")
+    procedural_actions = action_status("procedural_bill_request")
     active_jobs = active_research_processes()
-    trigger, reason = should_trigger(summary, actions, bills, active_jobs)
+    trigger, reason = should_trigger(summary, actions, bills, active_jobs, procedural_actions)
     event: dict[str, Any] = {
         "schema": "parliament.watchdog.v1",
         "created_at": utc_now(),
@@ -198,7 +207,7 @@ def run_watchdog(args: argparse.Namespace) -> dict[str, Any]:
         "reason": reason,
         "action_status": actions,
         "compiled_bill_status": bills,
-        "procedural_action_status": action_status("procedural_bill_request"),
+        "procedural_action_status": procedural_actions,
         "active_research_processes": active_jobs,
     }
     if trigger and args.execute:

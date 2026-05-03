@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install a macOS launchd schedule for Parliament ticks."""
+"""Install macOS launchd jobs for Parliament events and watchdog ticks."""
 from __future__ import annotations
 
 import argparse
@@ -10,12 +10,15 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-LABEL = "com.gauchoai.parliament"
-PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{LABEL}.plist"
+BASE_LABEL = "com.gauchoai.parliament"
+
+
+def plist_path(label: str) -> Path:
+    return Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Install Parliament five-minute launchd schedule")
+    parser = argparse.ArgumentParser(description="Install Parliament launchd jobs")
     parser.add_argument("--interval-s", type=int, default=300)
     parser.add_argument("--backend", default="auto")
     parser.add_argument("--panel-size", type=int, default=1)
@@ -28,14 +31,18 @@ def main() -> int:
     parser.add_argument("--watchdog", action="store_true")
     parser.add_argument("--watchdog-backend", default="auto")
     parser.add_argument("--event-loop", action="store_true")
+    parser.add_argument("--event-listener", action="store_true", help="Install Firebase streaming listener as primary trigger")
+    parser.add_argument("--watchdog-only", action="store_true", help="Install only the five-minute watchdog fallback")
     parser.add_argument("--deliberation-budget-s", type=int, default=600)
     parser.add_argument("--uninstall", action="store_true")
     args = parser.parse_args()
 
     if args.uninstall:
-        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)], check=False)
-        PLIST_PATH.unlink(missing_ok=True)
-        print(f"uninstalled {PLIST_PATH}")
+        for label in [BASE_LABEL, f"{BASE_LABEL}.events", f"{BASE_LABEL}.watchdog"]:
+            path = plist_path(label)
+            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(path)], check=False)
+            path.unlink(missing_ok=True)
+            print(f"uninstalled {path}")
         return 0
 
     # Launchd can hang opening Python scripts under Desktop directly on this
@@ -43,7 +50,31 @@ def main() -> int:
     py = Path("/opt/homebrew/bin/python3")
     if not py.exists():
         py = Path(sys.executable)
-    if args.event_loop:
+    label = BASE_LABEL
+    if args.event_listener:
+        label = f"{BASE_LABEL}.events"
+        shell_cmd = (
+            f"cd {ROOT} && "
+            f"{py} {ROOT / 'tools' / 'parliament_event_listener.py'} "
+            f"--backend {args.watchdog_backend} "
+            f"--panel-size {args.panel_size} "
+            f"--speaker-timeout-s {args.timeout_s} "
+            f"--action-timeout-s {args.action_timeout_s} "
+            f"--deliberation-budget-s {args.deliberation_budget_s}"
+        )
+    elif args.watchdog_only:
+        label = f"{BASE_LABEL}.watchdog"
+        shell_cmd = (
+            f"cd {ROOT} && "
+            f"{py} {ROOT / 'tools' / 'parliament_watchdog.py'} "
+            f"--motion small_lm_recovery "
+            f"--backend {args.watchdog_backend} "
+            f"--timeout-s {args.timeout_s} "
+            f"--wall-timeout-s {args.wall_timeout_s} "
+            f"--action-timeout-s {args.action_timeout_s} "
+            f"--execute"
+        )
+    elif args.event_loop:
         shell_cmd = (
             f"cd {ROOT} && "
             f"{py} {ROOT / 'tools' / 'parliament_event_loop.py'} "
@@ -77,10 +108,9 @@ def main() -> int:
     log_dir.mkdir(parents=True, exist_ok=True)
     path_value = f"{Path.home() / '.local' / 'bin'}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     plist = {
-        "Label": LABEL,
+        "Label": label,
         "ProgramArguments": ["/bin/zsh", "-lc", shell_cmd],
         "WorkingDirectory": str(ROOT),
-        "StartInterval": args.interval_s,
         "RunAtLoad": True,
         "StandardOutPath": str(log_dir / "launchd.out.log"),
         "StandardErrorPath": str(log_dir / "launchd.err.log"),
@@ -88,13 +118,18 @@ def main() -> int:
             "PATH": path_value,
         },
     }
-    PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with PLIST_PATH.open("wb") as f:
+    if args.event_listener:
+        plist["KeepAlive"] = True
+    else:
+        plist["StartInterval"] = args.interval_s
+    path = plist_path(label)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
         plistlib.dump(plist, f)
-    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(PLIST_PATH)], check=False)
-    subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(PLIST_PATH)], check=True)
-    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{LABEL}"], check=False)
-    print(f"installed {PLIST_PATH}")
+    subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(path)], check=False)
+    subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(path)], check=True)
+    subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{label}"], check=False)
+    print(f"installed {path}")
     print(f"logs: {log_dir}")
     return 0
 

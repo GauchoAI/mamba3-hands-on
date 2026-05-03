@@ -2,6 +2,9 @@
 
 The harness reports that Parliament has no active executable bill ready to run,
 or that the currently approved bill has already completed and is cooling down.
+Completed or cooling bills are evidence, not active work. Do not propose merely
+reusing the same completed bill unless the proposal changes the command, KPI,
+dataset, checkpoint, or falsifier enough to create a new measurement.
 
 This is not a research direction. It is a procedural request.
 
