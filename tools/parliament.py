@@ -37,6 +37,8 @@ PROMPTS_DIR = PARLIAMENT_DIR / "prompts"
 LOG_PATH = PARLIAMENT_DIR / "log.jsonl"
 DRY_RUN_DIR = ROOT / "runs" / "parliament" / "dry_runs"
 FIREBASE_URL = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app"
+SPEECH_KINDS = {"position", "review", "objection", "amendment", "silence"}
+SPEECH_POSITIONS = {"approve", "reject", "amend", "defer", "observe"}
 
 
 @dataclass
@@ -174,6 +176,36 @@ def simulated_backend(identity: dict[str, Any], motion: dict[str, Any], evidence
     }
 
 
+def extract_json_object(raw: str) -> dict[str, Any]:
+    raw = raw.strip()
+    if not raw:
+        raise ValueError("backend returned empty output")
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict) and isinstance(parsed.get("result"), str):
+            return extract_json_object(parsed["result"])
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        return extract_json_object("\n".join(lines))
+
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        parsed = json.loads(raw[start:end + 1])
+        if isinstance(parsed, dict):
+            return parsed
+    raise ValueError(f"backend did not return a JSON object: {raw[:1000]}")
+
+
 def command_backend(command: str, prompt: str, timeout_s: int) -> dict[str, Any]:
     env = os.environ.copy()
     env["PARLIAMENT_PROMPT"] = prompt
@@ -189,13 +221,7 @@ def command_backend(command: str, prompt: str, timeout_s: int) -> dict[str, Any]
     raw = proc.stdout.strip()
     if proc.returncode != 0:
         raise RuntimeError(f"backend failed: {proc.stderr[-2000:]}")
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"backend did not return JSON: {raw[:1000]}") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError("backend JSON must be an object")
-    return parsed
+    return extract_json_object(raw)
 
 
 def validate_speech(speech: dict[str, Any]) -> dict[str, Any]:
@@ -203,6 +229,10 @@ def validate_speech(speech: dict[str, Any]) -> dict[str, Any]:
     missing = [k for k in required if k not in speech]
     if missing:
         raise ValueError(f"speech missing required fields: {', '.join(missing)}")
+    if speech["kind"] not in SPEECH_KINDS:
+        raise ValueError(f"speech.kind must be one of {sorted(SPEECH_KINDS)}")
+    if speech["position"] not in SPEECH_POSITIONS:
+        raise ValueError(f"speech.position must be one of {sorted(SPEECH_POSITIONS)}")
     if not isinstance(speech["evidence"], list):
         raise ValueError("speech.evidence must be a list")
     try:
@@ -276,6 +306,69 @@ def firebase_post(path: str, data: dict[str, Any], timeout: float = 5.0) -> str 
             return json.loads(r.read().decode("utf-8")).get("name")
     except Exception:
         return None
+
+
+def firebase_put(path: str, data: dict[str, Any], timeout: float = 5.0) -> bool:
+    import urllib.request
+
+    url = f"{FIREBASE_URL.rstrip('/')}/{path.strip('/')}.json"
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(data, ensure_ascii=False).encode("utf-8"),
+        method="PUT",
+        headers={"Content-Type": "application/json", "User-Agent": "parliament/1.0"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+
+def firebase_get(path: str, timeout: float = 5.0) -> Any:
+    import urllib.request
+
+    url = f"{FIREBASE_URL.rstrip('/')}/{path.strip('/')}.json"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return None
+
+
+def parliament_node_manifest(node_id: str | None = None, speakers: list[str] | None = None) -> dict[str, Any]:
+    try:
+        from server.node_agent import probe_capabilities
+        caps = probe_capabilities()
+    except Exception:
+        caps = {
+            "hostname": socket.gethostname(),
+            "platform": platform.system().lower(),
+            "arch": platform.machine(),
+            "python": platform.python_version(),
+            "backends": ["cpu"],
+            "cpu_cores": os.cpu_count() or 1,
+            "vram_mb": 0,
+        }
+    speaker_list = speakers or sorted(p.stem for p in IDENTITIES_DIR.glob("*.yaml"))
+    generated_id = f"{socket.gethostname().lower().replace('.', '-')}-{platform.machine().lower()}"
+    return {
+        "node_id": node_id or generated_id,
+        "hostname": caps.get("hostname", socket.gethostname()),
+        "platform": caps.get("platform", platform.system().lower()),
+        "arch": caps.get("arch", platform.machine()),
+        "python": caps.get("python", platform.python_version()),
+        "backends": caps.get("backends", ["cpu"]),
+        "vram_mb": caps.get("vram_mb", 0),
+        "cpu_cores": caps.get("cpu_cores", os.cpu_count() or 1),
+        "working_dir": str(ROOT),
+        "speakers": speaker_list,
+        "supports": ["dry_run", "speech", "chamber", "event_gate"],
+        "status": "online",
+        "pid": os.getpid(),
+        "registered_at": time.time(),
+        "last_heartbeat": time.time(),
+    }
 
 
 def run_speaker(args: argparse.Namespace, prior_speeches: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -360,6 +453,42 @@ def cmd_event(args: argparse.Namespace) -> None:
     print(json.dumps(classify_event(event), indent=2, ensure_ascii=False))
 
 
+def cmd_register_node(args: argparse.Namespace) -> None:
+    manifest = parliament_node_manifest(args.node_id, args.speaker or None)
+    if args.dry_run:
+        print(json.dumps(manifest, indent=2, ensure_ascii=False))
+        return
+    ok = firebase_put(f"parliament/nodes/{manifest['node_id']}", manifest)
+    if not ok:
+        raise SystemExit("failed to register Parliament node")
+    print(json.dumps(manifest, indent=2, ensure_ascii=False))
+
+
+def cmd_nodes(args: argparse.Namespace) -> None:
+    nodes = firebase_get("parliament/nodes") or {}
+    now = time.time()
+    if not nodes:
+        print("No Parliament nodes registered.")
+        return
+    print(f"{'Node':35s} {'Status':8s} {'Speakers':45s} {'Last seen':>12s}")
+    print("-" * 108)
+    for node_id, info in sorted(nodes.items()):
+        if not isinstance(info, dict):
+            continue
+        age = now - float(info.get("last_heartbeat", 0) or 0)
+        if age < 120:
+            status = "online"
+            last_seen = f"{int(age)}s ago"
+        elif age < 600:
+            status = "stale"
+            last_seen = f"{int(age / 60)}m ago"
+        else:
+            status = "offline"
+            last_seen = "long ago"
+        speakers = ", ".join(info.get("speakers", []))[:45]
+        print(f"{node_id:35s} {status:8s} {speakers:45s} {last_seen:>12s}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Parliament deliberation CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -386,6 +515,15 @@ def main(argv: list[str] | None = None) -> int:
     p_event = sub.add_parser("event", help="Classify whether an event should trigger deliberation")
     p_event.add_argument("--event", required=True, help="JSON event")
     p_event.set_defaults(func=cmd_event)
+
+    p_register = sub.add_parser("register-node", help="Register this machine as a Parliament node")
+    p_register.add_argument("--node-id", help="Override node id")
+    p_register.add_argument("--speaker", action="append", help="Speaker identity this node can run")
+    p_register.add_argument("--dry-run", action="store_true", help="Print manifest without Firebase write")
+    p_register.set_defaults(func=cmd_register_node)
+
+    p_nodes = sub.add_parser("nodes", help="List registered Parliament nodes")
+    p_nodes.set_defaults(func=cmd_nodes)
 
     args = parser.parse_args(argv)
     args.func(args)

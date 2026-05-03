@@ -23,6 +23,32 @@ def run_parliament(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 class ParliamentSmokeTests(unittest.TestCase):
+    def test_extracts_claude_wrapped_json(self) -> None:
+        from tools.parliament import extract_json_object
+
+        wrapped = {
+            "type": "result",
+            "result": "```json\n{\"kind\":\"position\",\"position\":\"approve\",\"body\":\"ok\",\"evidence\":[],\"prediction\":\"p\",\"falsifier\":\"f\",\"confidence\":0.5}\n```",
+        }
+        payload = extract_json_object(json.dumps(wrapped))
+        self.assertEqual(payload["position"], "approve")
+
+    def test_rejects_invalid_speech_vocab(self) -> None:
+        from tools.parliament import validate_speech
+
+        with self.assertRaises(ValueError):
+            validate_speech(
+                {
+                    "kind": "banana",
+                    "position": "maybe",
+                    "body": "bad",
+                    "evidence": [],
+                    "prediction": "p",
+                    "falsifier": "f",
+                    "confidence": 0.5,
+                }
+            )
+
     def test_training_heartbeat_without_checkpoint_is_silent(self) -> None:
         result = run_parliament(
             "event",

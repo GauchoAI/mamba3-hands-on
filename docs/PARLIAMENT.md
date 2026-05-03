@@ -48,6 +48,9 @@ PARLIAMENT_BACKEND_CLAUDE_CMD='claude --json' \
 The command must read the full prompt from stdin and return one JSON speech
 object to stdout.
 
+Claude Code's `--output-format json` wrapper is accepted as long as its
+`result` field contains a speech JSON object.
+
 ## Dry-Run Examples
 
 One speaker:
@@ -76,6 +79,13 @@ Silence policy:
 ```
 
 Expected decision: `silent`.
+
+Register this machine as a Parliament node:
+
+```bash
+.venv/bin/python tools/parliament.py register-node
+.venv/bin/python tools/parliament.py nodes
+```
 
 ## Five-Minute Iteration Rule
 
