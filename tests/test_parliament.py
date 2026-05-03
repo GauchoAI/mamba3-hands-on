@@ -6,6 +6,8 @@ import sys
 import unittest
 from pathlib import Path
 
+import yaml
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = sys.executable
@@ -23,6 +25,25 @@ def run_parliament(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 class ParliamentSmokeTests(unittest.TestCase):
+    def test_expected_owner_identities_exist(self) -> None:
+        expected = {
+            "gpt5-ch12-chess-champion",
+            "claude-hanoi-lego-puzzle-solver",
+            "claude-cortex-primitive-owner",
+            "claude-language-jepa-owner",
+            "claude-phi-composition-owner",
+            "claude-platform-kappa-clerk",
+            "claude-opposition-architect",
+        }
+        identity_dir = ROOT / "parliament" / "identities"
+        found = {p.stem for p in identity_dir.glob("*.yaml")}
+        self.assertTrue(expected.issubset(found))
+        for speaker in expected:
+            payload = yaml.safe_load((identity_dir / f"{speaker}.yaml").read_text())
+            self.assertEqual(payload["speaker"], speaker)
+            self.assertTrue(payload.get("credentials"))
+            self.assertTrue(payload.get("evidence") or payload.get("chapters") is not None)
+
     def test_extracts_claude_wrapped_json(self) -> None:
         from tools.parliament import extract_json_object
 
@@ -55,6 +76,12 @@ class ParliamentSmokeTests(unittest.TestCase):
         self.assertEqual(resolve_backend_name("auto", {"model_family": "Claude"}), "claude")
         self.assertEqual(resolve_backend_name("auto", {"model_family": "GPT-5 / Codex"}), "codex")
         self.assertEqual(resolve_backend_name("simulated", {"model_family": "Claude"}), "simulated")
+
+    def test_all_speakers_expands_to_owner_chamber(self) -> None:
+        from tools.parliament import DEFAULT_CHAMBER_SPEAKERS, expand_speakers
+
+        self.assertEqual(expand_speakers(["all"]), DEFAULT_CHAMBER_SPEAKERS)
+        self.assertEqual(expand_speakers(["claude-opposition-architect"]), ["claude-opposition-architect"])
 
     def test_training_heartbeat_without_checkpoint_is_silent(self) -> None:
         result = run_parliament(

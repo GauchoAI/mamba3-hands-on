@@ -40,6 +40,15 @@ DRY_RUN_DIR = ROOT / "runs" / "parliament" / "dry_runs"
 FIREBASE_URL = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app"
 SPEECH_KINDS = {"position", "review", "objection", "amendment", "silence"}
 SPEECH_POSITIONS = {"approve", "reject", "amend", "defer", "observe"}
+DEFAULT_CHAMBER_SPEAKERS = [
+    "gpt5-ch12-chess-champion",
+    "claude-hanoi-lego-puzzle-solver",
+    "claude-cortex-primitive-owner",
+    "claude-language-jepa-owner",
+    "claude-phi-composition-owner",
+    "claude-platform-kappa-clerk",
+    "claude-opposition-architect",
+]
 
 
 @dataclass
@@ -477,6 +486,12 @@ def run_speaker(args: argparse.Namespace, prior_speeches: list[dict[str, Any]] |
     return record
 
 
+def expand_speakers(speakers: list[str]) -> list[str]:
+    if speakers == ["all"]:
+        return list(DEFAULT_CHAMBER_SPEAKERS)
+    return speakers
+
+
 def cmd_speak(args: argparse.Namespace) -> None:
     record = run_speaker(args)
     print(json.dumps(record, indent=2, ensure_ascii=False))
@@ -484,7 +499,7 @@ def cmd_speak(args: argparse.Namespace) -> None:
 
 def cmd_chamber(args: argparse.Namespace) -> None:
     speeches: list[dict[str, Any]] = []
-    for speaker in args.speakers:
+    for speaker in expand_speakers(args.speakers):
         speaker_args = argparse.Namespace(**vars(args))
         speaker_args.speaker = speaker
         record = run_speaker(speaker_args, speeches)

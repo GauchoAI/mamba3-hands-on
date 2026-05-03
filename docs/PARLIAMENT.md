@@ -75,7 +75,7 @@ Real mixed chamber:
 
 ```bash
 .venv/bin/python tools/parliament.py chamber \
-  --speakers gpt5-ch12-chess-champion claude-opposition-architect \
+  --speakers all \
   --backend auto \
   --motion parliament/motions/example_chess_kpi.md \
   --dry-run \
@@ -84,6 +84,22 @@ Real mixed chamber:
 
 With `--backend auto`, identities whose `model_family` contains `Claude` use
 Claude Code. Other identities use Codex in a read-only sandbox.
+
+Use `--speakers all` to invite every current owner identity.
+
+## Chapter Owners
+
+The initial Parliament identities are domain owners, not generic personas:
+
+| Speaker | Scope |
+|---|---|
+| `gpt5-ch12-chess-champion` | Chapter 12 chess experts and playable champion |
+| `claude-hanoi-lego-puzzle-solver` | Chapters 04-05: Hanoi, LoopCounter, Lego specialists |
+| `claude-cortex-primitive-owner` | Chapters 06, 08, 09: cortex primitives, RLF, bilingual counter attach |
+| `claude-language-jepa-owner` | Chapters 07, 10, 13: JEPA/language-model line and autopilot work |
+| `claude-phi-composition-owner` | Chapter 11: frozen Phi cold composition and solver registry |
+| `claude-platform-kappa-clerk` | Platform, Kappa, Firebase/Hugging Face archive, Lab Book |
+| `claude-opposition-architect` | General opposition and architecture critique |
 
 Silence policy:
 
