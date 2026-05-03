@@ -69,12 +69,46 @@ def stable_id(text: str, prefix: str = "motion") -> str:
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
-    if yaml is None:
-        raise RuntimeError("pyyaml is required for Parliament identity files")
-    with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
+    text = path.read_text(encoding="utf-8")
+    if yaml is not None:
+        data = yaml.safe_load(text) or {}
+    else:
+        data = parse_simple_yaml(text)
     if not isinstance(data, dict):
         raise ValueError(f"{path} must contain a YAML mapping")
+    return data
+
+
+def parse_simple_yaml(text: str) -> dict[str, Any]:
+    """Small fallback parser for the repo's simple identity YAML files.
+
+    Supports top-level `key: value` fields and top-level lists:
+
+        chapters:
+          - 04_hanoi
+
+    It is intentionally not a general YAML parser.
+    """
+    data: dict[str, Any] = {}
+    current_key: str | None = None
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith("  - ") and current_key:
+            data.setdefault(current_key, []).append(line[4:].strip().strip('"'))
+            continue
+        if ":" not in line or line.startswith(" "):
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if not value:
+            data[key] = []
+            current_key = key
+        else:
+            data[key] = value.strip('"')
+            current_key = None
     return data
 
 

@@ -54,6 +54,22 @@ class ParliamentSmokeTests(unittest.TestCase):
         payload = extract_json_object(json.dumps(wrapped))
         self.assertEqual(payload["position"], "approve")
 
+    def test_simple_yaml_fallback_handles_identity_shape(self) -> None:
+        from tools.parliament import parse_simple_yaml
+
+        payload = parse_simple_yaml(
+            """
+speaker: example
+role: judge
+chapters:
+  - 04_hanoi
+  - 05_lego_library
+stance: Exactness first.
+"""
+        )
+        self.assertEqual(payload["speaker"], "example")
+        self.assertEqual(payload["chapters"], ["04_hanoi", "05_lego_library"])
+
     def test_rejects_invalid_speech_vocab(self) -> None:
         from tools.parliament import validate_speech
 
