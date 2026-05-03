@@ -16,6 +16,7 @@ import json
 import os
 import platform
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -130,16 +131,24 @@ def load_motion(path: Path | None, text: str | None) -> dict[str, Any]:
     return {"motion_id": motion_id, "body": body.strip(), "source": str(path) if path else "inline"}
 
 
-def run_cmd(cmd: list[str], timeout: int = 20) -> CommandResult:
+def resolve_cmd(cmd: list[str]) -> list[str]:
+    resolved = shutil.which(cmd[0])
+    if resolved:
+        return [resolved, *cmd[1:]]
+    return cmd
+
+
+def run_cmd(cmd: list[str], timeout: int = 5) -> CommandResult:
+    resolved_cmd = resolve_cmd(cmd)
     try:
         p = subprocess.run(
-            cmd,
+            resolved_cmd,
             cwd=ROOT,
             capture_output=True,
             text=True,
             timeout=timeout,
         )
-        return CommandResult(cmd, p.returncode, p.stdout[-6000:], p.stderr[-3000:])
+        return CommandResult(cmd, p.returncode, p.stdout[-1500:], p.stderr[-800:])
     except Exception as exc:
         return CommandResult(cmd, 125, "", str(exc))
 
@@ -148,7 +157,19 @@ def collect_evidence(extra_commands: list[str] | None = None) -> list[dict[str, 
     commands = [
         ["git", "status", "--short", "--branch"],
         ["git", "log", "--oneline", "-5"],
-        ["rg", "-n", "KPI|checkpoint|human playtest|online_top12|Parliament", "experiments/12_chess_experts", "docs", "parliament"],
+        [
+            "rg",
+            "-n",
+            "--max-count",
+            "20",
+            "KPI|checkpoint|human playtest|online_top12|Parliament",
+            "docs/PARLIAMENT.md",
+            "docs/PLATFORM.md",
+            "docs/CLOUD_ARCHIVE.md",
+            "docs/chess",
+            "experiments/12_chess_experts",
+            "parliament",
+        ],
     ]
     for raw in extra_commands or []:
         commands.append(shlex.split(raw))
@@ -180,11 +201,36 @@ def evidence_summary(evidence: list[dict[str, Any]]) -> list[str]:
 
 def build_prompt(identity: dict[str, Any], motion: dict[str, Any], prior_speeches: list[dict[str, Any]], evidence: list[dict[str, Any]], dry_run: bool) -> str:
     judge_prompt = (PROMPTS_DIR / "judge.md").read_text(encoding="utf-8")
+    motion_body = str(motion.get("body", ""))
+    compact_prior = []
+    for record in prior_speeches[-3:]:
+        speech = record.get("speech", {})
+        compact_prior.append(
+            {
+                "speaker": record.get("speaker"),
+                "position": speech.get("position"),
+                "body": str(speech.get("body", ""))[:500],
+                "prediction": str(speech.get("prediction", ""))[:300],
+                "confidence": speech.get("confidence"),
+            }
+        )
     payload = {
-        "identity": identity,
-        "motion": motion,
-        "prior_speeches": prior_speeches,
-        "evidence": evidence,
+        "identity": {
+            "speaker": identity.get("speaker"),
+            "role": identity.get("role"),
+            "model_family": identity.get("model_family"),
+            "chapters": identity.get("chapters", []),
+            "credentials": identity.get("credentials", [])[:4],
+            "expertise": identity.get("expertise", [])[:6],
+            "stance": identity.get("stance", ""),
+        },
+        "motion": {
+            "motion_id": motion.get("motion_id"),
+            "body": motion_body[:1400],
+            "source": motion.get("source"),
+        },
+        "prior_speeches": compact_prior,
+        "evidence": evidence_summary(evidence),
         "dry_run": dry_run,
     }
     return judge_prompt + "\n\nContext JSON:\n" + json.dumps(payload, indent=2, ensure_ascii=False)
@@ -299,6 +345,7 @@ def claude_backend(prompt: str, timeout_s: int) -> dict[str, Any]:
     cmd = [
         "claude",
         "-p",
+        prompt,
         "--output-format",
         "json",
         "--no-session-persistence",
@@ -308,10 +355,8 @@ def claude_backend(prompt: str, timeout_s: int) -> dict[str, Any]:
         "low",
         "--max-budget-usd",
         os.environ.get("PARLIAMENT_CLAUDE_MAX_BUDGET_USD", "0.05"),
-        "--permission-mode",
-        "dontAsk",
-        "--allowedTools=Read,Bash(rg *),Bash(sed *),Bash(git status *),Bash(git log *),Bash(python3 tools/parliament.py event *)",
-        prompt,
+        "--tools",
+        "",
     ]
     proc = subprocess.run(
         cmd,
