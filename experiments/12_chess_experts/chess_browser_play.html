@@ -524,6 +524,11 @@
       $("moves").innerHTML = pgnHtml();
       $("status").textContent = statusText();
     }
+    function pieceBelongsToTurn(square) {
+      const piece = state.chess.get(square);
+      if (!piece) return false;
+      return piece.color === state.chess.turn();
+    }
     async function newGame() {
       state.chess = new Chess();
       state.human = $("side").value;
@@ -559,6 +564,20 @@
       if (!btn) return;
       const square = btn.dataset.square;
       if (!state.selected) {
+        if (!pieceBelongsToTurn(square)) {
+          $("status").textContent = "Choose one of your pieces.";
+          return;
+        }
+        state.selected = square;
+        render();
+        return;
+      }
+      if (state.selected === square) {
+        state.selected = "";
+        render();
+        return;
+      }
+      if (pieceBelongsToTurn(square)) {
         state.selected = square;
         render();
         return;

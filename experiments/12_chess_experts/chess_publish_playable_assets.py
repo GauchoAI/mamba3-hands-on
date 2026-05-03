@@ -22,6 +22,23 @@ sys.path.insert(0, str(HERE))
 from chess_online_world_model import FEATURE_DIM, OnlineValueModel  # noqa: E402
 
 
+def load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip('"').strip("'")
+
+
+load_env_file(HERE.parents[1] / ".env")
+load_env_file(HERE / ".env")
+
+
 def sha256(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -261,11 +278,13 @@ def build_manifest(args) -> dict:
 def upload_to_hf(args) -> dict:
     if args.no_upload:
         return {"uploaded": False, "reason": "no_upload"}
-    if not os.environ.get("HF_TOKEN"):
-        return {"uploaded": False, "reason": "HF_TOKEN_missing"}
     from huggingface_hub import HfApi
+    from huggingface_hub.utils import get_token
 
-    api = HfApi(token=os.environ["HF_TOKEN"])
+    token = os.environ.get("HF_TOKEN") or get_token()
+    if not token:
+        return {"uploaded": False, "reason": "HF_TOKEN_missing"}
+    api = HfApi(token=token)
     api.upload_folder(
         repo_id=args.repo_id,
         repo_type="model",
