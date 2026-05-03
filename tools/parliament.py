@@ -368,8 +368,6 @@ def claude_backend(prompt: str, timeout_s: int) -> dict[str, Any]:
         os.environ.get("PARLIAMENT_CLAUDE_MODEL", "haiku"),
         "--effort",
         "low",
-        "--max-budget-usd",
-        os.environ.get("PARLIAMENT_CLAUDE_MAX_BUDGET_USD", "0.08"),
         "--tools",
         "",
     ]
