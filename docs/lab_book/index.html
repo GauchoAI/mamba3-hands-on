@@ -1578,6 +1578,11 @@
         <p><a href="../parliament/">Open the full Parliament chat view</a></p>`
       );
 
+      addChapter(chapters, "chapter-transcripts", "Transcript Notes",
+        "Outside transcripts and idea notes live here so they can influence future experiments without cluttering the repository root.",
+        md("docs/transcripts/README.md")
+      );
+
       const q = state.filter.trim().toLowerCase();
       let visible = q ? chapters.filter(ch => ch.filterText.includes(q)) : chapters;
       if (state.sort === "name") {
