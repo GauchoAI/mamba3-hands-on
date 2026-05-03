@@ -131,7 +131,10 @@ stance: Exactness first.
             json.dump([{"node": "m4-pro", "name": "bad", "cmd": "rm -rf runs"}], f)
             f.flush()
             with self.assertRaises(ValueError):
-                validate_manifest(Path(f.name), ["git pull --ff-only && .venv/bin/python -m unittest"])
+                validate_manifest(
+                    Path(f.name),
+                    ["git pull --ff-only && .venv/bin/python tools/parliament_action.py review --motion small_lm_recovery"],
+                )
 
     def test_training_heartbeat_without_checkpoint_is_silent(self) -> None:
         result = run_parliament(

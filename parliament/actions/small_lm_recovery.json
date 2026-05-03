@@ -17,7 +17,7 @@
     "per_task_timeout_s": 300,
     "wall_timeout_s": 360,
     "allowed_command_prefixes": [
-      "git pull --ff-only && .venv/bin/python -m unittest"
+      "git pull --ff-only && .venv/bin/python tools/parliament_action.py review --motion small_lm_recovery"
     ]
   }
 }

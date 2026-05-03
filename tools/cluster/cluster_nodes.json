@@ -2,6 +2,7 @@
   {
     "name": "m4-pro",
     "local": true,
+    "repo_path": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on",
     "_chip": "Apple M4 Pro, 12 cores",
     "_repo": "/Users/miguel_lemos/Desktop/mamba3/mamba3-hands-on"
   },
