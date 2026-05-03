@@ -110,6 +110,29 @@ def archive_parliament_artifacts(enabled: bool) -> dict:
         return {"enabled": True, "ok": False, "reason": str(exc)[-500:]}
 
 
+def refresh_node_heartbeat(enabled: bool) -> dict:
+    if not enabled:
+        return {"enabled": False}
+    cmd = [repo_python(), str(ROOT / "tools" / "parliament.py"), "register-node"]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        return {
+            "enabled": True,
+            "ok": proc.returncode == 0,
+            "returncode": proc.returncode,
+            "stdout_tail": proc.stdout[-500:],
+            "stderr_tail": proc.stderr[-500:],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"enabled": True, "ok": False, "reason": str(exc)[-500:]}
+
+
 def run_tick(args: argparse.Namespace) -> int:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     with LOCK_PATH.open("w") as lock:
@@ -126,6 +149,7 @@ def run_tick(args: argparse.Namespace) -> int:
         stamp = utc_stamp()
         raw_path = STATE_DIR / f"{stamp}-tick-{tick:04d}.json"
         summary_path = STATE_DIR / f"{stamp}-tick-{tick:04d}.summary.json"
+        heartbeat = refresh_node_heartbeat(args.persist)
 
         cmd = [
             repo_python(),
@@ -175,6 +199,7 @@ def run_tick(args: argparse.Namespace) -> int:
             "wall_s": wall_s,
             "raw_path": str(raw_path.relative_to(ROOT)),
             "stderr_tail": str(stderr)[-4000:],
+            "node_heartbeat": heartbeat,
         }
         if returncode == 0:
             payload = json.loads(stdout)
