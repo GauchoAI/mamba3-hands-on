@@ -803,6 +803,7 @@
       { id: "schema", title: "Firebase Schema", path: "docs/EXPERIMENT_FIREBASE_SCHEMA.md", group: "architecture" },
       { id: "event-catalog", title: "Event Catalog", path: "docs/EVENT_CATALOG.md", group: "architecture" },
       { id: "ui", title: "UI Vision", path: "docs/UI_VISION.md", group: "architecture" },
+      { id: "parliament", title: "Parliament", path: "docs/PARLIAMENT.md", group: "architecture" },
       { id: "signoff-kappa", title: "Kappa Signoff", path: "signoff/2026-04-30-kappa-architecture-and-widerN-experiment.md", group: "signoff" },
       { id: "signoff-bilingual", title: "Bilingual Harness Signoff", path: "signoff/2026-04-29-bilingual-five-tool-harness-and-honest-composition.md", group: "signoff" },
       { id: "signoff-counter", title: "Counter Attach Signoff", path: "signoff/2026-04-29-cortex-counter-attach-on-bilingual-lm.md", group: "signoff" },
@@ -828,6 +829,8 @@
       events: {},
       gpuHistory: {},
       nodes: {},
+      parliamentNodes: {},
+      parliamentSpeeches: {},
       teacherBlobs: {},
       experiments: {},
       streamsMeta: {},
@@ -933,7 +936,7 @@
       $("load-meta").textContent = "Loading Firebase chapters...";
       const [
         snapshot, threePop, mambaExperiments, events, gpuHistory,
-        nodes, teacherBlobs, experiments, streamsMeta, schemas,
+        nodes, parliamentNodes, parliamentSpeeches, teacherBlobs, experiments, streamsMeta, schemas,
         learningRate, mambaMeta, models, lineage, history, taskSeries,
         bandwidth, mambaState, mamba3RootKeys, rawTeacherBlobKeys, rootStreams, signals, messages
       ] = await Promise.all([
@@ -943,6 +946,8 @@
         get("mamba3/events").catch(() => ({})),
         get("mamba3/gpu_history").catch(() => ({})),
         get("mamba3/nodes").catch(() => ({})),
+        get("parliament/nodes").catch(() => ({})),
+        get("parliament/speeches").catch(() => ({})),
         get("mamba3/teacher_blobs_meta").catch(() => ({})),
         get("experiments").catch(() => ({})),
         get("streams_meta").catch(() => ({})),
@@ -981,6 +986,8 @@
         events: events || {},
         gpuHistory: gpuHistory || {},
         nodes: nodes || {},
+        parliamentNodes: parliamentNodes || {},
+        parliamentSpeeches: parliamentSpeeches || {},
         teacherBlobs: teacherBlobs || {},
         experiments: experiments || {},
         streamsMeta: streamsMeta || {},
@@ -1560,6 +1567,16 @@
         ${md("docs/EVENT_CATALOG.md")}`
       );
 
+      addChapter(chapters, "chapter-parliament", "Parliament",
+        "Model judges, chapter owners, and node heartbeats rendered from the `/parliament` Firebase namespace. The full chat view is static and works on GitHub Pages.",
+        md("docs/PARLIAMENT.md") +
+        `<div class="grid-2">
+          <div class="panel"><h3>Parliament Nodes</h3>${renderNodes(rows(state.parliamentNodes).map(({ key, value }) => ({ id: key, ...(value || {}) })))}</div>
+          <div class="panel"><h3>Latest Speeches</h3>${renderParliamentChat(8)}</div>
+        </div>
+        <p><a href="../parliament/">Open the full Parliament chat view</a></p>`
+      );
+
       const q = state.filter.trim().toLowerCase();
       let visible = q ? chapters.filter(ch => ch.filterText.includes(q)) : chapters;
       if (state.sort === "name") {
@@ -1676,6 +1693,30 @@
       return table([
         { label: "Node" }, { label: "Status" }, { label: "Backends" }, { label: "VRAM", cls: "right" }
       ], nodes.sort((a, b) => (b.last_heartbeat || 0) - (a.last_heartbeat || 0)).map(n => `<tr><td><div class="mono">${esc(n.id)}</div><div>${esc(n.gpu_name || n.arch || "")}</div></td><td><span class="pill ${ageClass(n.last_heartbeat)}">${esc(n.status || ageClass(n.last_heartbeat))}</span><div>${esc(ts(n.last_heartbeat))}</div></td><td>${esc((n.backends || []).join(", "))}</td><td class="right">${n.vram_mb ? `${Math.round(n.vram_mb / 1024)} GB` : ""}</td></tr>`));
+    }
+    function flattenParliamentSpeeches() {
+      const out = [];
+      for (const [motionId, speakers] of Object.entries(state.parliamentSpeeches || {})) {
+        for (const [speakerId, records] of Object.entries(speakers || {})) {
+          for (const [id, record] of Object.entries(records || {})) {
+            out.push({ id, motionId, speakerId, ...(record || {}) });
+          }
+        }
+      }
+      return out.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    }
+    function renderParliamentChat(limit = 12) {
+      const speeches = flattenParliamentSpeeches().slice(0, limit);
+      if (!speeches.length) return `<div class="empty">No persisted Parliament speeches yet.</div>`;
+      return speeches.map(record => {
+        const speech = record.speech || {};
+        return `<div class="source-card">
+          <div class="mono">${esc(record.created_at || "")} · ${esc(record.motion_id || record.motionId || "")}</div>
+          <strong>${esc(record.speaker || record.speakerId || "")}</strong>
+          <p>${esc(speech.body || "")}</p>
+          <div><span class="pill">${esc(speech.position || "")}</span> <span class="pill">${esc(record.backend || "")}</span></div>
+        </div>`;
+      }).join("");
     }
     function renderSchemas() {
       const out = [];

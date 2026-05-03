@@ -29,6 +29,7 @@ survey*
 comparison.log
 dashboard_local/
 logs/
+parliament/log.jsonl
 *.tar.gz
 target/
 Cargo.lock

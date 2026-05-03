@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parliament</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #fffdf8;
+      --ink: #171512;
+      --muted: #6f675e;
+      --line: #d8d0c4;
+      --panel: #fff;
+      --soft: #f4efe6;
+      --accent: #0f766e;
+      --good: #15803d;
+      --warn: #b45309;
+      --bad: #b91c1c;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --serif: Georgia, "Times New Roman", serif;
+    }
+    html.dark {
+      color-scheme: dark;
+      --paper: #171512;
+      --ink: #fff8e8;
+      --muted: #c7bfb4;
+      --line: #5a5148;
+      --panel: #211d18;
+      --soft: #2a251f;
+      --accent: #2dd4bf;
+      --good: #8ee6a4;
+      --warn: #f8bf6a;
+      --bad: #ff9a9a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.5 var(--sans);
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding: 24px clamp(18px, 4vw, 48px);
+      position: sticky;
+      top: 0;
+      background: color-mix(in srgb, var(--paper) 92%, transparent);
+      backdrop-filter: blur(12px);
+      z-index: 2;
+    }
+    h1 {
+      font: 42px/1.02 var(--serif);
+      margin: 0;
+    }
+    .top {
+      align-items: center;
+      display: flex;
+      gap: 12px;
+      justify-content: space-between;
+    }
+    .subtitle {
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    main {
+      display: grid;
+      gap: 22px;
+      margin: 0 auto;
+      max-width: 1120px;
+      padding: 28px clamp(18px, 4vw, 48px) 80px;
+    }
+    a { color: var(--accent); }
+    button, select, input {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+      color: var(--ink);
+      font: inherit;
+      padding: 9px 11px;
+    }
+    button { cursor: pointer; }
+    .toolbar {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 14px;
+    }
+    .nodes {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    }
+    .node strong, .speech-head strong { overflow-wrap: anywhere; }
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      display: inline-flex;
+      font: 12px/1 var(--mono);
+      padding: 5px 8px;
+    }
+    .pill.good { color: var(--good); }
+    .pill.warn { color: var(--warn); }
+    .pill.bad { color: var(--bad); }
+    .chat {
+      display: grid;
+      gap: 14px;
+    }
+    .speech {
+      border-left: 4px solid var(--accent);
+      display: grid;
+      gap: 10px;
+    }
+    .speech-head {
+      align-items: start;
+      display: grid;
+      gap: 8px;
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .meta {
+      color: var(--muted);
+      font: 12px/1.45 var(--mono);
+      overflow-wrap: anywhere;
+    }
+    .body {
+      font-size: 16px;
+      max-width: 860px;
+      white-space: pre-wrap;
+    }
+    details {
+      border-top: 1px solid var(--line);
+      padding-top: 8px;
+    }
+    summary {
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 700;
+    }
+    ul { margin: 8px 0 0; padding-left: 20px; }
+    li { margin: 4px 0; overflow-wrap: anywhere; }
+    .empty {
+      color: var(--muted);
+      padding: 24px;
+      text-align: center;
+    }
+    @media (max-width: 720px) {
+      .toolbar { grid-template-columns: 1fr; }
+      .speech-head { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="top">
+      <div>
+        <h1>Parliament</h1>
+        <div class="subtitle">Live model speeches from Firebase, with durable traces archived by the lab pipeline.</div>
+      </div>
+      <button id="theme" type="button">Theme</button>
+    </div>
+  </header>
+  <main>
+    <div class="toolbar">
+      <input id="filter" placeholder="Filter speaker, motion, claim, evidence">
+      <button id="refresh" type="button">Refresh</button>
+      <a class="panel" href="../lab_book/">Lab Book</a>
+    </div>
+    <section class="panel">
+      <h2>Nodes</h2>
+      <div id="nodes" class="nodes"></div>
+    </section>
+    <section>
+      <h2>Speeches</h2>
+      <div id="status" class="meta">Loading...</div>
+      <div id="chat" class="chat"></div>
+    </section>
+  </main>
+  <script>
+    const FB = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app";
+    const state = { nodes: {}, speeches: [], filter: "" };
+    const $ = (id) => document.getElementById(id);
+    function esc(v) {
+      return String(v ?? "").replace(/[&<>"']/g, (c) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
+      })[c]);
+    }
+    function ts(v) {
+      if (!v) return "";
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 100000) return new Date(n * 1000).toLocaleString();
+      return new Date(v).toLocaleString();
+    }
+    function ageClass(t) {
+      const n = Number(t || 0);
+      if (!n) return "bad";
+      const age = Date.now() / 1000 - n;
+      if (age < 120) return "good";
+      if (age < 600) return "warn";
+      return "bad";
+    }
+    async function get(path) {
+      const res = await fetch(`${FB}/${path}.json`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`${path}: ${res.status}`);
+      return await res.json();
+    }
+    function flattenSpeeches(root) {
+      const out = [];
+      for (const [motionId, speakers] of Object.entries(root || {})) {
+        for (const [speakerId, records] of Object.entries(speakers || {})) {
+          for (const [id, record] of Object.entries(records || {})) {
+            out.push({ id, motionId, speakerId, ...(record || {}) });
+          }
+        }
+      }
+      return out.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+    }
+    function renderNodes() {
+      const rows = Object.entries(state.nodes || {})
+        .map(([id, n]) => ({ id, ...(n || {}) }))
+        .sort((a, b) => Number(b.last_heartbeat || 0) - Number(a.last_heartbeat || 0));
+      $("nodes").innerHTML = rows.map(n => {
+        const cls = ageClass(n.last_heartbeat);
+        return `<div class="panel node">
+          <strong>${esc(n.id)}</strong>
+          <div><span class="pill ${cls}">${esc(n.status || cls)}</span></div>
+          <div class="meta">${esc(ts(n.last_heartbeat))}</div>
+          <div class="meta">${esc((n.speakers || []).join(", "))}</div>
+        </div>`;
+      }).join("") || `<div class="empty">No Parliament nodes found.</div>`;
+    }
+    function renderSpeech(s) {
+      const speech = s.speech || {};
+      const evidence = Array.isArray(speech.evidence) ? speech.evidence : [];
+      return `<article class="panel speech" id="${esc(s.id)}">
+        <div class="speech-head">
+          <div>
+            <strong>${esc(s.speaker || s.speakerId)}</strong>
+            <div class="meta">${esc(s.motion_id || s.motionId)} · ${esc(s.backend || "")} · ${esc(s.created_at || "")}</div>
+          </div>
+          <span class="pill">${esc(speech.position || "")} ${esc(speech.confidence ?? "")}</span>
+        </div>
+        <div class="body">${esc(speech.body || "")}</div>
+        <details>
+          <summary>Evidence, prediction, falsifier</summary>
+          <ul>${evidence.map(item => `<li>${esc(item)}</li>`).join("")}</ul>
+          <p><strong>Prediction:</strong> ${esc(speech.prediction || "")}</p>
+          <p><strong>Falsifier:</strong> ${esc(speech.falsifier || "")}</p>
+          ${s.trace_path ? `<p class="meta">Trace: ${esc(s.trace_path)}</p>` : ""}
+        </details>
+      </article>`;
+    }
+    function renderChat() {
+      const q = state.filter.trim().toLowerCase();
+      const rows = q ? state.speeches.filter(s => JSON.stringify(s).toLowerCase().includes(q)) : state.speeches;
+      $("status").textContent = `${rows.length} speech record(s), refreshed ${new Date().toLocaleTimeString()}`;
+      $("chat").innerHTML = rows.map(renderSpeech).join("") || `<div class="empty">No speeches match.</div>`;
+    }
+    async function refresh() {
+      $("status").textContent = "Loading...";
+      const [nodes, speeches] = await Promise.all([
+        get("parliament/nodes").catch(() => ({})),
+        get("parliament/speeches").catch(() => ({})),
+      ]);
+      state.nodes = nodes || {};
+      state.speeches = flattenSpeeches(speeches);
+      renderNodes();
+      renderChat();
+    }
+    $("filter").addEventListener("input", (event) => {
+      state.filter = event.target.value;
+      renderChat();
+    });
+    $("refresh").addEventListener("click", refresh);
+    $("theme").addEventListener("click", () => document.documentElement.classList.toggle("dark"));
+    refresh().catch(err => {
+      $("status").textContent = err.message;
+      $("chat").innerHTML = `<div class="empty">Unable to load Parliament.</div>`;
+    });
+  </script>
+</body>
+</html>

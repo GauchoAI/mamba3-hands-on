@@ -13,6 +13,7 @@ import argparse
 import datetime as dt
 import fcntl
 import json
+import os
 import subprocess
 import sys
 import time
@@ -85,6 +86,29 @@ def summarize_chamber(payload: dict) -> dict:
     }
 
 
+def archive_parliament_artifacts(enabled: bool) -> dict:
+    if not enabled:
+        return {"enabled": False, "ok": False, "reason": "disabled"}
+    if not os.environ.get("HF_TOKEN"):
+        return {"enabled": True, "ok": False, "reason": "HF_TOKEN not set"}
+    try:
+        sys.path.insert(0, str(ROOT / "src"))
+        from lab_platform.cloud_archive import CloudArchive
+
+        archive = CloudArchive(
+            experiment_kind="parliament",
+            run_name="speeches",
+            local_dir=ROOT / "runs" / "parliament",
+            enabled=True,
+            sync_every_s=300,
+            exclude=["*.lock", "launchd.*.log", "nohup.*.log"],
+        )
+        archive.complete()
+        return {"enabled": True, "ok": True, "kind": "parliament", "run": "speeches"}
+    except Exception as exc:  # noqa: BLE001
+        return {"enabled": True, "ok": False, "reason": str(exc)[-500:]}
+
+
 def run_tick(args: argparse.Namespace) -> int:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     with LOCK_PATH.open("w") as lock:
@@ -112,10 +136,13 @@ def run_tick(args: argparse.Namespace) -> int:
             args.backend,
             "--motion",
             str(args.motion),
-            "--dry-run",
             "--timeout-s",
             str(args.timeout_s),
         ]
+        if not args.persist:
+            cmd.append("--dry-run")
+        else:
+            cmd.extend(["--trace", "--firebase"])
         t0 = time.time()
         try:
             proc = subprocess.run(
@@ -151,6 +178,7 @@ def run_tick(args: argparse.Namespace) -> int:
         if returncode == 0:
             payload = json.loads(stdout)
             result.update(summarize_chamber(payload))
+            result["archive"] = archive_parliament_artifacts(args.archive)
         else:
             result["schema"] = "parliament.scheduler_tick.v1"
             result["created_at"] = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -175,6 +203,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout-s", type=int, default=240, help="Per-speaker backend timeout")
     parser.add_argument("--wall-timeout-s", type=int, default=270, help="Whole tick timeout")
     parser.add_argument("--speaker", action="append", help="Override rotating speaker list")
+    parser.add_argument("--persist", action="store_true", help="Append durable local/Firebase Parliament speeches")
+    parser.add_argument("--archive", action="store_true", help="Sync Parliament artifacts to Hugging Face when HF_TOKEN is set")
     args = parser.parse_args(argv)
     return run_tick(args)
 

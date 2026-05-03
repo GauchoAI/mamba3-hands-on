@@ -135,10 +135,28 @@ Install the five-minute local schedule:
 .venv/bin/python tools/install_parliament_schedule.py --interval-s 300
 ```
 
-Each tick invites a rotating two-speaker panel against
-`parliament/motions/small_lm_recovery.md`, writes raw and summarized dry-run
-records under `runs/parliament/scheduler/`, and uses a lock so slow model
-backends cannot overlap the next tick.
+Each tick invites a rotating panel against
+`parliament/motions/small_lm_recovery.md`, writes raw and summarized records
+under `runs/parliament/scheduler/`, and uses a lock so slow model backends
+cannot overlap the next tick.
+
+Persisted mode appends the speech log, posts short speech records to Firebase,
+keeps traces, and syncs Parliament artifacts to Hugging Face when `HF_TOKEN` is
+present:
+
+```bash
+.venv/bin/python tools/install_parliament_schedule.py \
+  --interval-s 300 \
+  --backend simulated \
+  --panel-size 1 \
+  --timeout-s 45 \
+  --wall-timeout-s 120 \
+  --persist \
+  --archive
+```
+
+The public chat view is `docs/parliament/index.html`; it fetches
+`/parliament/nodes` and `/parliament/speeches` from Firebase.
 
 If macOS blocks LaunchAgent access to the Desktop working tree, run the same
 schedule from the current trusted shell:
