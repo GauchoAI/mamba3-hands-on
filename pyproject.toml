@@ -43,7 +43,8 @@ lab-cluster-sync = "lab_platform.cluster_sync:main"
 lab-make-bilingual-corpus = "lab_platform.make_bilingual_corpus:main"
 lab-make-opensubtitles-corpus = "lab_platform.make_opensubtitles_corpus:main"
 lab-make-teacher-corpus = "lab_platform.make_teacher_corpus:main"
+lab-parliament = "tools.parliament:main"
 
 [tool.setuptools.packages.find]
 where = [".", "src"]
-include = ["cli*", "registry*", "server*", "generators*", "lab_platform*"]
+include = ["cli*", "registry*", "server*", "generators*", "lab_platform*", "tools*"]
