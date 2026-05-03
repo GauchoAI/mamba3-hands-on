@@ -42,6 +42,7 @@ FIREBASE_URL = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedataba
 SPEECH_KINDS = {"position", "review", "objection", "amendment", "silence"}
 SPEECH_POSITIONS = {"approve", "reject", "amend", "defer", "observe"}
 DEFAULT_CHAMBER_SPEAKERS = [
+    "claude-ga-population-founder",
     "gpt5-ch12-chess-champion",
     "claude-hanoi-lego-puzzle-solver",
     "claude-cortex-primitive-owner",

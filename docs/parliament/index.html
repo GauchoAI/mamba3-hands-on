@@ -84,7 +84,7 @@
     .toolbar {
       display: grid;
       gap: 10px;
-      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-columns: minmax(0, 1fr) minmax(180px, auto) minmax(180px, auto) auto auto;
     }
     .panel {
       border: 1px solid var(--line);
@@ -117,6 +117,10 @@
       border-left: 4px solid var(--accent);
       display: grid;
       gap: 10px;
+      scroll-margin-top: 145px;
+    }
+    .speech.target {
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 32%, transparent);
     }
     .speech-head {
       align-items: start;
@@ -169,6 +173,8 @@
   <main>
     <div class="toolbar">
       <input id="filter" placeholder="Filter speaker, motion, claim, evidence">
+      <select id="motion"><option value="">All motions</option></select>
+      <select id="speaker"><option value="">All speakers</option></select>
       <button id="refresh" type="button">Refresh</button>
       <a class="panel" href="../lab_book/">Lab Book</a>
     </div>
@@ -184,7 +190,7 @@
   </main>
   <script>
     const FB = "https://signaling-dcfad-default-rtdb.europe-west1.firebasedatabase.app";
-    const state = { nodes: {}, speeches: [], filter: "" };
+    const state = { nodes: {}, speeches: [], filter: "", motion: "", speaker: "", id: "" };
     const $ = (id) => document.getElementById(id);
     function esc(v) {
       return String(v ?? "").replace(/[&<>"']/g, (c) => ({
@@ -221,6 +227,35 @@
       }
       return out.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
     }
+    function params() {
+      return new URLSearchParams(location.search);
+    }
+    function applyParams() {
+      const p = params();
+      state.filter = p.get("q") || "";
+      state.motion = p.get("motion") || "";
+      state.speaker = p.get("speaker") || "";
+      state.id = p.get("id") || "";
+      $("filter").value = state.filter;
+      $("motion").value = state.motion;
+      $("speaker").value = state.speaker;
+    }
+    function updateParams() {
+      const p = new URLSearchParams();
+      if (state.filter) p.set("q", state.filter);
+      if (state.motion) p.set("motion", state.motion);
+      if (state.speaker) p.set("speaker", state.speaker);
+      if (state.id) p.set("id", state.id);
+      history.replaceState(null, "", `${location.pathname}${p.toString() ? `?${p}` : ""}`);
+    }
+    function renderSelects() {
+      const motions = [...new Set(state.speeches.map(s => s.motion_id || s.motionId).filter(Boolean))].sort();
+      const speakers = [...new Set(state.speeches.map(s => s.speaker || s.speakerId).filter(Boolean))].sort();
+      $("motion").innerHTML = `<option value="">All motions</option>` + motions.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+      $("speaker").innerHTML = `<option value="">All speakers</option>` + speakers.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+      $("motion").value = state.motion;
+      $("speaker").value = state.speaker;
+    }
     function renderNodes() {
       const rows = Object.entries(state.nodes || {})
         .map(([id, n]) => ({ id, ...(n || {}) }))
@@ -238,7 +273,7 @@
     function renderSpeech(s) {
       const speech = s.speech || {};
       const evidence = Array.isArray(speech.evidence) ? speech.evidence : [];
-      return `<article class="panel speech" id="${esc(s.id)}">
+      return `<article class="panel speech ${state.id && state.id === s.id ? "target" : ""}" id="${esc(s.id)}">
         <div class="speech-head">
           <div>
             <strong>${esc(s.speaker || s.speakerId)}</strong>
@@ -247,6 +282,7 @@
           <span class="pill">${esc(speech.position || "")} ${esc(speech.confidence ?? "")}</span>
         </div>
         <div class="body">${esc(speech.body || "")}</div>
+        <div class="meta">Reference: <a href="?id=${encodeURIComponent(s.id)}">${esc(s.id)}</a> · <a href="?motion=${encodeURIComponent(s.motion_id || s.motionId || "")}">motion</a> · <a href="?speaker=${encodeURIComponent(s.speaker || s.speakerId || "")}">speaker</a></div>
         <details>
           <summary>Evidence, prediction, falsifier</summary>
           <ul>${evidence.map(item => `<li>${esc(item)}</li>`).join("")}</ul>
@@ -258,9 +294,16 @@
     }
     function renderChat() {
       const q = state.filter.trim().toLowerCase();
-      const rows = q ? state.speeches.filter(s => JSON.stringify(s).toLowerCase().includes(q)) : state.speeches;
+      let rows = state.speeches;
+      if (state.motion) rows = rows.filter(s => (s.motion_id || s.motionId) === state.motion);
+      if (state.speaker) rows = rows.filter(s => (s.speaker || s.speakerId) === state.speaker);
+      if (state.id) rows = rows.filter(s => s.id === state.id);
+      if (q) rows = rows.filter(s => JSON.stringify(s).toLowerCase().includes(q));
       $("status").textContent = `${rows.length} speech record(s), refreshed ${new Date().toLocaleTimeString()}`;
       $("chat").innerHTML = rows.map(renderSpeech).join("") || `<div class="empty">No speeches match.</div>`;
+      if (state.id) {
+        requestAnimationFrame(() => document.getElementById(state.id)?.scrollIntoView({ block: "start" }));
+      }
     }
     async function refresh() {
       $("status").textContent = "Loading...";
@@ -270,11 +313,27 @@
       ]);
       state.nodes = nodes || {};
       state.speeches = flattenSpeeches(speeches);
+      renderSelects();
+      applyParams();
       renderNodes();
       renderChat();
     }
     $("filter").addEventListener("input", (event) => {
       state.filter = event.target.value;
+      state.id = "";
+      updateParams();
+      renderChat();
+    });
+    $("motion").addEventListener("change", (event) => {
+      state.motion = event.target.value;
+      state.id = "";
+      updateParams();
+      renderChat();
+    });
+    $("speaker").addEventListener("change", (event) => {
+      state.speaker = event.target.value;
+      state.id = "";
+      updateParams();
       renderChat();
     });
     $("refresh").addEventListener("click", refresh);

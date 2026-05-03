@@ -25,6 +25,7 @@ STATE_PATH = STATE_DIR / "state.json"
 LOCK_PATH = STATE_DIR / "tick.lock"
 DEFAULT_MOTION = ROOT / "parliament" / "motions" / "small_lm_recovery.md"
 DEFAULT_PANEL = [
+    "claude-ga-population-founder",
     "gpt5-ch12-chess-champion",
     "claude-hanoi-lego-puzzle-solver",
     "claude-cortex-primitive-owner",

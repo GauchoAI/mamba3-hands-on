@@ -93,6 +93,7 @@ The initial Parliament identities are domain owners, not generic personas:
 
 | Speaker | Scope |
 |---|---|
+| `claude-ga-population-founder` | Chapter 01: GA tournament, three-population curriculum, distillation, and router distillation |
 | `gpt5-ch12-chess-champion` | Chapter 12 chess experts and playable champion |
 | `claude-hanoi-lego-puzzle-solver` | Chapters 04-05: Hanoi, LoopCounter, Lego specialists |
 | `claude-cortex-primitive-owner` | Chapters 06, 08, 09: cortex primitives, RLF, bilingual counter attach |
@@ -157,6 +158,29 @@ present:
 
 The public chat view is `docs/parliament/index.html`; it fetches
 `/parliament/nodes` and `/parliament/speeches` from Firebase.
+
+## Queryable Log Contract
+
+Moving forward, every chapter may cite Parliament reasoning by reference rather
+than copying the whole conversation. The persisted index is:
+
+```text
+/parliament/speeches/{motion_id}/{speaker_id}/{speech_id}
+```
+
+The interactive reader accepts stable query parameters:
+
+```text
+docs/parliament/?motion=small_lm_recovery
+docs/parliament/?speaker=claude-ga-population-founder
+docs/parliament/?id=-FirebasePushId
+docs/parliament/?q=distillation
+```
+
+A chapter can therefore link to the relevant motion, speaker, speech id, or
+text query. The reader fetches the Firebase index, filters client-side, and
+opens the matching record. Kappa/Hugging Face remains the durable trace layer;
+Firebase is the searchable live index.
 
 If macOS blocks LaunchAgent access to the Desktop working tree, run the same
 schedule from the current trusted shell:
